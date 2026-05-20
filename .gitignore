@@ -1,0 +1,73 @@
+# ==========================================
+# .gitignore - ubet-render
+# Tailored for: SolidJS + Vite + Tauri (Rust) + Bun + VS Code
+# ==========================================
+
+# --- Node & Frontend Dependencies ---
+node_modules/
+/dist/
+/dist-ssr/
+*.local
+.cache/
+.vite/
+
+# --- Bun ---
+.bun/
+bun.lockb
+
+# --- Rust & Tauri Build Artifacts ---
+# Tauri's Rust backend compilation files (Can easily exceed 1GB+)
+/src-tauri/target/
+/src-tauri/gen/schemas/
+/src-tauri/outputs/
+**/*.rs.bk
+
+# --- Environment Variables & Secrets ---
+# Never commit sensitive API keys or secrets to GitHub
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
+*.env.*
+
+# --- Log Files ---
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+bun-debug.log*
+
+# --- Editor / IDE Specific ---
+# VS Code
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+
+# JetBrains (WebStorm, IntelliJ, etc.)
+.idea/
+
+# General editor temps
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*~
+
+# --- Operating System Files ---
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
