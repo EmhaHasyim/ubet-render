@@ -37,8 +37,8 @@ impl Pipeline {
         eprintln!("Output dir : {:?}", output_dir);
         eprintln!("Cache dir  : {:?}", cache_dir);
 
-        // Bersihkan folder thumb dari render sebelumnya
         let _ = std::fs::remove_dir_all(&thumb_dir);
+        let _ = std::fs::remove_dir_all(&cache_dir);
 
         fs::ensure_dir(&output_dir)?;
         fs::ensure_dir(&cache_dir)?;
@@ -436,13 +436,34 @@ impl Pipeline {
                 min_duration_sec,
                 padding_sec: self.config.target.padding_sec,
             };
-            let (audio_content, video_content, total_duration) =
+            let (audio_content, video_content, timestamps, total_duration) =
                 video_loop::generate_loop_playlists(
                     &selected_songs,
                     &ping_pong_path,
                     &target_override,
                 )
                 .await?;
+
+            let mut ts_path = PathBuf::from(&jobs[i].video.output_path);
+            ts_path.set_extension("txt");
+            std::fs::write(&ts_path, timestamps.join("\n"))?;
+
+            event::emit(
+                &self.app,
+                PipelineEvent::Log {
+                    level: "info".into(),
+                    message: format!("=== Timestamps untuk {} ===", jobs[i].video.name),
+                },
+            );
+            for ts in &timestamps {
+                event::emit(
+                    &self.app,
+                    PipelineEvent::Log {
+                        level: "info".into(),
+                        message: ts.clone(),
+                    },
+                );
+            }
 
             let audio_list_path = cache_dir.join(format!("audio_list_{}.txt", timestamp));
             let video_list_path = cache_dir.join(format!("video_list_{}.txt", timestamp));
@@ -563,10 +584,10 @@ impl Pipeline {
     }
 
     fn resolve_output_dir(&self, overrides: &Option<OverrideConfig>) -> PathBuf {
-        if let Some(ov) = overrides
-            && let Some(path) = &ov.output_path
-        {
-            return PathBuf::from(path);
+        if let Some(ov) = overrides {
+            if let Some(path) = &ov.output_path {
+                return PathBuf::from(path);
+            }
         }
         PathBuf::from(&self.config.directories.output)
     }

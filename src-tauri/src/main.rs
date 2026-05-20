@@ -71,6 +71,8 @@ fn main() {
             let config = config::AppConfig::default();
             std::fs::create_dir_all(&config.directories.cache).ok();
             std::fs::create_dir_all(&config.directories.output).ok();
+            std::fs::create_dir_all(&config.directories.video).ok();
+            std::fs::create_dir_all(&config.directories.audio).ok();
             Ok(())
         })
         .run(tauri::generate_context!())

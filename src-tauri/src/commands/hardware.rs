@@ -18,7 +18,7 @@ pub struct HardwareInfo {
 #[tauri::command]
 pub async fn detect_hardware() -> HardwareInfo {
     tokio::task::spawn_blocking(move || {
-        let mut sys = System::new();
+        let mut sys = System::new_all();
         sys.refresh_cpu_all();
         sys.refresh_memory();
 

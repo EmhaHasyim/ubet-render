@@ -39,10 +39,10 @@ pub async fn run(
             line_res = reader.next_line() => {
                 match line_res {
                     Ok(Some(line)) => {
-                        if let Some(tx) = &tx_progress
-                            && let Some(time_sec) = extract_time(&line)
-                        {
-                            let _ = tx.send(time_sec).await;
+                        if let Some(tx) = &tx_progress {
+                            if let Some(time_sec) = extract_time(&line) {
+                                let _ = tx.send(time_sec).await;
+                            }
                         }
                         if !line.trim().is_empty() {
                             last_stderr = line;
