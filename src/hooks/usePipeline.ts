@@ -3,7 +3,11 @@ import { createSignal, onCleanup, onMount } from 'solid-js';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from '@tauri-apps/plugin-notification';
 import { DEFAULT_CONFIG } from '../core/config';
 import type { MediaSource, PipelineEvent, RenderJob } from '../core/types';
 
@@ -27,7 +31,11 @@ const STORAGE_KEY = 'ubetrender-paths';
 function isMediaSource(value: unknown): value is MediaSource {
   if (!value || typeof value !== 'object') return false;
   const source = value as Partial<MediaSource>;
-  return source.type === 'files' && Array.isArray(source.paths) && source.paths.every((path) => typeof path === 'string');
+  return (
+    source.type === 'files' &&
+    Array.isArray(source.paths) &&
+    source.paths.every((path) => typeof path === 'string')
+  );
 }
 
 function stringOr(value: unknown, fallback: string) {
@@ -35,7 +43,9 @@ function stringOr(value: unknown, fallback: string) {
 }
 
 function numberOr(value: unknown, fallback: number, min: number) {
-  return typeof value === 'number' && Number.isFinite(value) && value >= min ? value : fallback;
+  return typeof value === 'number' && Number.isFinite(value) && value >= min
+    ? value
+    : fallback;
 }
 
 function booleanOr(value: unknown, fallback: boolean) {
@@ -59,16 +69,33 @@ function loadSavedPaths(): {
     if (raw) {
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       return {
-        videoSource: isMediaSource(parsed.videoSource) ? parsed.videoSource : null,
-        audioSource: isMediaSource(parsed.audioSource) ? parsed.audioSource : null,
+        videoSource: isMediaSource(parsed.videoSource)
+          ? parsed.videoSource
+          : null,
+        audioSource: isMediaSource(parsed.audioSource)
+          ? parsed.audioSource
+          : null,
         outputPath: stringOr(parsed.outputPath, ''),
-        outputPrefix: stringOr(parsed.outputPrefix, DEFAULT_CONFIG.metadata.channelPrefix),
+        outputPrefix: stringOr(
+          parsed.outputPrefix,
+          DEFAULT_CONFIG.metadata.channelPrefix,
+        ),
         maxrate: stringOr(parsed.maxrate, '4000k'),
         usePingpong: booleanOr(parsed.usePingpong, true),
         youtubeTimestamps: booleanOr(parsed.youtubeTimestamps, true),
-        songsPerPlaylist: numberOr(parsed.songsPerPlaylist, DEFAULT_CONFIG.audio.songsPerPlaylist, 1),
-        minDurationHours: numberOr(parsed.minDurationHours, DEFAULT_CONFIG.target.minDurationSec / 3600, 0.1),
-        codec: ['h264', 'h265', 'av1'].includes(String(parsed.codec)) ? String(parsed.codec) : 'av1',
+        songsPerPlaylist: numberOr(
+          parsed.songsPerPlaylist,
+          DEFAULT_CONFIG.audio.songsPerPlaylist,
+          1,
+        ),
+        minDurationHours: numberOr(
+          parsed.minDurationHours,
+          DEFAULT_CONFIG.target.minDurationSec / 3600,
+          0.1,
+        ),
+        codec: ['h264', 'h265', 'av1'].includes(String(parsed.codec))
+          ? String(parsed.codec)
+          : 'av1',
       };
     }
   } catch {}
@@ -108,7 +135,9 @@ export function usePipeline() {
   const [jobs, setJobs] = createSignal<RenderJob[]>([]);
   const [overallProgress, setOverallProgress] = createSignal(0);
   const [overallEta, setOverallEta] = createSignal<string>('');
-  const [dragHover, setDragHover] = createSignal<'video' | 'audio' | 'output' | null>(null);
+  const [dragHover, setDragHover] = createSignal<
+    'video' | 'audio' | 'output' | null
+  >(null);
   const [logs, setLogs] = createSignal<string[]>([]);
   const [hardwareInfo, setHardwareInfo] = createSignal<{
     cpuModel: string;
@@ -119,32 +148,47 @@ export function usePipeline() {
 
   const saved = loadSavedPaths();
 
-  const [videoSource, setVideoSource] = createSignal<MediaSource | null>(saved.videoSource);
-  const [audioSource, setAudioSource] = createSignal<MediaSource | null>(saved.audioSource);
+  const [videoSource, setVideoSource] = createSignal<MediaSource | null>(
+    saved.videoSource,
+  );
+  const [audioSource, setAudioSource] = createSignal<MediaSource | null>(
+    saved.audioSource,
+  );
   const [outputPath, setOutputPath] = createSignal<string>(saved.outputPath);
-  const [outputPrefix, setOutputPrefix] = createSignal<string>(saved.outputPrefix);
+  const [outputPrefix, setOutputPrefix] = createSignal<string>(
+    saved.outputPrefix,
+  );
   const [maxrate, setMaxrate] = createSignal<string>(saved.maxrate);
-  const [usePingpong, setUsePingpong] = createSignal<boolean>(saved.usePingpong);
-  const [youtubeTimestamps, setYoutubeTimestamps] = createSignal<boolean>(saved.youtubeTimestamps);
+  const [usePingpong, setUsePingpong] = createSignal<boolean>(
+    saved.usePingpong,
+  );
+  const [youtubeTimestamps, setYoutubeTimestamps] = createSignal<boolean>(
+    saved.youtubeTimestamps,
+  );
 
-  const [songsPerPlaylist, setSongsPerPlaylist] = createSignal(saved.songsPerPlaylist);
-  const [minDurationHours, setMinDurationHours] = createSignal(saved.minDurationHours);
+  const [songsPerPlaylist, setSongsPerPlaylist] = createSignal(
+    saved.songsPerPlaylist,
+  );
+  const [minDurationHours, setMinDurationHours] = createSignal(
+    saved.minDurationHours,
+  );
   const [codec, setCodec] = createSignal(saved.codec);
 
   let unlisten: UnlistenFn | null = null;
 
-  const persist = () => savePaths({
-    videoSource: videoSource(),
-    audioSource: audioSource(),
-    outputPath: outputPath(),
-    outputPrefix: outputPrefix(),
-    maxrate: maxrate(),
-    usePingpong: usePingpong(),
-    youtubeTimestamps: youtubeTimestamps(),
-    songsPerPlaylist: songsPerPlaylist(),
-    minDurationHours: minDurationHours(),
-    codec: codec(),
-  });
+  const persist = () =>
+    savePaths({
+      videoSource: videoSource(),
+      audioSource: audioSource(),
+      outputPath: outputPath(),
+      outputPrefix: outputPrefix(),
+      maxrate: maxrate(),
+      usePingpong: usePingpong(),
+      youtubeTimestamps: youtubeTimestamps(),
+      songsPerPlaylist: songsPerPlaylist(),
+      minDurationHours: minDurationHours(),
+      codec: codec(),
+    });
 
   const appendLog = (line: string) => {
     setLogs((prev) => {
@@ -169,12 +213,30 @@ export function usePipeline() {
     return codec() !== 'av1' || info.av1Supported;
   };
 
-  const updateVideoSource = (src: MediaSource | null) => { setVideoSource(src); persist(); };
-  const updateAudioSource = (src: MediaSource | null) => { setAudioSource(src); persist(); };
-  const updateOutputPath = (path: string) => { setOutputPath(path); persist(); };
-  const updateOutputPrefix = (prefix: string) => { setOutputPrefix(prefix); persist(); };
-  const updateMaxrate = (val: string) => { setMaxrate(val); persist(); };
-  const updateUsePingpong = (val: boolean) => { setUsePingpong(val); persist(); };
+  const updateVideoSource = (src: MediaSource | null) => {
+    setVideoSource(src);
+    persist();
+  };
+  const updateAudioSource = (src: MediaSource | null) => {
+    setAudioSource(src);
+    persist();
+  };
+  const updateOutputPath = (path: string) => {
+    setOutputPath(path);
+    persist();
+  };
+  const updateOutputPrefix = (prefix: string) => {
+    setOutputPrefix(prefix);
+    persist();
+  };
+  const updateMaxrate = (val: string) => {
+    setMaxrate(val);
+    persist();
+  };
+  const updateUsePingpong = (val: boolean) => {
+    setUsePingpong(val);
+    persist();
+  };
 
   onMount(() => {
     invoke<{
@@ -209,7 +271,7 @@ export function usePipeline() {
       });
 
     let unlistenDrag: UnlistenFn | null = null;
-    
+
     const setupDrag = async () => {
       try {
         const appWindow = getCurrentWindow();
@@ -243,10 +305,13 @@ export function usePipeline() {
           }
         });
       } catch (e) {
-        console.warn("Drag and drop event listener not supported or failed to bind", e);
+        console.warn(
+          'Drag and drop event listener not supported or failed to bind',
+          e,
+        );
       }
     };
-    
+
     setupDrag();
 
     onCleanup(() => {
@@ -256,25 +321,26 @@ export function usePipeline() {
 
   const resolveEncoder = (codec: string): string => {
     const gpu = hardwareInfo()?.gpuModel.toLowerCase() || '';
-    
+
     switch (codec) {
-      case 'h264': 
+      case 'h264':
         if (gpu.includes('nvidia')) return 'h264_nvenc';
         if (gpu.includes('amd') || gpu.includes('radeon')) return 'h264_amf';
         if (gpu.includes('intel') || gpu.includes('arc')) return 'h264_qsv';
         return 'libx264';
-      case 'h265': 
+      case 'h265':
         if (gpu.includes('nvidia')) return 'hevc_nvenc';
         if (gpu.includes('amd') || gpu.includes('radeon')) return 'hevc_amf';
         if (gpu.includes('intel') || gpu.includes('arc')) return 'hevc_qsv';
         return 'libx265';
-      case 'av1': 
+      case 'av1':
         if (!hardwareInfo()?.av1Supported) return resolveEncoder('h265');
         if (gpu.includes('nvidia')) return 'av1_nvenc';
         if (gpu.includes('amd') || gpu.includes('radeon')) return 'av1_amf';
         if (gpu.includes('intel') || gpu.includes('arc')) return 'av1_qsv';
         return 'av1_nvenc';
-      default: return 'libx264';
+      default:
+        return 'libx264';
     }
   };
 
@@ -285,7 +351,7 @@ export function usePipeline() {
     setLogs([]);
     setOverallProgress(0);
     setOverallEta('Menghitung...');
-    
+
     let startTime = Date.now();
 
     if (unlisten) {
@@ -295,73 +361,94 @@ export function usePipeline() {
 
     try {
       unlisten = await listen<PipelineEvent>('pipeline-event', (event) => {
-      const payload = event.payload;
-      switch (payload.type) {
-        case 'Log':
-          appendLog(`[${payload.data.level.toUpperCase()}] ${payload.data.message}`);
-          break;
-        case 'Progress':
-          setJobs(payload.data.jobs);
-          const totalJobs = payload.data.total;
-          const jobsProgressSum = payload.data.jobs.reduce((sum, j) => sum + j.progressPercent, 0);
-          const overallPct = totalJobs > 0 ? Math.min(100, Math.max(0, jobsProgressSum / totalJobs)) : 0;
-          setOverallProgress(overallPct);
-          
-          if (overallPct > 0 && overallPct < 100) {
-            const elapsedMs = Date.now() - startTime;
-            const estimatedTotalMs = elapsedMs / (overallPct / 100);
-            const remainingMs = estimatedTotalMs - elapsedMs;
-            if (remainingMs > 0) {
-              const s = Math.floor((remainingMs / 1000) % 60);
-              const m = Math.floor((remainingMs / (1000 * 60)) % 60);
-              const h = Math.floor(remainingMs / (1000 * 60 * 60));
-              setOverallEta(`${h > 0 ? h + 'j ' : ''}${m}m ${s}s tersisa`);
+        const payload = event.payload;
+        switch (payload.type) {
+          case 'Log':
+            appendLog(
+              `[${payload.data.level.toUpperCase()}] ${payload.data.message}`,
+            );
+            break;
+          case 'Progress':
+            setJobs(payload.data.jobs);
+            const totalJobs = payload.data.total;
+            const jobsProgressSum = payload.data.jobs.reduce(
+              (sum, j) => sum + j.progressPercent,
+              0,
+            );
+            const overallPct =
+              totalJobs > 0
+                ? Math.min(100, Math.max(0, jobsProgressSum / totalJobs))
+                : 0;
+            setOverallProgress(overallPct);
+
+            if (overallPct > 0 && overallPct < 100) {
+              const elapsedMs = Date.now() - startTime;
+              const estimatedTotalMs = elapsedMs / (overallPct / 100);
+              const remainingMs = estimatedTotalMs - elapsedMs;
+              if (remainingMs > 0) {
+                const s = Math.floor((remainingMs / 1000) % 60);
+                const m = Math.floor((remainingMs / (1000 * 60)) % 60);
+                const h = Math.floor(remainingMs / (1000 * 60 * 60));
+                setOverallEta(`${h > 0 ? h + 'j ' : ''}${m}m ${s}s tersisa`);
+              }
+            } else if (overallPct === 100) {
+              setOverallEta('Selesai');
             }
-          } else if (overallPct === 100) {
-            setOverallEta('Selesai');
-          }
-          break;
-        case 'Done':
-          setRunning(false);
-          setOverallProgress(100);
-          setOverallEta(payload.data.failed > 0 ? 'Selesai dengan error' : 'Selesai');
-          if (unlisten) { unlisten(); unlisten = null; }
-          notify(
-            payload.data.failed > 0 ? 'Render selesai dengan error' : 'Render selesai',
-            `${payload.data.completed}/${payload.data.total} selesai, ${payload.data.failed} gagal.`,
-          );
-          break;
-        case 'Cancelled':
-          appendLog(`[INFO] ${payload.data}`);
-          setRunning(false);
-          setOverallEta('Dibatalkan');
-          if (unlisten) { unlisten(); unlisten = null; }
-          notify('Render dibatalkan', payload.data);
-          break;
-        case 'FatalError':
-          appendLog(`FATAL: ${payload.data}`);
-          setRunning(false);
-          setOverallEta('Gagal');
-          if (unlisten) { unlisten(); unlisten = null; }
-          notify('Render gagal', `Error: ${payload.data}`);
-          break;
-      }
-    });
+            break;
+          case 'Done':
+            setRunning(false);
+            setOverallProgress(100);
+            setOverallEta(
+              payload.data.failed > 0 ? 'Selesai dengan error' : 'Selesai',
+            );
+            if (unlisten) {
+              unlisten();
+              unlisten = null;
+            }
+            notify(
+              payload.data.failed > 0
+                ? 'Render selesai dengan error'
+                : 'Render selesai',
+              `${payload.data.completed}/${payload.data.total} selesai, ${payload.data.failed} gagal.`,
+            );
+            break;
+          case 'Cancelled':
+            appendLog(`[INFO] ${payload.data}`);
+            setRunning(false);
+            setOverallEta('Dibatalkan');
+            if (unlisten) {
+              unlisten();
+              unlisten = null;
+            }
+            notify('Render dibatalkan', payload.data);
+            break;
+          case 'FatalError':
+            appendLog(`FATAL: ${payload.data}`);
+            setRunning(false);
+            setOverallEta('Gagal');
+            if (unlisten) {
+              unlisten();
+              unlisten = null;
+            }
+            notify('Render gagal', `Error: ${payload.data}`);
+            break;
+        }
+      });
 
-    const encoder = resolveEncoder(codec());
+      const encoder = resolveEncoder(codec());
 
-    const overrides = {
-      videoSource: videoSource(),
-      audioSource: audioSource(),
-      outputPath: outputPath(),
-      songsPerPlaylist: songsPerPlaylist(),
-      minDurationHours: minDurationHours(),
-      encoder,
-      outputPrefix: outputPrefix(),
-      maxrate: maxrate(),
-      usePingpong: usePingpong(),
-      youtubeTimestamps: youtubeTimestamps(),
-    };
+      const overrides = {
+        videoSource: videoSource(),
+        audioSource: audioSource(),
+        outputPath: outputPath(),
+        songsPerPlaylist: songsPerPlaylist(),
+        minDurationHours: minDurationHours(),
+        encoder,
+        outputPrefix: outputPrefix(),
+        maxrate: maxrate(),
+        usePingpong: usePingpong(),
+        youtubeTimestamps: youtubeTimestamps(),
+      };
 
       await invoke('start_render', { config: DEFAULT_CONFIG, overrides });
     } catch (err) {
@@ -414,10 +501,22 @@ export function usePipeline() {
     setOutputPrefix: updateOutputPrefix,
     setMaxrate: updateMaxrate,
     setUsePingpong: updateUsePingpong,
-    setYoutubeTimestamps: (val: boolean) => { setYoutubeTimestamps(val); persist(); },
-    setSongsPerPlaylist: (val: number) => { setSongsPerPlaylist(val); persist(); },
-    setMinDurationHours: (val: number) => { setMinDurationHours(val); persist(); },
-    setCodec: (val: string) => { setCodec(val); persist(); },
+    setYoutubeTimestamps: (val: boolean) => {
+      setYoutubeTimestamps(val);
+      persist();
+    },
+    setSongsPerPlaylist: (val: number) => {
+      setSongsPerPlaylist(val);
+      persist();
+    },
+    setMinDurationHours: (val: number) => {
+      setMinDurationHours(val);
+      persist();
+    },
+    setCodec: (val: string) => {
+      setCodec(val);
+      persist();
+    },
     startRender,
     cancelRender,
   };

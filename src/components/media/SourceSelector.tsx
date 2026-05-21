@@ -15,7 +15,8 @@ interface SourceSelectorProps {
 
 const colorClass = {
   primary: 'border-primary/35 bg-primary/5 text-primary hover:border-primary',
-  secondary: 'border-secondary/35 bg-secondary/5 text-secondary hover:border-secondary',
+  secondary:
+    'border-secondary/35 bg-secondary/5 text-secondary hover:border-secondary',
   accent: 'border-accent/35 bg-accent/5 text-accent hover:border-accent',
   info: 'border-info/35 bg-info/5 text-info hover:border-info',
 };
@@ -23,7 +24,8 @@ const colorClass = {
 export function SourceSelector(props: SourceSelectorProps) {
   const [lastDir, setLastDir] = createSignal<string>();
 
-  const fileName = (path: string) => path.replace(/\\/g, '/').split('/').pop() || path;
+  const fileName = (path: string) =>
+    path.replace(/\\/g, '/').split('/').pop() || path;
 
   const browseFiles = async () => {
     let currentDefault = lastDir();
@@ -41,7 +43,9 @@ export function SourceSelector(props: SourceSelectorProps) {
       filters: [
         {
           name: props.label,
-          extensions: props.allowedExtensions.map((ext) => ext.replace('.', '')),
+          extensions: props.allowedExtensions.map((ext) =>
+            ext.replace('.', ''),
+          ),
         },
       ],
     });
@@ -70,9 +74,13 @@ export function SourceSelector(props: SourceSelectorProps) {
         </span>
 
         <span class="mt-4 block">
-          <span class="block text-sm font-semibold text-base-content">{props.label}</span>
+          <span class="block text-sm font-semibold text-base-content">
+            {props.label}
+          </span>
           <span class="mt-1 block text-xs text-base-content/60">
-            {props.value.length > 0 ? `${props.value.length} selected` : 'Choose files'}
+            {props.value.length > 0
+              ? `${props.value.length} selected`
+              : 'Choose files'}
           </span>
         </span>
       </button>
@@ -87,21 +95,32 @@ export function SourceSelector(props: SourceSelectorProps) {
       >
         <div class="rounded-lg border border-base-300 bg-base-100">
           <div class="flex items-center justify-between border-b border-base-300 px-3 py-2">
-            <span class="text-xs font-medium text-base-content/70">Selected files</span>
-            <button type="button" class="btn btn-ghost btn-xs text-error" onClick={() => props.onChange(null)}>
+            <span class="text-xs font-medium text-base-content/70">
+              Selected files
+            </span>
+            <button
+              type="button"
+              class="btn btn-ghost btn-xs text-error"
+              onClick={() => props.onChange(null)}
+            >
               Clear
             </button>
           </div>
           <div class="max-h-28 overflow-y-auto p-2 custom-scrollbar">
             <For each={props.value.slice(0, 8)}>
               {(file) => (
-                <div class="truncate rounded-md px-2 py-1 text-xs text-base-content/80" title={file}>
+                <div
+                  class="truncate rounded-md px-2 py-1 text-xs text-base-content/80"
+                  title={file}
+                >
                   {fileName(file)}
                 </div>
               )}
             </For>
             <Show when={props.value.length > 8}>
-              <div class="px-2 py-1 text-xs text-base-content/55">+{props.value.length - 8} more</div>
+              <div class="px-2 py-1 text-xs text-base-content/55">
+                +{props.value.length - 8} more
+              </div>
             </Show>
           </div>
         </div>

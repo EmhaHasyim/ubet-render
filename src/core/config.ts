@@ -31,5 +31,21 @@ export const DEFAULT_CONFIG: AppConfig = {
   youtubeTimestamps: true,
 };
 
-export const VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.mov', '.webm', '.avi', '.flv', '.wmv'];
-export const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.m4a', '.flac', '.ogg', '.aac', '.wma'];
+export const VIDEO_EXTENSIONS = [
+  '.mp4',
+  '.mkv',
+  '.mov',
+  '.webm',
+  '.avi',
+  '.flv',
+  '.wmv',
+];
+export const AUDIO_EXTENSIONS = [
+  '.mp3',
+  '.wav',
+  '.m4a',
+  '.flac',
+  '.ogg',
+  '.aac',
+  '.wma',
+];

@@ -33,7 +33,9 @@ interface SettingsCardProps {
 
 export function SettingsCard(props: SettingsCardProps) {
   const dropState = (target: 'video' | 'audio' | 'output') =>
-    props.dragHover === target ? 'ring-2 ring-primary ring-offset-2 ring-offset-base-200' : '';
+    props.dragHover === target
+      ? 'ring-2 ring-primary ring-offset-2 ring-offset-base-200'
+      : '';
 
   const chooseOutput = async () => {
     const selected = await open({
@@ -49,7 +51,9 @@ export function SettingsCard(props: SettingsCardProps) {
       <div class="border-b border-base-300 px-4 py-4 sm:px-5">
         <div class="flex flex-col gap-1">
           <h3 class="text-base font-semibold">Sources and output</h3>
-          <p class="text-sm text-base-content/60">Video, audio, and destination.</p>
+          <p class="text-sm text-base-content/60">
+            Video, audio, and destination.
+          </p>
         </div>
       </div>
 
@@ -59,7 +63,9 @@ export function SettingsCard(props: SettingsCardProps) {
             label="Master video"
             allowedExtensions={VIDEO_EXTENSIONS}
             value={props.videoSource?.paths || []}
-            onChange={(paths) => props.onVideoChange(paths ? { type: 'files', paths } : null)}
+            onChange={(paths) =>
+              props.onVideoChange(paths ? { type: 'files', paths } : null)
+            }
             icon="lucide:video"
             themeColor="primary"
           />
@@ -70,13 +76,18 @@ export function SettingsCard(props: SettingsCardProps) {
             label="Audio tracks"
             allowedExtensions={AUDIO_EXTENSIONS}
             value={props.audioSource?.paths || []}
-            onChange={(paths) => props.onAudioChange(paths ? { type: 'files', paths } : null)}
+            onChange={(paths) =>
+              props.onAudioChange(paths ? { type: 'files', paths } : null)
+            }
             icon="lucide:music-2"
             themeColor="secondary"
           />
         </div>
 
-        <div id="output-dropzone" class={`flex min-h-full flex-col gap-3 rounded-lg ${dropState('output')}`}>
+        <div
+          id="output-dropzone"
+          class={`flex min-h-full flex-col gap-3 rounded-lg ${dropState('output')}`}
+        >
           <button
             type="button"
             class="flex min-h-36 w-full flex-col items-start justify-between rounded-lg border border-dashed border-accent/35 bg-accent/5 p-4 text-left text-accent transition-colors hover:border-accent"
@@ -87,7 +98,9 @@ export function SettingsCard(props: SettingsCardProps) {
             </span>
 
             <span class="mt-4 block">
-              <span class="block text-sm font-semibold text-base-content">Output folder</span>
+              <span class="block text-sm font-semibold text-base-content">
+                Output folder
+              </span>
               <span class="mt-1 block text-xs text-base-content/60">
                 {props.outputPath ? 'Destination selected' : 'Choose folder'}
               </span>
@@ -103,8 +116,13 @@ export function SettingsCard(props: SettingsCardProps) {
             }
           >
             <div class="rounded-lg border border-base-300 bg-base-100 p-3">
-              <p class="mb-1 text-xs font-medium text-base-content/70">Selected folder</p>
-              <p class="truncate text-xs text-base-content/80" title={props.outputPath}>
+              <p class="mb-1 text-xs font-medium text-base-content/70">
+                Selected folder
+              </p>
+              <p
+                class="truncate text-xs text-base-content/80"
+                title={props.outputPath}
+              >
                 {props.outputPath}
               </p>
             </div>
@@ -114,7 +132,12 @@ export function SettingsCard(props: SettingsCardProps) {
 
       <div class="border-t border-base-300 bg-base-100/60 p-4 sm:p-5">
         <div class="mb-4 flex items-center gap-2">
-          <Icon icon="lucide:sliders-horizontal" class="text-primary" width="18" height="18" />
+          <Icon
+            icon="lucide:sliders-horizontal"
+            class="text-primary"
+            width="18"
+            height="18"
+          />
           <h3 class="text-base font-semibold">Render options</h3>
         </div>
 
@@ -129,7 +152,11 @@ export function SettingsCard(props: SettingsCardProps) {
               min="1"
               max="50"
               value={props.songsPerPlaylist}
-              onInput={(e) => props.onSongsPerPlaylistChange(Math.max(1, parseInt(e.currentTarget.value) || 1))}
+              onInput={(e) =>
+                props.onSongsPerPlaylistChange(
+                  Math.max(1, parseInt(e.currentTarget.value) || 1),
+                )
+              }
             />
           </label>
 
@@ -144,7 +171,11 @@ export function SettingsCard(props: SettingsCardProps) {
                 min="0.1"
                 step="0.1"
                 value={props.minDurationHours}
-                onInput={(e) => props.onMinDurationHoursChange(Math.max(0.1, parseFloat(e.currentTarget.value) || 0.1))}
+                onInput={(e) =>
+                  props.onMinDurationHoursChange(
+                    Math.max(0.1, parseFloat(e.currentTarget.value) || 0.1),
+                  )
+                }
               />
               <span class="text-sm text-base-content/55">hours</span>
             </label>
@@ -196,26 +227,34 @@ export function SettingsCard(props: SettingsCardProps) {
           <label class="flex min-h-20 items-center justify-between gap-4 rounded-lg border border-base-300 bg-base-100 px-4 py-3">
             <span>
               <span class="block text-sm font-medium">Ping-pong effect</span>
-              <span class="block text-xs text-base-content/55">Mirrored loop</span>
+              <span class="block text-xs text-base-content/55">
+                Mirrored loop
+              </span>
             </span>
             <input
               type="checkbox"
               class="toggle toggle-primary"
               checked={props.usePingpong}
-              onChange={(e) => props.onUsePingpongChange(e.currentTarget.checked)}
+              onChange={(e) =>
+                props.onUsePingpongChange(e.currentTarget.checked)
+              }
             />
           </label>
 
           <label class="flex min-h-20 items-center justify-between gap-4 rounded-lg border border-base-300 bg-base-100 px-4 py-3">
             <span>
               <span class="block text-sm font-medium">YouTube Timestamps</span>
-              <span class="block text-xs text-base-content/55">Looping disatukan</span>
+              <span class="block text-xs text-base-content/55">
+                Looping disatukan
+              </span>
             </span>
             <input
               type="checkbox"
               class="toggle toggle-primary"
               checked={props.youtubeTimestamps}
-              onChange={(e) => props.onYoutubeTimestampsChange(e.currentTarget.checked)}
+              onChange={(e) =>
+                props.onYoutubeTimestampsChange(e.currentTarget.checked)
+              }
             />
           </label>
         </div>

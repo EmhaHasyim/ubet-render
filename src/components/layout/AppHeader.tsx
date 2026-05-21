@@ -19,7 +19,9 @@ export function AppHeader(props: {
     <>
       <section class="panel p-4">
         <div class="flex items-start gap-3">
-          <div class={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${props.running ? 'bg-warning/15 text-warning' : 'bg-primary/10 text-primary'}`}>
+          <div
+            class={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${props.running ? 'bg-warning/15 text-warning' : 'bg-primary/10 text-primary'}`}
+          >
             <Icon
               icon={props.running ? 'lucide:loader-2' : 'lucide:play'}
               class={props.running ? 'animate-spin' : ''}
@@ -28,7 +30,9 @@ export function AppHeader(props: {
             />
           </div>
           <div class="min-w-0 flex-1">
-            <h3 class="font-semibold">{props.running ? 'Rendering batch' : 'Ready'}</h3>
+            <h3 class="font-semibold">
+              {props.running ? 'Rendering batch' : 'Ready'}
+            </h3>
             <p class="mt-1 text-sm text-base-content/60">
               {props.running
                 ? 'Batch in progress.'
@@ -80,13 +84,16 @@ export function AppHeader(props: {
             Cancel render?
           </h3>
           <p class="py-4 text-sm text-base-content/70">
-            The current FFmpeg process will stop and unfinished output for the active job may be incomplete.
+            The current FFmpeg process will stop and unfinished output for the
+            active job may be incomplete.
           </p>
           <div class="modal-action mt-0">
             <form method="dialog">
               <button class="btn btn-ghost">Keep rendering</button>
             </form>
-            <button class="btn btn-error" onClick={confirmCancel}>Cancel render</button>
+            <button class="btn btn-error" onClick={confirmCancel}>
+              Cancel render
+            </button>
           </div>
         </div>
         <form method="dialog" class="modal-backdrop">

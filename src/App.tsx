@@ -31,17 +31,27 @@ export default function App() {
               <Icon icon="lucide:clapperboard" width="20" height="20" />
             </div>
             <div class="min-w-0">
-              <h1 class="truncate text-base font-semibold leading-5">Ubet Render</h1>
-              <p class="truncate text-xs text-base-content/55">Local workspace</p>
+              <h1 class="truncate text-base font-semibold leading-5">
+                Ubet Render
+              </h1>
+              <p class="truncate text-xs text-base-content/55">
+                Local workspace
+              </p>
             </div>
           </div>
 
           <nav class="join hidden rounded-lg bg-base-200 p-1 sm:flex">
-            <button class={`join-item ${tabClass('renderer')}`} onClick={() => setActiveTab('renderer')}>
+            <button
+              class={`join-item ${tabClass('renderer')}`}
+              onClick={() => setActiveTab('renderer')}
+            >
               <Icon icon="lucide:wand-sparkles" width="16" height="16" />
               Render
             </button>
-            <button class={`join-item ${tabClass('activity')}`} onClick={() => setActiveTab('activity')}>
+            <button
+              class={`join-item ${tabClass('activity')}`}
+              onClick={() => setActiveTab('activity')}
+            >
               <Icon icon="lucide:list-checks" width="16" height="16" />
               Activity
               <Show when={pipeline.jobs().length > 0}>
@@ -66,11 +76,17 @@ export default function App() {
 
       <div class="flex border-b border-base-300 bg-base-100 px-3 py-2 sm:hidden">
         <div class="join w-full rounded-lg bg-base-200 p-1">
-          <button class={`join-item flex-1 ${tabClass('renderer')}`} onClick={() => setActiveTab('renderer')}>
+          <button
+            class={`join-item flex-1 ${tabClass('renderer')}`}
+            onClick={() => setActiveTab('renderer')}
+          >
             <Icon icon="lucide:wand-sparkles" width="16" height="16" />
             Render
           </button>
-          <button class={`join-item flex-1 ${tabClass('activity')}`} onClick={() => setActiveTab('activity')}>
+          <button
+            class={`join-item flex-1 ${tabClass('activity')}`}
+            onClick={() => setActiveTab('activity')}
+          >
             <Icon icon="lucide:list-checks" width="16" height="16" />
             Activity
           </button>
@@ -85,9 +101,14 @@ export default function App() {
                 <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
                   <div>
                     <h2 class="text-2xl font-semibold">Render setup</h2>
-                    <p class="text-sm text-base-content/60">Sources, audio, output, and encoding.</p>
+                    <p class="text-sm text-base-content/60">
+                      Sources, audio, output, and encoding.
+                    </p>
                   </div>
-                  <button class="btn btn-ghost btn-sm gap-2" onClick={() => setActiveTab('activity')}>
+                  <button
+                    class="btn btn-ghost btn-sm gap-2"
+                    onClick={() => setActiveTab('activity')}
+                  >
                     <Icon icon="lucide:logs" width="16" height="16" />
                     View activity
                   </button>
@@ -129,8 +150,13 @@ export default function App() {
 
                 <HardwareInfo info={pipeline.hardwareInfo()} />
 
-                <Show when={pipeline.running() || pipeline.overallProgress() > 0}>
-                  <OverallProgress value={pipeline.overallProgress()} eta={pipeline.overallEta()} />
+                <Show
+                  when={pipeline.running() || pipeline.overallProgress() > 0}
+                >
+                  <OverallProgress
+                    value={pipeline.overallProgress()}
+                    eta={pipeline.overallEta()}
+                  />
                 </Show>
               </aside>
             </div>
@@ -143,7 +169,10 @@ export default function App() {
                   <h2 class="text-2xl font-semibold">Activity</h2>
                   <p class="text-sm text-base-content/60">Jobs and logs.</p>
                 </div>
-                <button class="btn btn-primary btn-sm gap-2" onClick={() => setActiveTab('renderer')}>
+                <button
+                  class="btn btn-primary btn-sm gap-2"
+                  onClick={() => setActiveTab('renderer')}
+                >
                   <Icon icon="lucide:arrow-left" width="16" height="16" />
                   Back to setup
                 </button>
@@ -153,10 +182,17 @@ export default function App() {
                 <section class="panel flex min-h-[360px] min-w-0 flex-col overflow-hidden">
                   <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
                     <div class="flex items-center gap-2">
-                      <Icon icon="lucide:layers-3" class="text-primary" width="18" height="18" />
+                      <Icon
+                        icon="lucide:layers-3"
+                        class="text-primary"
+                        width="18"
+                        height="18"
+                      />
                       <h3 class="font-semibold">Jobs</h3>
                     </div>
-                    <span class="badge badge-ghost badge-sm">{pipeline.jobs().length} total</span>
+                    <span class="badge badge-ghost badge-sm">
+                      {pipeline.jobs().length} total
+                    </span>
                   </div>
                   <div class="min-h-0 flex-1 overflow-auto p-3 custom-scrollbar">
                     <JobTable jobs={pipeline.jobs()} />
