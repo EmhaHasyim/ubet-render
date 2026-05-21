@@ -26,6 +26,7 @@ export interface AppConfig {
     sampleRate: number;
     loudnormParams: string;
   };
+  youtubeTimestamps: boolean;
 }
 
 export interface RenderJob {

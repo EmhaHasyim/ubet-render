@@ -28,6 +28,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     sampleRate: 44100,
     loudnormParams: 'I=-14:LRA=11:TP=-1',
   },
+  youtubeTimestamps: true,
 };
 
 export const VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.mov', '.webm', '.avi', '.flv', '.wmv'];

@@ -12,6 +12,7 @@ pub struct OverrideConfig {
     pub output_prefix: Option<String>,
     pub maxrate: Option<String>,
     pub use_pingpong: Option<bool>,
+    pub youtube_timestamps: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -99,6 +99,7 @@ pub async fn generate_loop_playlists(
     songs: &[ProcessedAudio],
     ping_pong_path: &Path,
     target: &Target,
+    youtube_timestamps: bool,
 ) -> Result<(String, String, Vec<String>, f64), AppError> {
     let single_loop_duration: f64 = songs.iter().map(|s| s.duration).sum();
     if single_loop_duration <= 0.0 {
@@ -118,13 +119,41 @@ pub async fn generate_loop_playlists(
     let force_hours = total_audio_duration >= 3600.0;
     let mut timestamps = Vec::new();
     let mut current_time = 0.0;
-    for song in songs {
-        timestamps.push(format!("{} - {}", format_timestamp(current_time, force_hours), song.original_name));
-        current_time += song.duration;
-    }
 
-    if current_time < total_audio_duration {
-        timestamps.push(format!("{} - Looping", format_timestamp(current_time, force_hours)));
+    if youtube_timestamps {
+        for song in songs {
+            let song_name = Path::new(&song.original_name)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&song.original_name);
+            timestamps.push(format!("{} - {}", format_timestamp(current_time, force_hours), song_name));
+            current_time += song.duration;
+        }
+
+        if current_time < total_audio_duration {
+            timestamps.push(format!("{} - Looping", format_timestamp(current_time, force_hours)));
+        }
+    } else {
+        let mut loop_num = 1;
+        while current_time < total_audio_duration {
+            for song in songs {
+                if current_time >= total_audio_duration {
+                    break;
+                }
+                let song_name = Path::new(&song.original_name)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(&song.original_name);
+                timestamps.push(format!(
+                    "{} - {} (Loop {})",
+                    format_timestamp(current_time, force_hours),
+                    song_name,
+                    loop_num
+                ));
+                current_time += song.duration;
+            }
+            loop_num += 1;
+        }
     }
 
     let ping_pong_duration = ffmpeg::get_duration(ping_pong_path).await?;

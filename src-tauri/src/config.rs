@@ -8,6 +8,7 @@ pub struct AppConfig {
     pub target: Target,
     pub video: VideoSettings,
     pub audio: AudioSettings,
+    pub youtube_timestamps: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +90,7 @@ impl Default for AppConfig {
                 sample_rate: 44100,
                 loudnorm_params: "I=-14:LRA=11:TP=-1".into(),
             },
+            youtube_timestamps: true,
         }
     }
 }

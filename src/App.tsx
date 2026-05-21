@@ -104,6 +104,7 @@ export default function App() {
                   outputPrefix={pipeline.outputPrefix()}
                   maxrate={pipeline.maxrate()}
                   usePingpong={pipeline.usePingpong()}
+                  youtubeTimestamps={pipeline.youtubeTimestamps()}
                   onVideoChange={pipeline.setVideoSource}
                   onAudioChange={pipeline.setAudioSource}
                   onOutputChange={pipeline.setOutputPath}
@@ -113,6 +114,7 @@ export default function App() {
                   onOutputPrefixChange={pipeline.setOutputPrefix}
                   onMaxrateChange={pipeline.setMaxrate}
                   onUsePingpongChange={pipeline.setUsePingpong}
+                  onYoutubeTimestampsChange={pipeline.setYoutubeTimestamps}
                   dragHover={pipeline.dragHover()}
                 />
               </div>

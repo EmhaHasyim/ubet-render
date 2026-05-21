@@ -17,6 +17,7 @@ interface SettingsCardProps {
   outputPrefix: string;
   maxrate: string;
   usePingpong: boolean;
+  youtubeTimestamps: boolean;
   onVideoChange: (src: MediaSource | null) => void;
   onAudioChange: (src: MediaSource | null) => void;
   onOutputChange: (path: string) => void;
@@ -26,6 +27,7 @@ interface SettingsCardProps {
   onOutputPrefixChange: (prefix: string) => void;
   onMaxrateChange: (val: string) => void;
   onUsePingpongChange: (val: boolean) => void;
+  onYoutubeTimestampsChange: (val: boolean) => void;
   dragHover?: 'video' | 'audio' | 'output' | null;
 }
 
@@ -201,6 +203,19 @@ export function SettingsCard(props: SettingsCardProps) {
               class="toggle toggle-primary"
               checked={props.usePingpong}
               onChange={(e) => props.onUsePingpongChange(e.currentTarget.checked)}
+            />
+          </label>
+
+          <label class="flex min-h-20 items-center justify-between gap-4 rounded-lg border border-base-300 bg-base-100 px-4 py-3">
+            <span>
+              <span class="block text-sm font-medium">YouTube Timestamps</span>
+              <span class="block text-xs text-base-content/55">Looping disatukan</span>
+            </span>
+            <input
+              type="checkbox"
+              class="toggle toggle-primary"
+              checked={props.youtubeTimestamps}
+              onChange={(e) => props.onYoutubeTimestampsChange(e.currentTarget.checked)}
             />
           </label>
         </div>

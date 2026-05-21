@@ -95,6 +95,11 @@ impl Pipeline {
             .and_then(|ov| ov.use_pingpong)
             .unwrap_or(true);
 
+        let youtube_timestamps = overrides
+            .as_ref()
+            .and_then(|ov| ov.youtube_timestamps)
+            .unwrap_or(self.config.youtube_timestamps);
+
         let songs_per_playlist = overrides
             .as_ref()
             .and_then(|ov| ov.songs_per_playlist)
@@ -441,6 +446,7 @@ impl Pipeline {
                     &selected_songs,
                     &ping_pong_path,
                     &target_override,
+                    youtube_timestamps,
                 )
                 .await?;
 

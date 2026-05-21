@@ -49,6 +49,7 @@ function loadSavedPaths(): {
   outputPrefix: string;
   maxrate: string;
   usePingpong: boolean;
+  youtubeTimestamps: boolean;
   songsPerPlaylist: number;
   minDurationHours: number;
   codec: string;
@@ -64,6 +65,7 @@ function loadSavedPaths(): {
         outputPrefix: stringOr(parsed.outputPrefix, DEFAULT_CONFIG.metadata.channelPrefix),
         maxrate: stringOr(parsed.maxrate, '4000k'),
         usePingpong: booleanOr(parsed.usePingpong, true),
+        youtubeTimestamps: booleanOr(parsed.youtubeTimestamps, true),
         songsPerPlaylist: numberOr(parsed.songsPerPlaylist, DEFAULT_CONFIG.audio.songsPerPlaylist, 1),
         minDurationHours: numberOr(parsed.minDurationHours, DEFAULT_CONFIG.target.minDurationSec / 3600, 0.1),
         codec: ['h264', 'h265', 'av1'].includes(String(parsed.codec)) ? String(parsed.codec) : 'av1',
@@ -77,6 +79,7 @@ function loadSavedPaths(): {
     outputPrefix: DEFAULT_CONFIG.metadata.channelPrefix,
     maxrate: '4000k',
     usePingpong: true,
+    youtubeTimestamps: true,
     songsPerPlaylist: DEFAULT_CONFIG.audio.songsPerPlaylist,
     minDurationHours: DEFAULT_CONFIG.target.minDurationSec / 3600,
     codec: 'av1',
@@ -90,6 +93,7 @@ function savePaths(data: {
   outputPrefix: string;
   maxrate: string;
   usePingpong: boolean;
+  youtubeTimestamps: boolean;
   songsPerPlaylist: number;
   minDurationHours: number;
   codec: string;
@@ -121,6 +125,7 @@ export function usePipeline() {
   const [outputPrefix, setOutputPrefix] = createSignal<string>(saved.outputPrefix);
   const [maxrate, setMaxrate] = createSignal<string>(saved.maxrate);
   const [usePingpong, setUsePingpong] = createSignal<boolean>(saved.usePingpong);
+  const [youtubeTimestamps, setYoutubeTimestamps] = createSignal<boolean>(saved.youtubeTimestamps);
 
   const [songsPerPlaylist, setSongsPerPlaylist] = createSignal(saved.songsPerPlaylist);
   const [minDurationHours, setMinDurationHours] = createSignal(saved.minDurationHours);
@@ -135,6 +140,7 @@ export function usePipeline() {
     outputPrefix: outputPrefix(),
     maxrate: maxrate(),
     usePingpong: usePingpong(),
+    youtubeTimestamps: youtubeTimestamps(),
     songsPerPlaylist: songsPerPlaylist(),
     minDurationHours: minDurationHours(),
     codec: codec(),
@@ -354,6 +360,7 @@ export function usePipeline() {
       outputPrefix: outputPrefix(),
       maxrate: maxrate(),
       usePingpong: usePingpong(),
+      youtubeTimestamps: youtubeTimestamps(),
     };
 
       await invoke('start_render', { config: DEFAULT_CONFIG, overrides });
@@ -399,6 +406,7 @@ export function usePipeline() {
     outputPrefix,
     maxrate,
     usePingpong,
+    youtubeTimestamps,
     dragHover,
     setVideoSource: updateVideoSource,
     setAudioSource: updateAudioSource,
@@ -406,6 +414,7 @@ export function usePipeline() {
     setOutputPrefix: updateOutputPrefix,
     setMaxrate: updateMaxrate,
     setUsePingpong: updateUsePingpong,
+    setYoutubeTimestamps: (val: boolean) => { setYoutubeTimestamps(val); persist(); },
     setSongsPerPlaylist: (val: number) => { setSongsPerPlaylist(val); persist(); },
     setMinDurationHours: (val: number) => { setMinDurationHours(val); persist(); },
     setCodec: (val: string) => { setCodec(val); persist(); },
