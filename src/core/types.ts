@@ -44,7 +44,6 @@ export interface RenderJob {
 
 export type MediaSource = { type: 'files'; paths: string[] };
 
-// Event dari backend Rust
 export interface PipelineProgress {
   total: number;
   completed: number;

@@ -9,6 +9,9 @@ pub struct AppConfig {
     pub video: VideoSettings,
     pub audio: AudioSettings,
     pub youtube_timestamps: bool,
+    pub max_concurrent_jobs: usize,
+    pub watermark_path: Option<String>,
+    pub watermark_opacity: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,7 +58,6 @@ pub struct AudioSettings {
 
 impl Default for AppConfig {
     fn default() -> Self {
-        // Cache disimpan di folder sementara sistem agar tidak mengganggu hot reload Tauri
         let cache_dir = std::env::temp_dir()
             .join("ubet-render")
             .join("cache")
@@ -91,6 +93,9 @@ impl Default for AppConfig {
                 loudnorm_params: "I=-14:LRA=11:TP=-1".into(),
             },
             youtube_timestamps: true,
+            max_concurrent_jobs: 1,
+            watermark_path: None,
+            watermark_opacity: 0.8,
         }
     }
 }

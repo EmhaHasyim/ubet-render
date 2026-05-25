@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-/// Ubah path relatif menjadi absolut berdasarkan current working directory.
 pub fn to_absolute(path: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()
@@ -11,37 +10,33 @@ pub fn to_absolute(path: &Path) -> PathBuf {
     }
 }
 
-pub fn ensure_dir(dir: &Path) -> Result<(), std::io::Error> {
-    if !dir.exists() {
-        std::fs::create_dir_all(dir)?;
+pub async fn ensure_dir(dir: &Path) -> Result<(), std::io::Error> {
+    if !tokio::fs::try_exists(dir).await.unwrap_or(false) {
+        tokio::fs::create_dir_all(dir).await?;
     }
     Ok(())
 }
 
-pub fn safe_delete(file: &Path) -> Result<(), std::io::Error> {
-    if file.exists() {
-        std::fs::remove_file(file)?;
+pub async fn safe_delete(file: &Path) -> Result<(), std::io::Error> {
+    if tokio::fs::try_exists(file).await.unwrap_or(false) {
+        tokio::fs::remove_file(file).await?;
     }
     Ok(())
 }
 
-pub fn scan_files(dir: &Path, extensions: &[&str]) -> Vec<String> {
-    if !dir.is_dir() {
-        eprintln!("[scan_files] BUKAN direktori: {:?}", dir);
+pub async fn scan_files(dir: &Path, extensions: &[&str]) -> Vec<String> {
+    if !tokio::fs::metadata(dir).await.map(|m| m.is_dir()).unwrap_or(false) {
         return vec![];
     }
 
-    let entries = match std::fs::read_dir(dir) {
+    let mut entries = match tokio::fs::read_dir(dir).await {
         Ok(entries) => entries,
-        Err(e) => {
-            eprintln!("[scan_files] Gagal membaca direktori {:?}: {}", dir, e);
-            return vec![];
-        }
+        Err(_) => return vec![],
     };
 
     let mut files = Vec::new();
-    for entry in entries.filter_map(|e| e.ok()) {
-        let file_type = match entry.file_type() {
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let file_type = match entry.file_type().await {
             Ok(ft) => ft,
             Err(_) => continue,
         };
@@ -54,14 +49,6 @@ pub fn scan_files(dir: &Path, extensions: &[&str]) -> Vec<String> {
             files.push(entry.path().to_string_lossy().to_string());
         }
     }
-
-    eprintln!(
-        "[scan_files] Direktori: {:?}, ekstensi: {:?}, ditemukan {} file: {:?}",
-        dir,
-        extensions,
-        files.len(),
-        files
-    );
 
     files
 }

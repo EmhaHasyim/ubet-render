@@ -1,4 +1,3 @@
-// src/components/layout/LogViewer.tsx
 import { createEffect, For, Show } from 'solid-js';
 import { Icon } from '@iconify-icon/solid';
 import { LogLine } from '../ui/LogLine';

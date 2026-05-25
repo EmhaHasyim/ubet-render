@@ -1,4 +1,3 @@
-// src/App.tsx
 import { createSignal, Show } from 'solid-js';
 import { Icon } from '@iconify-icon/solid';
 import { usePipeline } from './hooks/usePipeline';

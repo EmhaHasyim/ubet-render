@@ -13,6 +13,9 @@ pub struct OverrideConfig {
     pub maxrate: Option<String>,
     pub use_pingpong: Option<bool>,
     pub youtube_timestamps: Option<bool>,
+    pub max_concurrent_jobs: Option<usize>,
+    pub watermark_path: Option<String>,
+    pub watermark_opacity: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

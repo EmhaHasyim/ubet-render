@@ -39,10 +39,8 @@ pub async fn run(
             line_res = reader.next_line() => {
                 match line_res {
                     Ok(Some(line)) => {
-                        if let Some(tx) = &tx_progress {
-                            if let Some(time_sec) = extract_time(&line) {
-                                let _ = tx.send(time_sec).await;
-                            }
+                        if let (Some(tx), Some(time_sec)) = (&tx_progress, extract_time(&line)) {
+                            let _ = tx.send(time_sec).await;
                         }
                         if !line.trim().is_empty() {
                             last_stderr = line;
@@ -138,7 +136,6 @@ pub async fn get_duration(file_path: &Path) -> Result<f64, AppError> {
     Ok(duration)
 }
 
-/// Dapatkan nama codec video dari stream pertama (misal "h264", "hevc", "av1")
 pub async fn get_video_codec(file_path: &Path) -> Result<String, AppError> {
     let mut cmd = Command::new("ffprobe");
     cmd.args([

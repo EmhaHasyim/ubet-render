@@ -1,4 +1,3 @@
-// src/components/media/SourceSelector.tsx
 import { createSignal, For, Show } from 'solid-js';
 import { dirname } from '@tauri-apps/api/path';
 import { open } from '@tauri-apps/plugin-dialog';

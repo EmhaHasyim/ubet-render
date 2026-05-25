@@ -1,4 +1,3 @@
-// src/components/layout/AppHeader.tsx
 import { Show } from 'solid-js';
 import { Icon } from '@iconify-icon/solid';
 

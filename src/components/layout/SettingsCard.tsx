@@ -1,4 +1,3 @@
-// src/components/layout/SettingsCard.tsx
 import { Show } from 'solid-js';
 import { Icon } from '@iconify-icon/solid';
 import { open } from '@tauri-apps/plugin-dialog';

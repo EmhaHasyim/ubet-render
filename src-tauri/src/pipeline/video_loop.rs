@@ -1,4 +1,3 @@
-// src-tauri/src/pipeline/video_loop.rs
 use crate::config::{Target, VideoSettings};
 use crate::error::AppError;
 use crate::ffmpeg;
@@ -21,7 +20,6 @@ pub async fn create_ping_pong_video(
     let fps_str = video_settings.fps.to_string();
     let output_str = output.to_string_lossy().to_string();
 
-    // Hitung bufsize dari bitrate_max (2x maxrate)
     let maxrate_k = video_settings
         .bitrate_max
         .trim_end_matches('k')

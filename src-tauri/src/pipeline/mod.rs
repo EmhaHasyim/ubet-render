@@ -33,16 +33,12 @@ impl Pipeline {
         let cache_dir = std::env::temp_dir().join("ubet-render").join("cache");
         let thumb_dir = std::env::temp_dir().join("ubet-render").join("thumbnails");
 
-        eprintln!("=== PIPELINE START ===");
-        eprintln!("Output dir : {:?}", output_dir);
-        eprintln!("Cache dir  : {:?}", cache_dir);
+        let _ = tokio::fs::remove_dir_all(&thumb_dir).await;
+        let _ = tokio::fs::remove_dir_all(&cache_dir).await;
 
-        let _ = std::fs::remove_dir_all(&thumb_dir);
-        let _ = std::fs::remove_dir_all(&cache_dir);
-
-        fs::ensure_dir(&output_dir)?;
-        fs::ensure_dir(&cache_dir)?;
-        fs::ensure_dir(&thumb_dir)?;
+        fs::ensure_dir(&output_dir).await?;
+        fs::ensure_dir(&cache_dir).await?;
+        fs::ensure_dir(&thumb_dir).await?;
 
         let render_timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -55,19 +51,12 @@ impl Pipeline {
             ));
         }
 
-        let video_files = self.scan_source_files(
-            &overrides,
-            Path::new(&self.config.directories.video),
-            "video",
-        )?;
-        let audio_files = self.scan_source_files(
-            &overrides,
-            Path::new(&self.config.directories.audio),
-            "audio",
-        )?;
-
-        eprintln!("Video files found: {:?}", video_files);
-        eprintln!("Audio files found: {:?}", audio_files);
+        let video_files = self
+            .scan_source_files(&overrides, Path::new(&self.config.directories.video), "video")
+            .await?;
+        let audio_files = self
+            .scan_source_files(&overrides, Path::new(&self.config.directories.audio), "audio")
+            .await?;
 
         if video_files.is_empty() {
             event::emit(
@@ -111,6 +100,7 @@ impl Pipeline {
             .and_then(|ov| ov.min_duration_hours)
             .map(|h| (h * 3600.0) as u64)
             .unwrap_or(self.config.target.min_duration_sec);
+        
         let encoder_selected = overrides.as_ref().and_then(|ov| ov.encoder.clone());
         let prefix = overrides
             .as_ref()
@@ -118,7 +108,6 @@ impl Pipeline {
             .unwrap_or(&self.config.metadata.channel_prefix);
         let safe_prefix = sanitize_filename_component(prefix);
 
-        // Proses maxrate -> target bitrate & bufsize
         let maxrate_str = overrides
             .as_ref()
             .and_then(|ov| ov.maxrate.clone())
@@ -163,8 +152,122 @@ impl Pipeline {
             },
         );
 
-        let mut jobs: Vec<RenderJob> = Vec::new();
-        for path_str in &video_files {
+        let mut jobs = self.create_initial_jobs(&video_files, &safe_prefix, &output_dir);
+
+        event::emit(
+            &self.app,
+            PipelineEvent::Log {
+                level: "info".into(),
+                message: "Generating thumbnails...".into(),
+            },
+        );
+
+        self.generate_thumbnails(&mut jobs, &thumb_dir, render_timestamp, control.clone()).await;
+
+        if control.is_cancelled() {
+            return Err(AppError::Cancelled(
+                "Render dibatalkan oleh pengguna".into(),
+            ));
+        }
+
+        self.emit_progress(&jobs, &jobs[0]);
+
+        let total = jobs.len();
+        let mut completed = 0;
+
+        for i in 0..jobs.len() {
+            if control.is_cancelled() {
+                return Err(AppError::Cancelled(
+                    "Render dibatalkan oleh pengguna".into(),
+                ));
+            }
+
+            if Path::new(&jobs[i].video.output_path).exists() {
+                jobs[i].state = JobState::Done;
+                jobs[i].progress_percent = 100;
+                jobs[i].current_step = "Skipped".into();
+                completed += 1;
+                event::emit(
+                    &self.app,
+                    PipelineEvent::Log {
+                        level: "info".into(),
+                        message: format!("Melewati {} (sudah ada)", jobs[i].video.name),
+                    },
+                );
+                self.emit_progress(&jobs, &jobs[i]);
+                continue;
+            }
+
+            let result = self.process_single_job(
+                i,
+                &mut jobs,
+                &cache_dir,
+                render_timestamp,
+                use_pingpong,
+                &video_cfg,
+                encoder_selected.as_deref(),
+                &master_pool,
+                songs_per_playlist,
+                min_duration_sec,
+                youtube_timestamps,
+                control.clone(),
+            )
+            .await;
+
+            match result {
+                Ok(()) => {
+                    completed += 1;
+                    event::emit(
+                        &self.app,
+                        PipelineEvent::Log {
+                            level: "success".into(),
+                            message: format!("{} selesai", jobs[i].video.name),
+                        },
+                    );
+                }
+                Err(AppError::Cancelled(msg)) => {
+                    return Err(AppError::Cancelled(msg));
+                }
+                Err(e) => {
+                    jobs[i].state = JobState::Error;
+                    jobs[i].error = Some(e.to_string());
+                    self.emit_progress(&jobs, &jobs[i]);
+                }
+            }
+        }
+
+        let _ = tokio::fs::remove_dir_all(&cache_dir).await;
+
+        let failed = jobs.iter().filter(|j| j.state == JobState::Error).count();
+        event::emit(
+            &self.app,
+            PipelineEvent::Log {
+                level: "info".into(),
+                message: format!(
+                    "Render selesai: {}/{} sukses, {} gagal",
+                    completed, total, failed
+                ),
+            },
+        );
+        event::emit(
+            &self.app,
+            PipelineEvent::Done {
+                completed,
+                total,
+                failed,
+            },
+        );
+        Ok(())
+    }
+
+    fn create_initial_jobs(
+        &self,
+        video_files: &[String],
+        safe_prefix: &str,
+        output_dir: &Path,
+    ) -> Vec<RenderJob> {
+        let mut jobs = Vec::new();
+        for path_str in video_files {
             let input_path = Path::new(path_str);
             let name = input_path
                 .file_name()
@@ -189,15 +292,16 @@ impl Pipeline {
                 error: None,
             });
         }
+        jobs
+    }
 
-        // Generate thumbnails in parallel
-        event::emit(
-            &self.app,
-            PipelineEvent::Log {
-                level: "info".into(),
-                message: "Generating thumbnails...".into(),
-            },
-        );
+    async fn generate_thumbnails(
+        &self,
+        jobs: &mut [RenderJob],
+        thumb_dir: &Path,
+        render_timestamp: u64,
+        control: Arc<crate::RenderControl>,
+    ) {
         let mut thumb_tasks = Vec::new();
         let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(4));
         for (i, job) in jobs.iter().enumerate() {
@@ -228,270 +332,87 @@ impl Pipeline {
             }
         }
 
-        self.emit_progress(&jobs, &jobs[0]); // emit initial jobs WITHOUT thumbnail paths
+        self.emit_progress(jobs, &jobs[0].clone());
 
         for t in thumb_tasks {
             let _ = t.await;
         }
 
-        if control.is_cancelled() {
-            return Err(AppError::Cancelled(
-                "Render dibatalkan oleh pengguna".into(),
-            ));
-        }
-
-        // NOW set the paths
         for (i, job) in jobs.iter_mut().enumerate() {
             let thumb_path = thumb_dir.join(format!("thumb_{}_{}.jpg", render_timestamp, i));
             if thumb_path.exists() {
                 job.video.thumbnail_path = Some(thumb_path.to_string_lossy().to_string());
             }
         }
+    }
 
-        self.emit_progress(&jobs, &jobs[0]); // emit again with paths
+    #[allow(clippy::too_many_arguments)]
+    async fn process_single_job(
+        &self,
+        i: usize,
+        jobs: &mut [RenderJob],
+        cache_dir: &Path,
+        render_timestamp: u64,
+        use_pingpong: bool,
+        video_cfg: &crate::config::VideoSettings,
+        encoder_selected: Option<&str>,
+        master_pool: &[ProcessedAudio],
+        songs_per_playlist: usize,
+        min_duration_sec: u64,
+        youtube_timestamps: bool,
+        control: Arc<crate::RenderControl>,
+    ) -> Result<(), AppError> {
+        jobs[i].state = JobState::Processing;
+        jobs[i].current_step = "Preparing".into();
+        self.emit_progress(jobs, &jobs[i].clone());
 
-        let total = jobs.len();
-        let mut completed = 0;
+        let timestamp = format!("{}_{}", render_timestamp, i);
 
-        #[allow(clippy::needless_range_loop)]
-        for i in 0..jobs.len() {
-            if control.is_cancelled() {
-                return Err(AppError::Cancelled(
-                    "Render dibatalkan oleh pengguna".into(),
-                ));
+        let input_codec = ffmpeg::get_video_codec(Path::new(&jobs[i].video.input_path))
+            .await
+            .ok();
+
+        let need_reencode = match (&input_codec, encoder_selected) {
+            (Some(in_codec), Some(enc)) => {
+                let mapped_enc = match enc {
+                    "libx264" | "h264_nvenc" | "h264_amf" | "h264_qsv" => "h264",
+                    "libx265" | "hevc_nvenc" | "hevc_amf" | "hevc_qsv" => "hevc",
+                    "av1_nvenc" | "av1_amf" | "av1_qsv" | "libsvtav1" => "av1",
+                    _ => enc,
+                };
+                in_codec != mapped_enc
             }
+            _ => true,
+        };
 
-            if Path::new(&jobs[i].video.output_path).exists() {
-                jobs[i].state = JobState::Done;
-                jobs[i].progress_percent = 100;
-                jobs[i].current_step = "Skipped".into();
-                completed += 1;
-                event::emit(
-                    &self.app,
-                    PipelineEvent::Log {
-                        level: "info".into(),
-                        message: format!("Melewati {} (sudah ada)", jobs[i].video.name),
-                    },
-                );
-                self.emit_progress(&jobs, &jobs[i]);
-                continue;
-            }
+        let ping_pong_path;
+        let created_intermediate;
 
-            jobs[i].state = JobState::Processing;
-            jobs[i].current_step = "Preparing".into();
-            self.emit_progress(&jobs, &jobs[i]);
+        if use_pingpong {
+            jobs[i].current_step = "1/2 Upscaling & Ping-Pong".into();
+            self.emit_progress(jobs, &jobs[i].clone());
 
-            let timestamp = format!(
-                "{}_{}",
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs(),
-                i
-            );
-
-            let input_codec = ffmpeg::get_video_codec(Path::new(&jobs[i].video.input_path))
-                .await
-                .ok();
-
-            let need_reencode = match (&input_codec, encoder_selected.as_deref()) {
-                (Some(in_codec), Some(enc)) => {
-                    let mapped_enc = match enc {
-                        "libx264" | "h264_nvenc" | "h264_amf" | "h264_qsv" => "h264",
-                        "libx265" | "hevc_nvenc" | "hevc_amf" | "hevc_qsv" => "hevc",
-                        "av1_nvenc" | "av1_amf" | "av1_qsv" | "libsvtav1" => "av1",
-                        _ => enc,
-                    };
-                    in_codec != mapped_enc
-                }
-                _ => true,
-            };
-
-            let ping_pong_path;
-            let created_intermediate;
-
-            if use_pingpong {
-                jobs[i].current_step = "1/2 Upscaling & Ping-Pong".into();
-                self.emit_progress(&jobs, &jobs[i]);
-
-                ping_pong_path = cache_dir.join(format!("pingpong_{}.mp4", timestamp));
-                created_intermediate = true;
-
-                let (tx, mut rx) = tokio::sync::mpsc::channel::<f64>(100);
-                let ping_pong_path_clone = ping_pong_path.clone();
-                let input_clone = jobs[i].video.input_path.clone();
-                let video_cfg_clone = video_cfg.clone();
-
-                let expected_dur = ffmpeg::get_duration(Path::new(&input_clone))
-                    .await
-                    .unwrap_or(1.0)
-                    .max(0.001);
-                let target_dur = expected_dur * 2.0;
-                let control_clone = control.clone();
-
-                let ffmpeg_task = tokio::spawn(async move {
-                    video_loop::create_ping_pong_video(
-                        &input_clone,
-                        &ping_pong_path_clone,
-                        &video_cfg_clone,
-                        true,
-                        Some(tx),
-                        Some(control_clone),
-                    )
-                    .await
-                });
-
-                while let Some(progress_sec) = rx.recv().await {
-                    let pct = (progress_sec / target_dur * 100.0).clamp(0.0, 100.0) as u8;
-                    jobs[i].progress_percent = pct / 2;
-                    self.emit_progress(&jobs, &jobs[i]);
-                }
-
-                match ffmpeg_task
-                    .await
-                    .unwrap_or_else(|e| Err(AppError::Pipeline(format!("Task panic: {}", e))))
-                {
-                    Ok(()) => {}
-                    Err(AppError::Cancelled(message)) => {
-                        fs::safe_delete(&ping_pong_path).ok();
-                        return Err(AppError::Cancelled(message));
-                    }
-                    Err(e) => {
-                        jobs[i].state = JobState::Error;
-                        jobs[i].error = Some(e.to_string());
-                        self.emit_progress(&jobs, &jobs[i]);
-                        fs::safe_delete(&ping_pong_path).ok();
-                        continue;
-                    }
-                }
-            } else if need_reencode {
-                jobs[i].current_step = "1/2 Re-encode video (no ping-pong)".into();
-                self.emit_progress(&jobs, &jobs[i]);
-
-                ping_pong_path = cache_dir.join(format!("looping_{}.mp4", timestamp));
-                created_intermediate = true;
-
-                let (tx, mut rx) = tokio::sync::mpsc::channel::<f64>(100);
-                let ping_pong_path_clone = ping_pong_path.clone();
-                let input_clone = jobs[i].video.input_path.clone();
-                let video_cfg_clone = video_cfg.clone();
-
-                let target_dur = ffmpeg::get_duration(Path::new(&input_clone))
-                    .await
-                    .unwrap_or(1.0)
-                    .max(0.001);
-                let control_clone = control.clone();
-
-                let ffmpeg_task = tokio::spawn(async move {
-                    video_loop::create_ping_pong_video(
-                        &input_clone,
-                        &ping_pong_path_clone,
-                        &video_cfg_clone,
-                        false,
-                        Some(tx),
-                        Some(control_clone),
-                    )
-                    .await
-                });
-
-                while let Some(progress_sec) = rx.recv().await {
-                    let pct = (progress_sec / target_dur * 100.0).clamp(0.0, 100.0) as u8;
-                    jobs[i].progress_percent = pct / 2;
-                    self.emit_progress(&jobs, &jobs[i]);
-                }
-
-                match ffmpeg_task
-                    .await
-                    .unwrap_or_else(|e| Err(AppError::Pipeline(format!("Task panic: {}", e))))
-                {
-                    Ok(()) => {}
-                    Err(AppError::Cancelled(message)) => {
-                        fs::safe_delete(&ping_pong_path).ok();
-                        return Err(AppError::Cancelled(message));
-                    }
-                    Err(e) => {
-                        jobs[i].state = JobState::Error;
-                        jobs[i].error = Some(e.to_string());
-                        self.emit_progress(&jobs, &jobs[i]);
-                        fs::safe_delete(&ping_pong_path).ok();
-                        continue;
-                    }
-                }
-            } else {
-                jobs[i].current_step = "1/2 Menggunakan video asli (codec sama)".into();
-                self.emit_progress(&jobs, &jobs[i]);
-                ping_pong_path = PathBuf::from(&jobs[i].video.input_path);
-                created_intermediate = false;
-            }
-
-            jobs[i].current_step = "2/2 Smart Loop & Muxing".into();
-            jobs[i].progress_percent = 50;
-            self.emit_progress(&jobs, &jobs[i]);
-
-            use rand::SeedableRng;
-            let mut rng = rand::rngs::StdRng::from_entropy();
-            let mut shuffled = master_pool.clone();
-            use rand::seq::SliceRandom;
-            shuffled.shuffle(&mut rng);
-            let take_count = songs_per_playlist.min(shuffled.len()).max(1);
-            let selected_songs: Vec<ProcessedAudio> =
-                shuffled.into_iter().take(take_count).collect();
-
-            let target_override = crate::config::Target {
-                min_duration_sec,
-                padding_sec: self.config.target.padding_sec,
-            };
-            let (audio_content, video_content, timestamps, total_duration) =
-                video_loop::generate_loop_playlists(
-                    &selected_songs,
-                    &ping_pong_path,
-                    &target_override,
-                    youtube_timestamps,
-                )
-                .await?;
-
-            let mut ts_path = PathBuf::from(&jobs[i].video.output_path);
-            ts_path.set_extension("txt");
-            std::fs::write(&ts_path, timestamps.join("\n"))?;
-
-            event::emit(
-                &self.app,
-                PipelineEvent::Log {
-                    level: "info".into(),
-                    message: format!("=== Timestamps untuk {} ===", jobs[i].video.name),
-                },
-            );
-            for ts in &timestamps {
-                event::emit(
-                    &self.app,
-                    PipelineEvent::Log {
-                        level: "info".into(),
-                        message: ts.clone(),
-                    },
-                );
-            }
-
-            let audio_list_path = cache_dir.join(format!("audio_list_{}.txt", timestamp));
-            let video_list_path = cache_dir.join(format!("video_list_{}.txt", timestamp));
-            std::fs::write(&audio_list_path, &audio_content)?;
-            std::fs::write(&video_list_path, &video_content)?;
-
-            jobs[i].progress_percent = 50;
-            self.emit_progress(&jobs, &jobs[i]);
+            ping_pong_path = cache_dir.join(format!("pingpong_{}.mp4", timestamp));
+            created_intermediate = true;
 
             let (tx, mut rx) = tokio::sync::mpsc::channel::<f64>(100);
-            let audio_list_path_clone = audio_list_path.clone();
-            let video_list_path_clone = video_list_path.clone();
-            let output_path_clone = jobs[i].video.output_path.clone();
-            let total_dur = total_duration;
+            let ping_pong_path_clone = ping_pong_path.clone();
+            let input_clone = jobs[i].video.input_path.clone();
+            let video_cfg_clone = video_cfg.clone();
+
+            let expected_dur = ffmpeg::get_duration(Path::new(&input_clone))
+                .await
+                .unwrap_or(1.0)
+                .max(0.001);
+            let target_dur = expected_dur * 2.0;
             let control_clone = control.clone();
 
             let ffmpeg_task = tokio::spawn(async move {
-                muxer::mux_final_video(
-                    &audio_list_path_clone,
-                    &video_list_path_clone,
-                    &output_path_clone,
-                    total_dur,
+                video_loop::create_ping_pong_video(
+                    &input_clone,
+                    &ping_pong_path_clone,
+                    &video_cfg_clone,
+                    true,
                     Some(tx),
                     Some(control_clone),
                 )
@@ -499,80 +420,164 @@ impl Pipeline {
             });
 
             while let Some(progress_sec) = rx.recv().await {
-                let pct = (progress_sec / total_dur * 100.0).clamp(0.0, 100.0) as u8;
-                jobs[i].progress_percent = 50 + (pct / 2);
-                self.emit_progress(&jobs, &jobs[i]);
+                let pct = (progress_sec / target_dur * 100.0).clamp(0.0, 100.0) as u8;
+                jobs[i].progress_percent = pct / 2;
+                self.emit_progress(jobs, &jobs[i].clone());
             }
 
-            match ffmpeg_task
-                .await
-                .unwrap_or_else(|e| Err(AppError::Pipeline(format!("Task panic: {}", e))))
-            {
+            match ffmpeg_task.await.unwrap_or_else(|e| Err(AppError::Pipeline(format!("Task panic: {}", e)))) {
                 Ok(()) => {}
-                Err(AppError::Cancelled(message)) => {
-                    if created_intermediate {
-                        fs::safe_delete(&ping_pong_path).ok();
-                    }
-                    fs::safe_delete(&audio_list_path).ok();
-                    fs::safe_delete(&video_list_path).ok();
-                    return Err(AppError::Cancelled(message));
-                }
                 Err(e) => {
-                    jobs[i].state = JobState::Error;
-                    jobs[i].error = Some(e.to_string());
-                    self.emit_progress(&jobs, &jobs[i]);
-                    if created_intermediate {
-                        fs::safe_delete(&ping_pong_path).ok();
-                    }
-                    fs::safe_delete(&audio_list_path).ok();
-                    fs::safe_delete(&video_list_path).ok();
-                    continue;
+                    let _ = fs::safe_delete(&ping_pong_path).await;
+                    return Err(e);
                 }
             }
+        } else if need_reencode {
+            jobs[i].current_step = "1/2 Re-encode video".into();
+            self.emit_progress(jobs, &jobs[i].clone());
 
-            jobs[i].state = JobState::Done;
-            jobs[i].progress_percent = 100;
-            completed += 1;
-            event::emit(
-                &self.app,
-                PipelineEvent::Log {
-                    level: "success".into(),
-                    message: format!("{} selesai", jobs[i].video.name),
-                },
-            );
+            ping_pong_path = cache_dir.join(format!("looping_{}.mp4", timestamp));
+            created_intermediate = true;
 
-            if created_intermediate {
-                fs::safe_delete(&ping_pong_path).ok();
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<f64>(100);
+            let ping_pong_path_clone = ping_pong_path.clone();
+            let input_clone = jobs[i].video.input_path.clone();
+            let video_cfg_clone = video_cfg.clone();
+
+            let target_dur = ffmpeg::get_duration(Path::new(&input_clone))
+                .await
+                .unwrap_or(1.0)
+                .max(0.001);
+            let control_clone = control.clone();
+
+            let ffmpeg_task = tokio::spawn(async move {
+                video_loop::create_ping_pong_video(
+                    &input_clone,
+                    &ping_pong_path_clone,
+                    &video_cfg_clone,
+                    false,
+                    Some(tx),
+                    Some(control_clone),
+                )
+                .await
+            });
+
+            while let Some(progress_sec) = rx.recv().await {
+                let pct = (progress_sec / target_dur * 100.0).clamp(0.0, 100.0) as u8;
+                jobs[i].progress_percent = pct / 2;
+                self.emit_progress(jobs, &jobs[i].clone());
             }
-            fs::safe_delete(&audio_list_path).ok();
-            fs::safe_delete(&video_list_path).ok();
-            self.emit_progress(&jobs, &jobs[i]);
+
+            match ffmpeg_task.await.unwrap_or_else(|e| Err(AppError::Pipeline(format!("Task panic: {}", e)))) {
+                Ok(()) => {}
+                Err(e) => {
+                    let _ = fs::safe_delete(&ping_pong_path).await;
+                    return Err(e);
+                }
+            }
+        } else {
+            jobs[i].current_step = "1/2 Menggunakan video asli".into();
+            self.emit_progress(jobs, &jobs[i].clone());
+            ping_pong_path = PathBuf::from(&jobs[i].video.input_path);
+            created_intermediate = false;
         }
 
-        if let Err(e) = std::fs::remove_dir_all(&cache_dir) {
-            eprintln!("Gagal menghapus folder cache: {}", e);
-        }
-        // Thumbnails are preserved while the UI is displaying this batch.
-        let failed = jobs.iter().filter(|j| j.state == JobState::Error).count();
+        jobs[i].current_step = "2/2 Smart Loop & Muxing".into();
+        jobs[i].progress_percent = 50;
+        self.emit_progress(jobs, &jobs[i].clone());
+
+        use rand::SeedableRng;
+        let mut rng = rand::rngs::StdRng::from_entropy();
+        let mut shuffled = master_pool.to_vec();
+        use rand::seq::SliceRandom;
+        shuffled.shuffle(&mut rng);
+        let take_count = songs_per_playlist.min(shuffled.len()).max(1);
+        let selected_songs: Vec<ProcessedAudio> = shuffled.into_iter().take(take_count).collect();
+
+        let target_override = crate::config::Target {
+            min_duration_sec,
+            padding_sec: self.config.target.padding_sec,
+        };
+        let (audio_content, video_content, timestamps, total_duration) =
+            video_loop::generate_loop_playlists(
+                &selected_songs,
+                &ping_pong_path,
+                &target_override,
+                youtube_timestamps,
+            )
+            .await?;
+
+        let mut ts_path = PathBuf::from(&jobs[i].video.output_path);
+        ts_path.set_extension("txt");
+        tokio::fs::write(&ts_path, timestamps.join("\n")).await?;
+
         event::emit(
             &self.app,
             PipelineEvent::Log {
                 level: "info".into(),
-                message: format!(
-                    "Render selesai: {}/{} sukses, {} gagal",
-                    completed, total, failed
-                ),
+                message: format!("=== Timestamps untuk {} ===", jobs[i].video.name),
             },
         );
-        event::emit(
-            &self.app,
-            PipelineEvent::Done {
-                completed,
-                total,
-                failed,
-            },
-        );
-        Ok(())
+        for ts in &timestamps {
+            event::emit(
+                &self.app,
+                PipelineEvent::Log {
+                    level: "info".into(),
+                    message: ts.clone(),
+                },
+            );
+        }
+
+        let audio_list_path = cache_dir.join(format!("audio_list_{}.txt", timestamp));
+        let video_list_path = cache_dir.join(format!("video_list_{}.txt", timestamp));
+        tokio::fs::write(&audio_list_path, &audio_content).await?;
+        tokio::fs::write(&video_list_path, &video_content).await?;
+
+        jobs[i].progress_percent = 50;
+        self.emit_progress(jobs, &jobs[i].clone());
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<f64>(100);
+        let audio_list_path_clone = audio_list_path.clone();
+        let video_list_path_clone = video_list_path.clone();
+        let output_path_clone = jobs[i].video.output_path.clone();
+        let total_dur = total_duration;
+        let control_clone = control.clone();
+
+        let ffmpeg_task = tokio::spawn(async move {
+            muxer::mux_final_video(
+                &audio_list_path_clone,
+                &video_list_path_clone,
+                &output_path_clone,
+                total_dur,
+                Some(tx),
+                Some(control_clone),
+            )
+            .await
+        });
+
+        while let Some(progress_sec) = rx.recv().await {
+            let pct = (progress_sec / total_dur * 100.0).clamp(0.0, 100.0) as u8;
+            jobs[i].progress_percent = 50 + (pct / 2);
+            self.emit_progress(jobs, &jobs[i].clone());
+        }
+
+        let res = ffmpeg_task.await.unwrap_or_else(|e| Err(AppError::Pipeline(format!("Task panic: {}", e))));
+
+        if created_intermediate {
+            let _ = fs::safe_delete(&ping_pong_path).await;
+        }
+        let _ = fs::safe_delete(&audio_list_path).await;
+        let _ = fs::safe_delete(&video_list_path).await;
+
+        match res {
+            Ok(()) => {
+                jobs[i].state = JobState::Done;
+                jobs[i].progress_percent = 100;
+                self.emit_progress(jobs, &jobs[i].clone());
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
     }
 
     fn emit_progress(&self, jobs: &[RenderJob], current: &RenderJob) {
@@ -590,15 +595,13 @@ impl Pipeline {
     }
 
     fn resolve_output_dir(&self, overrides: &Option<OverrideConfig>) -> PathBuf {
-        if let Some(ov) = overrides {
-            if let Some(path) = &ov.output_path {
-                return PathBuf::from(path);
-            }
+        if let Some(path) = overrides.as_ref().and_then(|ov| ov.output_path.as_ref()) {
+            return PathBuf::from(path);
         }
         PathBuf::from(&self.config.directories.output)
     }
 
-    fn scan_source_files(
+    async fn scan_source_files(
         &self,
         overrides: &Option<OverrideConfig>,
         default_dir: &Path,
@@ -619,15 +622,14 @@ impl Pipeline {
         let mut files = match source {
             Some(MediaSource::Folder { path }) => {
                 let abs_path = fs::to_absolute(Path::new(path));
-                eprintln!("[{}] Scan folder: {:?}", media_type, abs_path);
-                fs::scan_files(&abs_path, extensions)
+                fs::scan_files(&abs_path, extensions).await
             }
             Some(MediaSource::Files { paths }) => {
                 let mut all_files = Vec::new();
                 for p_str in paths {
                     let p = Path::new(p_str);
                     if p.is_dir() {
-                        let scanned = fs::scan_files(p, extensions);
+                        let scanned = fs::scan_files(p, extensions).await;
                         all_files.extend(scanned);
                     } else if p.is_file() {
                         let lower = p_str.to_lowercase();
@@ -640,8 +642,7 @@ impl Pipeline {
             }
             None => {
                 let default_abs = fs::to_absolute(Path::new(default_dir));
-                eprintln!("[{}] Scan default dir: {:?}", media_type, default_abs);
-                fs::scan_files(&default_abs, extensions)
+                fs::scan_files(&default_abs, extensions).await
             }
         };
 
