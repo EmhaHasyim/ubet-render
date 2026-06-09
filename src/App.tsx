@@ -125,6 +125,9 @@ export default function App() {
                   maxrate={pipeline.maxrate()}
                   usePingpong={pipeline.usePingpong()}
                   youtubeTimestamps={pipeline.youtubeTimestamps()}
+                  maxConcurrentJobs={pipeline.maxConcurrentJobs()}
+                  watermarkPath={pipeline.watermarkPath()}
+                  watermarkOpacity={pipeline.watermarkOpacity()}
                   onVideoChange={pipeline.setVideoSource}
                   onAudioChange={pipeline.setAudioSource}
                   onOutputChange={pipeline.setOutputPath}
@@ -135,6 +138,9 @@ export default function App() {
                   onMaxrateChange={pipeline.setMaxrate}
                   onUsePingpongChange={pipeline.setUsePingpong}
                   onYoutubeTimestampsChange={pipeline.setYoutubeTimestamps}
+                  onMaxConcurrentJobsChange={pipeline.setMaxConcurrentJobs}
+                  onWatermarkPathChange={pipeline.setWatermarkPath}
+                  onWatermarkOpacityChange={pipeline.setWatermarkOpacity}
                   dragHover={pipeline.dragHover()}
                 />
               </div>
@@ -144,6 +150,7 @@ export default function App() {
                   running={pipeline.running()}
                   onStart={pipeline.startRender}
                   onCancel={pipeline.cancelRender}
+                  onPause={pipeline.pauseRender}
                   canStart={pipeline.canStart()}
                 />
 

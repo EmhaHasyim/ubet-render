@@ -100,7 +100,7 @@ fn check_av1_support() -> bool {
         .output()
         .map(|out| {
             let stdout = String::from_utf8_lossy(&out.stdout);
-            stdout.contains("av1_nvenc") || stdout.contains("av1_amf") || stdout.contains("av1_qsv")
+            stdout.contains("av1_nvenc") || stdout.contains("av1_amf") || stdout.contains("av1_qsv") || stdout.contains("libsvtav1")
         })
         .unwrap_or(false)
 }

@@ -15,11 +15,12 @@ export function OverallProgress(props: { value: number; eta?: string }) {
           {Math.round(safeValue())}%
         </span>
       </div>
-      <progress
-        class="progress progress-primary h-3 w-full"
-        value={safeValue()}
-        max="100"
-      />
+      <div class="h-3 w-full rounded-full bg-base-300 overflow-hidden">
+        <div
+          class="h-full bg-primary transition-all duration-300 ease-out"
+          style={{ width: `${safeValue()}%` }}
+        />
+      </div>
     </section>
   );
 }

@@ -6,7 +6,6 @@ import {
   requestPermission,
   sendNotification,
 } from '@tauri-apps/plugin-notification';
-import { DEFAULT_CONFIG } from '../core/config';
 import type { PipelineEvent, RenderJob } from '../core/types';
 import { usePersistedConfig } from './usePersistedConfig';
 import { useHardware } from './useHardware';
@@ -20,18 +19,22 @@ async function notify(title: string, body: string) {
       granted = permission === 'granted';
     }
     if (granted) {
-      sendNotification({ title, body });
+      await sendNotification({ title, body });
     }
-  } catch {}
+  } catch (err) {
+    console.error('Notification failed:', err);
+  }
 }
 
-export function usePipeline() {
-  const [running, setRunning] = createSignal(false);
-  const [jobs, setJobs] = createSignal<RenderJob[]>([]);
-  const [overallProgress, setOverallProgress] = createSignal(0);
-  const [overallEta, setOverallEta] = createSignal<string>('');
-  const [logs, setLogs] = createSignal<string[]>([]);
+const [running, setRunning] = createSignal(false);
+const [jobs, setJobs] = createSignal<RenderJob[]>([]);
+const [overallProgress, setOverallProgress] = createSignal(0);
+const [overallEta, setOverallEta] = createSignal<string>('');
+const [logs, setLogs] = createSignal<string[]>([]);
+let unlisten: UnlistenFn | null = null;
+let startProgress = 0;
 
+export function usePipeline() {
   const config = usePersistedConfig();
   const { hardwareInfo, resolveEncoder } = useHardware(
     config.codec,
@@ -42,8 +45,6 @@ export function usePipeline() {
     config.setAudioSource,
     config.setOutputPath,
   );
-
-  let unlisten: UnlistenFn | null = null;
 
   const appendLog = (line: string) => {
     setLogs((prev) => {
@@ -68,13 +69,19 @@ export function usePipeline() {
     return config.codec() !== 'av1' || info.av1Supported;
   };
 
-  const startRender = async () => {
-    if (running() || !canStart()) return;
+  const startRender = async (resume: boolean = false) => {
+    if (running() || (!resume && !canStart())) return;
     setRunning(true);
-    setJobs([]);
-    setLogs([]);
-    setOverallProgress(0);
-    setOverallEta('Menghitung...');
+    if (!resume) {
+      setJobs([]);
+      setLogs([]);
+      setOverallProgress(0);
+      setOverallEta('Menghitung...');
+      startProgress = 0;
+    } else {
+      setOverallEta('Melanjutkan...');
+      startProgress = overallProgress();
+    }
 
     let startTime = Date.now();
 
@@ -105,10 +112,11 @@ export function usePipeline() {
                 : 0;
             setOverallProgress(overallPct);
 
-            if (overallPct > 0 && overallPct < 100) {
+            const progressGained = overallPct - startProgress;
+            if (progressGained > 0 && overallPct < 100) {
               const elapsedMs = Date.now() - startTime;
-              const estimatedTotalMs = elapsedMs / (overallPct / 100);
-              const remainingMs = estimatedTotalMs - elapsedMs;
+              const progressLeft = 100 - overallPct;
+              const remainingMs = (progressLeft * elapsedMs) / progressGained;
               if (remainingMs > 0) {
                 const s = Math.floor((remainingMs / 1000) % 60);
                 const m = Math.floor((remainingMs / (1000 * 60)) % 60);
@@ -172,9 +180,15 @@ export function usePipeline() {
         maxrate: config.maxrate(),
         usePingpong: config.usePingpong(),
         youtubeTimestamps: config.youtubeTimestamps(),
+        maxConcurrentJobs: config.maxConcurrentJobs(),
+        watermarkPath: config.watermarkPath(),
+        watermarkOpacity: config.watermarkOpacity(),
       };
 
-      await invoke('start_render', { config: DEFAULT_CONFIG, overrides });
+      await invoke('start_render', {
+        overrides,
+        resume,
+      });
     } catch (err) {
       if (unlisten) {
         unlisten();
@@ -189,7 +203,19 @@ export function usePipeline() {
   const cancelRender = async () => {
     try {
       await invoke('cancel_render');
-    } catch {}
+    } catch (err) {
+      console.error('Cancel render failed:', err);
+      appendLog(`Error: Failed to cancel render - ${String(err)}`);
+    }
+  };
+
+  const pauseRender = async () => {
+    try {
+      await invoke('pause_render');
+    } catch (err) {
+      console.error('Pause render failed:', err);
+      appendLog(`Error: Failed to pause render - ${String(err)}`);
+    }
   };
 
   onCleanup(() => {
@@ -209,6 +235,7 @@ export function usePipeline() {
     dragHover,
     startRender,
     cancelRender,
+    pauseRender,
     ...config,
   };
 }

@@ -8,6 +8,7 @@ mod ffmpeg;
 mod models;
 mod pipeline;
 mod utils;
+mod validation;
 
 use commands::{
     hardware,
@@ -120,12 +121,9 @@ fn main() {
             std::fs::create_dir_all(&config.directories.audio).ok();
             Ok(())
         })
-        .on_window_event(|window, event| match event {
-            WindowEvent::CloseRequested { api, .. } => {
-                window.hide().unwrap();
-                api.prevent_close();
-            }
-            _ => {}
+        .on_window_event(|window, event| if let WindowEvent::CloseRequested { api, .. } = event {
+            window.hide().unwrap();
+            api.prevent_close();
         })
         .invoke_handler(tauri::generate_handler![
             hardware::detect_hardware,

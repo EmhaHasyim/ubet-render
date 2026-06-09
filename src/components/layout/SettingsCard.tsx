@@ -27,6 +27,12 @@ interface SettingsCardProps {
   onMaxrateChange: (val: string) => void;
   onUsePingpongChange: (val: boolean) => void;
   onYoutubeTimestampsChange: (val: boolean) => void;
+  maxConcurrentJobs: number;
+  watermarkPath?: string;
+  watermarkOpacity: number;
+  onMaxConcurrentJobsChange: (val: number) => void;
+  onWatermarkPathChange: (path?: string) => void;
+  onWatermarkOpacityChange: (val: number) => void;
   dragHover?: 'video' | 'audio' | 'output' | null;
 }
 
@@ -255,6 +261,92 @@ export function SettingsCard(props: SettingsCardProps) {
                 props.onYoutubeTimestampsChange(e.currentTarget.checked)
               }
             />
+          </label>
+        </div>
+
+        <div class="mt-6 mb-4 flex items-center gap-2">
+          <Icon icon="lucide:cpu" class="text-primary" width="18" height="18" />
+          <h3 class="text-base font-semibold">Advanced</h3>
+        </div>
+
+        <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <label class="form-control">
+            <span class="label py-1">
+              <span class="label-text font-medium">Max Concurrent Jobs</span>
+            </span>
+            <input
+              type="number"
+              class="input input-bordered w-full bg-base-100"
+              min="1"
+              max="16"
+              value={props.maxConcurrentJobs}
+              onInput={(e) =>
+                props.onMaxConcurrentJobsChange(
+                  Math.max(1, parseInt(e.currentTarget.value) || 1),
+                )
+              }
+            />
+          </label>
+
+          <label class="form-control">
+            <span class="label py-1">
+              <span class="label-text font-medium">Watermark Path (PNG)</span>
+            </span>
+            <div class="flex gap-2">
+              <input
+                type="text"
+                class="input input-bordered w-full bg-base-100"
+                placeholder="Optional watermark..."
+                value={props.watermarkPath || ''}
+                readOnly
+              />
+              <button
+                type="button"
+                class="btn btn-outline"
+                onClick={async () => {
+                  const selected = await open({
+                    filters: [{ name: 'Image', extensions: ['png'] }],
+                    multiple: false,
+                  });
+                  if (selected) props.onWatermarkPathChange(selected as string);
+                }}
+              >
+                Browse
+              </button>
+              <Show when={props.watermarkPath}>
+                <button
+                  type="button"
+                  class="btn btn-ghost px-2 text-error"
+                  onClick={() => props.onWatermarkPathChange(undefined)}
+                >
+                  <Icon icon="lucide:x" width="18" height="18" />
+                </button>
+              </Show>
+            </div>
+          </label>
+
+          <label class="form-control">
+            <span class="label py-1">
+              <span class="label-text font-medium">Watermark Opacity</span>
+            </span>
+            <label class="input input-bordered flex items-center gap-2 bg-base-100">
+              <input
+                type="number"
+                class="grow"
+                min="0.1"
+                max="1.0"
+                step="0.1"
+                value={props.watermarkOpacity}
+                onInput={(e) =>
+                  props.onWatermarkOpacityChange(
+                    Math.max(
+                      0.1,
+                      Math.min(1.0, parseFloat(e.currentTarget.value) || 0.8),
+                    ),
+                  )
+                }
+              />
+            </label>
           </label>
         </div>
       </div>

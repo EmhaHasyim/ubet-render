@@ -27,6 +27,9 @@ export interface AppConfig {
     loudnormParams: string;
   };
   youtubeTimestamps: boolean;
+  maxConcurrentJobs: number;
+  watermarkPath?: string;
+  watermarkOpacity: number;
 }
 
 export interface RenderJob {

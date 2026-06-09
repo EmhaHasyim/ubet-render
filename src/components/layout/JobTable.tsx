@@ -76,11 +76,12 @@ export function JobTable(props: { jobs: RenderJob[] }) {
                   </td>
                   <td>
                     <div class="flex items-center gap-2">
-                      <progress
-                        class="progress progress-primary h-2 w-24"
-                        value={job.progressPercent}
-                        max="100"
-                      />
+                      <div class="h-2 w-24 rounded-full bg-base-300 overflow-hidden">
+                        <div
+                          class="h-full bg-primary transition-all duration-300 ease-out"
+                          style={{ width: `${job.progressPercent}%` }}
+                        />
+                      </div>
                       <span class="w-10 text-right font-mono text-xs text-base-content/60">
                         {job.progressPercent}%
                       </span>

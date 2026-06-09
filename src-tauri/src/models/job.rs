@@ -18,6 +18,8 @@ pub struct RenderJob {
     pub progress_percent: u8,
     pub current_step: String,
     pub error: Option<String>,
+    #[serde(default)]
+    pub timestamps: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

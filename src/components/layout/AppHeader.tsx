@@ -3,8 +3,9 @@ import { Icon } from '@iconify-icon/solid';
 
 export function AppHeader(props: {
   running: boolean;
-  onStart: () => void;
+  onStart: (resume: boolean) => void;
   onCancel: () => void;
+  onPause: () => void;
   canStart: boolean;
 }) {
   let cancelModalRef!: HTMLDialogElement;
@@ -47,14 +48,14 @@ export function AppHeader(props: {
             type="button"
             class="btn btn-primary w-full gap-2"
             disabled={props.running || !props.canStart}
-            onClick={props.onStart}
+            onClick={() => props.onStart(false)}
           >
             <Show
               when={props.running}
               fallback={
                 <>
                   <Icon icon="lucide:play" width="18" height="18" />
-                  Start batch
+                  Start new batch
                 </>
               }
             >
@@ -63,7 +64,27 @@ export function AppHeader(props: {
             </Show>
           </button>
 
+          <Show when={!props.running && props.canStart}>
+            <button
+              type="button"
+              class="btn btn-secondary w-full gap-2"
+              onClick={() => props.onStart(true)}
+            >
+              <Icon icon="lucide:play-circle" width="18" height="18" />
+              Resume batch
+            </button>
+          </Show>
+
           <Show when={props.running}>
+            <button
+              type="button"
+              class="btn btn-warning w-full gap-2"
+              onClick={props.onPause}
+            >
+              <Icon icon="lucide:pause" width="18" height="18" />
+              Pause render
+            </button>
+
             <button
               type="button"
               class="btn btn-outline btn-error w-full gap-2"

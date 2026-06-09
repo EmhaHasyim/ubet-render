@@ -1,4 +1,4 @@
-import { createSignal } from 'solid-js';
+import { createSignal, createEffect } from 'solid-js';
 import { DEFAULT_CONFIG } from '../core/config';
 import type { MediaSource } from '../core/types';
 
@@ -40,6 +40,9 @@ export function usePersistedConfig() {
     songsPerPlaylist: DEFAULT_CONFIG.audio.songsPerPlaylist,
     minDurationHours: DEFAULT_CONFIG.target.minDurationSec / 3600,
     codec: 'av1',
+    maxConcurrentJobs: 1,
+    watermarkPath: undefined as string | undefined,
+    watermarkOpacity: 0.8,
   };
 
   try {
@@ -74,9 +77,17 @@ export function usePersistedConfig() {
         codec: ['h264', 'h265', 'av1'].includes(String(parsed.codec))
           ? String(parsed.codec)
           : 'av1',
+        maxConcurrentJobs: numberOr(parsed.maxConcurrentJobs, 1, 1),
+        watermarkPath:
+          typeof parsed.watermarkPath === 'string'
+            ? parsed.watermarkPath
+            : undefined,
+        watermarkOpacity: numberOr(parsed.watermarkOpacity, 0.8, 0.1),
       };
     }
-  } catch {}
+  } catch (err) {
+    console.error('Failed to load persisted config:', err);
+  }
 
   const [videoSource, setVideoSource] = createSignal<MediaSource | null>(
     initial.videoSource,
@@ -102,8 +113,15 @@ export function usePersistedConfig() {
     initial.minDurationHours,
   );
   const [codec, setCodec] = createSignal(initial.codec);
+  const [maxConcurrentJobs, setMaxConcurrentJobs] = createSignal(
+    initial.maxConcurrentJobs,
+  );
+  const [watermarkPath, setWatermarkPath] = createSignal(initial.watermarkPath);
+  const [watermarkOpacity, setWatermarkOpacity] = createSignal(
+    initial.watermarkOpacity,
+  );
 
-  const persist = () => {
+  createEffect(() => {
     try {
       localStorage.setItem(
         STORAGE_KEY,
@@ -118,10 +136,13 @@ export function usePersistedConfig() {
           songsPerPlaylist: songsPerPlaylist(),
           minDurationHours: minDurationHours(),
           codec: codec(),
+          maxConcurrentJobs: maxConcurrentJobs(),
+          watermarkPath: watermarkPath(),
+          watermarkOpacity: watermarkOpacity(),
         }),
       );
     } catch {}
-  };
+  });
 
   return {
     videoSource,
@@ -134,45 +155,21 @@ export function usePersistedConfig() {
     songsPerPlaylist,
     minDurationHours,
     codec,
-    setVideoSource: (v: MediaSource | null) => {
-      setVideoSource(v);
-      persist();
-    },
-    setAudioSource: (v: MediaSource | null) => {
-      setAudioSource(v);
-      persist();
-    },
-    setOutputPath: (v: string) => {
-      setOutputPath(v);
-      persist();
-    },
-    setOutputPrefix: (v: string) => {
-      setOutputPrefix(v);
-      persist();
-    },
-    setMaxrate: (v: string) => {
-      setMaxrate(v);
-      persist();
-    },
-    setUsePingpong: (v: boolean) => {
-      setUsePingpong(v);
-      persist();
-    },
-    setYoutubeTimestamps: (v: boolean) => {
-      setYoutubeTimestamps(v);
-      persist();
-    },
-    setSongsPerPlaylist: (v: number) => {
-      setSongsPerPlaylist(v);
-      persist();
-    },
-    setMinDurationHours: (v: number) => {
-      setMinDurationHours(v);
-      persist();
-    },
-    setCodec: (v: string) => {
-      setCodec(v);
-      persist();
-    },
+    maxConcurrentJobs,
+    watermarkPath,
+    watermarkOpacity,
+    setVideoSource,
+    setAudioSource,
+    setOutputPath,
+    setOutputPrefix,
+    setMaxrate,
+    setUsePingpong,
+    setYoutubeTimestamps,
+    setSongsPerPlaylist,
+    setMinDurationHours,
+    setCodec,
+    setMaxConcurrentJobs,
+    setWatermarkPath,
+    setWatermarkOpacity,
   };
 }

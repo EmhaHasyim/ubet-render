@@ -66,7 +66,7 @@ export function useHardware(
         if (gpu.includes('nvidia')) return 'av1_nvenc';
         if (gpu.includes('amd') || gpu.includes('radeon')) return 'av1_amf';
         if (gpu.includes('intel') || gpu.includes('arc')) return 'av1_qsv';
-        return 'av1_nvenc';
+        return 'libsvtav1';
       default:
         return 'libx264';
     }

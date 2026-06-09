@@ -29,6 +29,8 @@ export const DEFAULT_CONFIG: AppConfig = {
     loudnormParams: 'I=-14:LRA=11:TP=-1',
   },
   youtubeTimestamps: true,
+  maxConcurrentJobs: 1,
+  watermarkOpacity: 0.8,
 };
 
 export const VIDEO_EXTENSIONS = [

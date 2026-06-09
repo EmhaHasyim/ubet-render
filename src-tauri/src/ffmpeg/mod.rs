@@ -19,21 +19,17 @@ pub async fn run(
     {
         return Err(cancelled_error());
     }
-
     let mut cmd = Command::new("ffmpeg");
     cmd.args(args);
     cmd.stdout(Stdio::null());
     cmd.stderr(Stdio::piped());
+    cmd.kill_on_drop(true);
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
-
     let mut child = cmd.spawn().map_err(|e| AppError::Ffmpeg(e.to_string()))?;
-
     let stderr = child.stderr.take().expect("Failed to capture stderr");
     let mut reader = BufReader::new(stderr).lines();
-
     let mut last_stderr = String::new();
-
     loop {
         tokio::select! {
             line_res = reader.next_line() => {
@@ -51,13 +47,6 @@ pub async fn run(
                     }
                 }
             }
-            status_res = child.wait() => {
-                let status = status_res.map_err(|e| AppError::Ffmpeg(e.to_string()))?;
-                if !status.success() {
-                    return Err(AppError::Ffmpeg(last_stderr));
-                }
-                return Ok(());
-            }
             _ = async {
                 if let Some(control) = &cancel_control {
                     control.notify.notified().await
@@ -70,7 +59,6 @@ pub async fn run(
             }
         }
     }
-
     tokio::select! {
         status_res = child.wait() => {
             let status = status_res.map_err(|e| AppError::Ffmpeg(e.to_string()))?;
@@ -123,6 +111,7 @@ pub async fn get_duration(file_path: &Path) -> Result<f64, AppError> {
         "default=noprint_wrappers=1:nokey=1",
         &file_path.to_string_lossy(),
     ]);
+    cmd.kill_on_drop(true);
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
     let output = cmd.output().await?;
@@ -149,6 +138,7 @@ pub async fn get_video_codec(file_path: &Path) -> Result<String, AppError> {
         "default=noprint_wrappers=1:nokey=1",
         &file_path.to_string_lossy(),
     ]);
+    cmd.kill_on_drop(true);
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
     let output = cmd.output().await?;

@@ -18,8 +18,9 @@ export function useDragDrop(
       const appWindow = getCurrentWindow();
       unlistenDrag = await appWindow.onDragDropEvent((event) => {
         if (event.payload.type === 'over' || event.payload.type === 'enter') {
-          const x = event.payload.position.x;
-          const y = event.payload.position.y;
+          const ratio = window.devicePixelRatio || 1;
+          const x = event.payload.position.x / ratio;
+          const y = event.payload.position.y / ratio;
           const el = document.elementFromPoint(x, y);
           if (el?.closest('#video-dropzone')) setDragHover('video');
           else if (el?.closest('#audio-dropzone')) setDragHover('audio');
@@ -32,8 +33,9 @@ export function useDragDrop(
           const paths = event.payload.paths;
           if (paths.length === 0) return;
 
-          const x = event.payload.position.x;
-          const y = event.payload.position.y;
+          const ratio = window.devicePixelRatio || 1;
+          const x = event.payload.position.x / ratio;
+          const y = event.payload.position.y / ratio;
           const el = document.elementFromPoint(x, y);
 
           if (el?.closest('#video-dropzone')) {
@@ -45,7 +47,9 @@ export function useDragDrop(
           }
         }
       });
-    } catch {}
+    } catch (err) {
+      console.error('Failed to setup drag-drop:', err);
+    }
   });
 
   onCleanup(() => {
