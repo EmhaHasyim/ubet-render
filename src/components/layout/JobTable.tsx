@@ -50,6 +50,9 @@ export function JobTable(props: { jobs: RenderJob[] }) {
                           class="h-11 w-16 rounded-md object-cover"
                           alt=""
                           loading="lazy"
+                          onError={(e) => {
+                            (e.currentTarget as HTMLImageElement).style.display = 'none';
+                          }}
                         />
                       </Show>
                       <div class="min-w-0">

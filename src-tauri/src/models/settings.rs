@@ -8,6 +8,7 @@ pub struct OverrideConfig {
     pub output_path: Option<String>,
     pub songs_per_playlist: Option<usize>,
     pub min_duration_hours: Option<f64>,
+    pub loop_count: Option<usize>,
     pub encoder: Option<String>,
     pub output_prefix: Option<String>,
     pub maxrate: Option<String>,

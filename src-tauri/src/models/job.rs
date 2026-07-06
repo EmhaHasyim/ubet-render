@@ -25,10 +25,10 @@ pub struct RenderJob {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum PipelineEvent {
+    #[serde(rename_all = "camelCase")]
     Progress {
         total: usize,
         completed: usize,
-        current_video: String,
         jobs: Vec<RenderJob>,
     },
     Log {
@@ -41,5 +41,6 @@ pub enum PipelineEvent {
         failed: usize,
     },
     Cancelled(String),
+    Paused,
     FatalError(String),
 }

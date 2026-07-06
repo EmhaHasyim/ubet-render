@@ -23,6 +23,7 @@ pub async fn build_master_audio_pool(
         let cache_dir = Arc::clone(&cache_dir);
         let settings = Arc::clone(&settings);
         let cancel_control = cancel_control.clone();
+        let app_clone = app.clone();
         async move {
             if cancel_control
                 .as_ref()
@@ -33,9 +34,8 @@ pub async fn build_master_audio_pool(
                 ));
             }
             let original_path = Path::new(&song);
-            let file_hash = crate::utils::fs::hash_fnv1a(song.as_bytes());
-            let file_stem = original_path.file_stem().unwrap_or_default().to_string_lossy();
-            let cache_path = cache_dir.join(format!("master_audio_{}_{:x}.m4a", file_stem, file_hash));
+            let file_hash = crate::utils::fs::hash_path(song.as_bytes());
+            let cache_path = cache_dir.join(format!("master_audio_{:x}.m4a", file_hash));
             if !cache_path.exists() {
                 let loudnorm = &settings.loudnorm_params;
                 let bitrate = &settings.bitrate;
@@ -57,9 +57,9 @@ pub async fn build_master_audio_pool(
                     "2".into(),
                     cache_path.to_string_lossy().to_string(),
                 ];
-                ffmpeg::run(&args, None, cancel_control.clone()).await?;
+                ffmpeg::run(&app_clone, &args, None, cancel_control.clone()).await?;
             }
-            let duration = ffmpeg::get_duration(&cache_path).await?;
+            let duration = ffmpeg::get_duration(&app_clone, &cache_path).await?;
             if duration <= 0.0 {
                 return Err(AppError::InvalidDuration(song));
             }

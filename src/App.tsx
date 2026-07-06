@@ -1,4 +1,4 @@
-import { createSignal, Show } from 'solid-js';
+import { createSignal, Show, ErrorBoundary } from 'solid-js';
 import { Icon } from '@iconify-icon/solid';
 import { usePipeline } from './hooks/usePipeline';
 import {
@@ -9,6 +9,7 @@ import {
   OverallProgress,
   SettingsCard,
 } from './components';
+import { FatalScreen } from './components/ui/FatalScreen';
 
 type TabId = 'renderer' | 'activity';
 
@@ -22,6 +23,7 @@ export default function App() {
     }`;
 
   return (
+    <ErrorBoundary fallback={(err, reset) => <FatalScreen error={err} reset={reset} />}>
     <div class="h-screen overflow-hidden bg-base-200 text-base-content">
       <header class="h-16 border-b border-base-300 bg-base-100">
         <div class="mx-auto flex h-full max-w-7xl items-center justify-between px-5">
@@ -60,9 +62,19 @@ export default function App() {
           </nav>
 
           <div class="flex items-center gap-2">
+            <Show when={pipeline.paused()}>
+              <span class="badge badge-info badge-sm gap-1">
+                <Icon icon="lucide:pause" width="12" height="12" />
+                Paused
+              </span>
+            </Show>
             <Show
               when={pipeline.running()}
-              fallback={<span class="badge badge-outline badge-sm">Idle</span>}
+              fallback={
+                <Show when={!pipeline.paused()}>
+                  <span class="badge badge-outline badge-sm">Idle</span>
+                </Show>
+              }
             >
               <span class="badge badge-warning badge-sm gap-1">
                 <span class="loading loading-spinner loading-xs" />
@@ -119,6 +131,8 @@ export default function App() {
                   outputPath={pipeline.outputPath()}
                   songsPerPlaylist={pipeline.songsPerPlaylist()}
                   minDurationHours={pipeline.minDurationHours()}
+                  loopMode={pipeline.loopMode()}
+                  loopCount={pipeline.loopCount()}
                   codec={pipeline.codec()}
                   av1Supported={pipeline.av1Supported()}
                   outputPrefix={pipeline.outputPrefix()}
@@ -133,6 +147,8 @@ export default function App() {
                   onOutputChange={pipeline.setOutputPath}
                   onSongsPerPlaylistChange={pipeline.setSongsPerPlaylist}
                   onMinDurationHoursChange={pipeline.setMinDurationHours}
+                  onLoopModeChange={pipeline.setLoopMode}
+                  onLoopCountChange={pipeline.setLoopCount}
                   onCodecChange={pipeline.setCodec}
                   onOutputPrefixChange={pipeline.setOutputPrefix}
                   onMaxrateChange={pipeline.setMaxrate}
@@ -148,7 +164,9 @@ export default function App() {
               <aside class="flex min-w-0 flex-col gap-5">
                 <AppHeader
                   running={pipeline.running()}
+                  paused={pipeline.paused()}
                   onStart={pipeline.startRender}
+                  onResume={pipeline.resumeRender}
                   onCancel={pipeline.cancelRender}
                   onPause={pipeline.pauseRender}
                   canStart={pipeline.canStart()}
@@ -212,5 +230,7 @@ export default function App() {
         </div>
       </main>
     </div>
+    </ErrorBoundary>
   );
 }
+

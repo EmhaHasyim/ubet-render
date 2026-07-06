@@ -2,6 +2,7 @@ import { createSignal, onMount, onCleanup } from 'solid-js';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { UnlistenFn } from '@tauri-apps/api/event';
 import type { MediaSource } from '../core/types';
+import { VIDEO_EXTENSIONS, AUDIO_EXTENSIONS } from '../core/config';
 
 export function useDragDrop(
   updateVideoSource: (src: MediaSource) => void,
@@ -39,9 +40,15 @@ export function useDragDrop(
           const el = document.elementFromPoint(x, y);
 
           if (el?.closest('#video-dropzone')) {
-            updateVideoSource({ type: 'files', paths });
+            const filtered = paths.filter(p => VIDEO_EXTENSIONS.some(ext => p.toLowerCase().endsWith(ext)));
+            if (filtered.length > 0) {
+              updateVideoSource({ type: 'files', paths: filtered });
+            }
           } else if (el?.closest('#audio-dropzone')) {
-            updateAudioSource({ type: 'files', paths });
+            const filtered = paths.filter(p => AUDIO_EXTENSIONS.some(ext => p.toLowerCase().endsWith(ext)));
+            if (filtered.length > 0) {
+              updateAudioSource({ type: 'files', paths: filtered });
+            }
           } else if (el?.closest('#output-dropzone')) {
             updateOutputPath(paths[0]);
           }

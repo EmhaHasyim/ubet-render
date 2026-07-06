@@ -12,21 +12,25 @@ mod validation;
 
 use commands::{
     hardware,
-    pipeline::{cancel_render, pause_render, start_render},
+    pipeline::{cancel_render, pause_render, resume_render, start_render},
 };
+use std::path::Path;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
+    scope::fs::Scope as FsScope,
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager, WindowEvent,
 };
 use tokio::sync::Notify;
 
 pub struct RenderControl {
-    pub notify: Notify,
+    cancel_notify: Notify,
+    pause_notify: Notify,
+    resume_notify: Notify,
     cancelled: AtomicBool,
     paused: AtomicBool,
 }
@@ -34,20 +38,39 @@ pub struct RenderControl {
 impl RenderControl {
     pub fn new() -> Self {
         Self {
-            notify: Notify::new(),
+            cancel_notify: Notify::new(),
+            pause_notify: Notify::new(),
+            resume_notify: Notify::new(),
             cancelled: AtomicBool::new(false),
             paused: AtomicBool::new(false),
         }
     }
 
+    pub fn cancel_notify(&self) -> &Notify {
+        &self.cancel_notify
+    }
+
+    pub fn pause_notify(&self) -> &Notify {
+        &self.pause_notify
+    }
+
+    pub fn resume_notify(&self) -> &Notify {
+        &self.resume_notify
+    }
+
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
-        self.notify.notify_waiters();
+        self.cancel_notify.notify_waiters();
     }
 
     pub fn pause(&self) {
         self.paused.store(true, Ordering::SeqCst);
-        self.notify.notify_waiters();
+        self.pause_notify.notify_waiters();
+    }
+
+    pub fn resume(&self) {
+        self.paused.store(false, Ordering::SeqCst);
+        self.resume_notify.notify_waiters();
     }
 
     pub fn is_cancelled(&self) -> bool {
@@ -56,6 +79,21 @@ impl RenderControl {
 
     pub fn is_paused(&self) -> bool {
         self.paused.load(Ordering::SeqCst)
+    }
+
+    pub async fn wait_for_resume(&self) {
+        loop {
+            if self.cancelled.load(Ordering::Acquire) {
+                return;
+            }
+            if !self.paused.load(Ordering::Acquire) {
+                return;
+            }
+            tokio::select! {
+                _ = self.resume_notify.notified() => {}
+                _ = self.cancel_notify.notified() => {}
+            }
+        }
     }
 }
 
@@ -71,6 +109,7 @@ pub struct RenderState {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .setup(|app| {
@@ -82,7 +121,7 @@ fn main() {
             let quit_i = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
             let menu = MenuBuilder::new(app).items(&[&show_i, &quit_i]).build()?;
 
-            let _tray = TrayIconBuilder::new()
+            let mut tray = TrayIconBuilder::new()
                 .menu(&menu)
                 .on_menu_event(move |app, event| match event.id().as_ref() {
                     "show" => {
@@ -110,19 +149,32 @@ fn main() {
                             let _ = window.set_focus();
                         }
                     }
-                })
-                .icon(app.default_window_icon().unwrap().clone())
-                .build(app)?;
+                });
+            if let Some(icon) = app.default_window_icon() {
+                tray = tray.icon(icon.clone());
+            }
+            tray.build(app)?;
 
             let config = config::AppConfig::default();
             std::fs::create_dir_all(&config.directories.cache).ok();
             std::fs::create_dir_all(&config.directories.output).ok();
             std::fs::create_dir_all(&config.directories.video).ok();
             std::fs::create_dir_all(&config.directories.audio).ok();
+
+            {
+                let scope: FsScope = app.asset_protocol_scope();
+                let abs_output = crate::utils::fs::to_absolute(Path::new(&config.directories.output));
+                let _ = scope.allow_directory(&abs_output, true);
+                let abs_cache = crate::utils::fs::to_absolute(Path::new(&config.directories.cache));
+                let _ = scope.allow_directory(&abs_cache, true);
+                let temp_dir = std::env::temp_dir().join("ubet-render");
+                let _ = scope.allow_directory(&temp_dir, true);
+            }
+
             Ok(())
         })
         .on_window_event(|window, event| if let WindowEvent::CloseRequested { api, .. } = event {
-            window.hide().unwrap();
+            let _ = window.hide();
             api.prevent_close();
         })
         .invoke_handler(tauri::generate_handler![
@@ -130,6 +182,7 @@ fn main() {
             start_render,
             cancel_render,
             pause_render,
+            resume_render,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

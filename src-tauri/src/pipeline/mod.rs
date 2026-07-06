@@ -11,18 +11,35 @@ use crate::models::settings::{MediaSource, OverrideConfig};
 use crate::utils::event;
 use crate::utils::fs;
 use futures::StreamExt;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::AppHandle;
 
+struct TempDirGuard(PathBuf);
+
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        let temp = std::env::temp_dir();
+        if self.0.canonicalize().map(|p| p.starts_with(&temp)).unwrap_or(false) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+}
+
 pub struct Pipeline {
     config: AppConfig,
     app: AppHandle,
+    last_save_sec: std::sync::atomic::AtomicU64,
 }
 
 impl Pipeline {
     pub fn new(app: AppHandle, config: AppConfig) -> Self {
-        Self { app, config }
+        Self {
+            app,
+            config,
+            last_save_sec: std::sync::atomic::AtomicU64::new(0),
+        }
     }
 
     pub async fn execute(
@@ -32,9 +49,20 @@ impl Pipeline {
         control: Arc<crate::RenderControl>,
     ) -> Result<(), AppError> {
         let output_dir = fs::to_absolute(&self.resolve_output_dir(&overrides));
+        let allowed_roots = vec![
+            output_dir.clone(),
+            fs::to_absolute(Path::new(&self.config.directories.video)),
+            fs::to_absolute(Path::new(&self.config.directories.audio)),
+        ];
+        if let Some(ref ov) = overrides
+            && let Some(ref output_path) = ov.output_path {
+            let _ = crate::validation::resolve_and_validate_path(Path::new(output_path), &allowed_roots)?;
+        }
         let cache_dir = std::env::temp_dir().join("ubet-render").join("cache");
         let thumb_dir = std::env::temp_dir().join("ubet-render").join("thumbnails");
         let state_path = output_dir.join("ubet_render_state.json");
+
+        let _thumb_guard = TempDirGuard(thumb_dir.clone());
 
         if !resume {
             let _ = tokio::fs::remove_dir_all(&thumb_dir).await;
@@ -47,11 +75,17 @@ impl Pipeline {
 
         let render_timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs();
 
-        if control.is_cancelled() || control.is_paused() {
-            return Err(AppError::Cancelled("Render dibatalkan/dipause oleh pengguna".into()));
+        if control.is_cancelled() {
+            return Err(AppError::Cancelled("Render dibatalkan oleh pengguna".into()));
+        }
+        if control.is_paused() {
+            control.wait_for_resume().await;
+            if control.is_cancelled() {
+                return Err(AppError::Cancelled("Render dibatalkan oleh pengguna".into()));
+            }
         }
 
         let video_files = self
@@ -90,13 +124,20 @@ impl Pipeline {
         
         let songs_per_playlist = overrides.as_ref().and_then(|ov| ov.songs_per_playlist).unwrap_or(self.config.audio.songs_per_playlist).max(1);
         let min_duration_sec = overrides.as_ref().and_then(|ov| ov.min_duration_hours).map(|h| (h * 3600.0) as u64).unwrap_or(self.config.target.min_duration_sec);
+        let loop_count = overrides.as_ref().and_then(|ov| ov.loop_count);
         
         let encoder_selected = overrides.as_ref().and_then(|ov| ov.encoder.clone());
         let prefix = overrides.as_ref().and_then(|ov| ov.output_prefix.as_deref()).unwrap_or(&self.config.metadata.channel_prefix);
         let safe_prefix = sanitize_filename_component(prefix);
 
         let maxrate_str = overrides.as_ref().and_then(|ov| ov.maxrate.clone()).unwrap_or_else(|| self.config.video.bitrate_target.clone());
-        let maxrate_k = parse_bitrate_k(&maxrate_str).unwrap_or(4000).max(1);
+        let maxrate_k = parse_bitrate_to_kbps(&maxrate_str).unwrap_or_else(|| {
+            event::emit(&self.app, PipelineEvent::Log {
+                level: "warn".into(),
+                message: format!("Invalid bitrate '{}', falling back to 4000k", maxrate_str),
+            });
+            4000
+        }).max(1);
         let target_k = (maxrate_k as f64 * 0.7).ceil() as u32;
 
         let mut video_cfg = self.config.video.clone();
@@ -152,9 +193,13 @@ impl Pipeline {
             self.generate_thumbnails(&mut initial_jobs, &thumb_dir, render_timestamp, control.clone()).await;
         }
 
-        if control.is_cancelled() || control.is_paused() {
+        if control.is_cancelled() {
             let _ = self.save_state(&state_path, &initial_jobs).await;
-            return Err(AppError::Cancelled("Render dibatalkan/dipause oleh pengguna".into()));
+            return Err(AppError::Cancelled("Render dibatalkan oleh pengguna".into()));
+        }
+        if control.is_paused() {
+            let _ = self.save_state(&state_path, &initial_jobs).await;
+            return Err(AppError::Paused("Render dijeda oleh pengguna".into()));
         }
 
         let jobs_arc = Arc::new(tokio::sync::Mutex::new(initial_jobs));
@@ -178,27 +223,21 @@ impl Pipeline {
             let s_path = state_path.clone();
             let w_path = watermark_path.clone();
 
+
             async move {
-                if c_clone.is_cancelled() || c_clone.is_paused() {
+                if c_clone.is_cancelled() {
                     return;
+                }
+                if c_clone.is_paused() {
+                    c_clone.wait_for_resume().await;
+                    if c_clone.is_cancelled() {
+                        return;
+                    }
                 }
 
                 let skip = {
-                    let mut lock = j_arc.lock().await;
-                    if Path::new(&lock[i].video.output_path).exists() && lock[i].state == JobState::Done {
-                        true
-                    } else if Path::new(&lock[i].video.output_path).exists() && !resume {
-                        lock[i].state = JobState::Done;
-                        lock[i].progress_percent = 100;
-                        lock[i].current_step = "Skipped".into();
-                        event::emit(
-                            &p_arc.app,
-                            PipelineEvent::Log { level: "info".into(), message: format!("Melewati {} (sudah ada)", lock[i].video.name) },
-                        );
-                        true
-                    } else {
-                        false
-                    }
+                    let lock = j_arc.lock().await;
+                    Path::new(&lock[i].video.output_path).exists() && lock[i].state == JobState::Done
                 };
 
                 if skip {
@@ -220,6 +259,7 @@ impl Pipeline {
                     &m_pool,
                     songs_per_playlist,
                     min_duration_sec,
+                    loop_count,
                     youtube_timestamps,
                     w_path.as_ref(),
                     watermark_opacity,
@@ -234,6 +274,7 @@ impl Pipeline {
                         );
                     }
                     Err(AppError::Cancelled(_)) => {}
+                    Err(AppError::Paused(_)) => {}
                     Err(e) => {
                         {
                             let mut lock = j_arc.lock().await;
@@ -249,8 +290,9 @@ impl Pipeline {
         }).await;
 
         if control.is_paused() {
-            return Err(AppError::Cancelled("Render dipause oleh pengguna".into()));
+            return Err(AppError::Paused("Render dijeda oleh pengguna".into()));
         } else if control.is_cancelled() {
+            let _ = tokio::fs::remove_dir_all(&cache_dir).await;
             let _ = tokio::fs::remove_file(&state_path).await;
             return Err(AppError::Cancelled("Render dibatalkan oleh pengguna".into()));
         }
@@ -290,11 +332,31 @@ impl Pipeline {
     }
 
     async fn save_state(&self, state_path: &Path, jobs: &[RenderJob]) -> Result<(), AppError> {
-        let json = serde_json::to_string_pretty(jobs).unwrap_or_default();
-        tokio::fs::write(state_path, json).await.map_err(|e| AppError::Pipeline(e.to_string()))
+        let json = serde_json::to_string_pretty(jobs).map_err(|e| AppError::Pipeline(e.to_string()))?;
+        let state_path = state_path.to_path_buf();
+        let temp_path = state_path.with_extension("tmp");
+        tokio::task::spawn_blocking(move || {
+            use std::io::Write;
+            let mut file = std::fs::File::create(&temp_path).map_err(|e| AppError::Pipeline(e.to_string()))?;
+            file.write_all(json.as_bytes()).map_err(|e| AppError::Pipeline(e.to_string()))?;
+            file.sync_all().map_err(|e| AppError::Pipeline(e.to_string()))?;
+            std::fs::rename(&temp_path, &state_path).map_err(|e| AppError::Pipeline(e.to_string()))?;
+            Ok(())
+        }).await.map_err(|e| AppError::Pipeline(format!("spawn_blocking panicked: {}", e)))?
     }
 
     async fn save_state_from_arc(&self, state_path: &Path, jobs_arc: &Arc<tokio::sync::Mutex<Vec<RenderJob>>>) -> Result<(), AppError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let last = self.last_save_sec.load(std::sync::atomic::Ordering::Relaxed);
+        if now - last < 2 {
+            return Ok(());
+        }
+        if self.last_save_sec.compare_exchange(last, now, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::Relaxed).is_err() {
+            return Ok(());
+        }
         let jobs = jobs_arc.lock().await.clone();
         self.save_state(state_path, &jobs).await
     }
@@ -303,22 +365,25 @@ impl Pipeline {
         let jobs = jobs_arc.lock().await.clone();
         let total = jobs.len();
         let completed = jobs.iter().filter(|j| j.state == JobState::Done).count();
-        let current_video = jobs.iter().find(|j| j.state == JobState::Processing).map(|j| j.video.name.clone()).unwrap_or_default();
         event::emit(
             &self.app,
-            PipelineEvent::Progress { total, completed, current_video, jobs },
+            PipelineEvent::Progress { total, completed, jobs },
         );
     }
 
     fn create_initial_jobs(&self, video_files: &[String], safe_prefix: &str, output_dir: &Path) -> Vec<RenderJob> {
         let mut jobs = Vec::new();
-        for path_str in video_files {
+        let ts = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+        for (idx, path_str) in video_files.iter().enumerate() {
             let input_path = Path::new(path_str);
-            let name = input_path.file_name().unwrap_or_default().to_string_lossy().to_string();
-            let output_name = if safe_prefix.is_empty() { name.clone() } else { format!("{}_{}", safe_prefix, name) };
+            let name = input_path.file_name().and_then(|n| n.to_str()).unwrap_or("unknown").to_string();
+            let stem = Path::new(&name).file_stem().and_then(|s| s.to_str()).unwrap_or("unknown");
+            let ext = Path::new(&name).extension().and_then(|e| e.to_str()).unwrap_or("mp4");
+            let unique_name = format!("{}_{}_{}.{}", stem, ts, idx, ext);
+            let output_name = if safe_prefix.is_empty() { unique_name } else { format!("{}_{}", safe_prefix, unique_name) };
             jobs.push(RenderJob {
                 video: VideoFile {
-                    name: name.clone(),
+                    name,
                     input_path: path_str.clone(),
                     output_path: output_dir.join(&output_name).to_string_lossy().to_string(),
                     thumbnail_path: None,
@@ -333,12 +398,16 @@ impl Pipeline {
         jobs
     }
 
-    async fn generate_thumbnails(&self, jobs: &mut [RenderJob], thumb_dir: &Path, render_timestamp: u64, control: Arc<crate::RenderControl>) {
-        let indices_and_paths: Vec<(usize, String)> = jobs.iter().enumerate().map(|(i, j)| (i, j.video.input_path.clone())).collect();
-        let stream = futures::stream::iter(indices_and_paths);
+    async fn generate_thumbnails(&self, jobs: &mut [RenderJob], thumb_dir: &Path, _render_timestamp: u64, control: Arc<crate::RenderControl>) {
+        let thumb_entries: Vec<(usize, String, u64)> = jobs.iter().enumerate().map(|(i, j)| {
+            (i, j.video.input_path.clone(), rand::random::<u64>())
+        }).collect();
+        let paths_and_ids: Vec<_> = thumb_entries.iter().map(|(i, path, id)| (*i, path.clone(), *id)).collect();
+        let stream = futures::stream::iter(paths_and_ids);
         
-        stream.for_each_concurrent(4, |(i, input_path)| {
-            let thumb_path = thumb_dir.join(format!("thumb_{}_{}.jpg", render_timestamp, i));
+        stream.for_each_concurrent(4, |(i, input_path, thumb_id)| {
+            let thumb_path = thumb_dir.join(format!("thumb_{}_{}.jpg", thumb_id, i));
+            let self_app = self.app.clone();
             let control_clone = control.clone();
             async move {
                 if !thumb_path.exists() {
@@ -347,19 +416,27 @@ impl Pipeline {
                         "-vframes".into(), "1".into(), "-vf".into(), "scale=320:-1".into(),
                         thumb_path.to_string_lossy().to_string(),
                     ];
-                    let _ = ffmpeg::run(&args, None, Some(control_clone)).await;
+                    if let Err(e) = ffmpeg::run(&self_app, &args, None, Some(control_clone)).await {
+                        event::emit(&self_app, crate::models::job::PipelineEvent::Log {
+                            level: "warn".into(),
+                            message: format!("Thumbnail gagal untuk job {}: {}", i, e),
+                        });
+                    }
                 }
             }
         }).await;
 
-        for (i, job) in jobs.iter_mut().enumerate() {
-            let thumb_path = thumb_dir.join(format!("thumb_{}_{}.jpg", render_timestamp, i));
-            if thumb_path.exists() {
-                job.video.thumbnail_path = Some(thumb_path.to_string_lossy().to_string());
+        for (i, job) in jobs.iter_mut().enumerate().filter(|(_, j)| j.video.thumbnail_path.is_none()) {
+            if let Some((_, _, thumb_id)) = thumb_entries.iter().find(|(idx, _, _)| *idx == i) {
+                let thumb_path = thumb_dir.join(format!("thumb_{}_{}.jpg", thumb_id, i));
+                if thumb_path.exists() {
+                    job.video.thumbnail_path = Some(thumb_path.to_string_lossy().to_string());
+                }
             }
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn process_single_job(
         &self,
         i: usize,
@@ -372,6 +449,7 @@ impl Pipeline {
         master_pool: &[ProcessedAudio],
         songs_per_playlist: usize,
         min_duration_sec: u64,
+        loop_count: Option<usize>,
         youtube_timestamps: bool,
         watermark_path: Option<&String>,
         watermark_opacity: f32,
@@ -385,22 +463,18 @@ impl Pipeline {
         self.emit_progress_from_arc(jobs_arc).await;
 
         let timestamp = format!("{}_{}", render_timestamp, i);
-        let input_path = {
+        let (input_path, output_path, name) = {
             let lock = jobs_arc.lock().await;
-            lock[i].video.input_path.clone()
-        };
-        let output_path = {
-            let lock = jobs_arc.lock().await;
-            lock[i].video.output_path.clone()
-        };
-        let name = {
-            let lock = jobs_arc.lock().await;
-            lock[i].video.name.clone()
+            (
+                lock[i].video.input_path.clone(),
+                lock[i].video.output_path.clone(),
+                lock[i].video.name.clone(),
+            )
         };
 
-        let input_codec = ffmpeg::get_video_codec(Path::new(&input_path)).await.ok();
+        let input_codec = ffmpeg::get_video_codec(&self.app, Path::new(&input_path)).await.ok();
 
-        let need_reencode = match (&input_codec, encoder_selected) {
+        let should_reencode = match (&input_codec, encoder_selected) {
             (Some(in_codec), Some(enc)) => {
                 let mapped_enc = match enc {
                     "libx264" | "h264_nvenc" | "h264_amf" | "h264_qsv" => "h264",
@@ -415,9 +489,12 @@ impl Pipeline {
 
         let ping_pong_path;
         let created_intermediate;
-        let target_dur = ffmpeg::get_duration(Path::new(&input_path)).await.unwrap_or(1.0).max(0.001) * if use_pingpong { 2.0 } else { 1.0 };
+        let input_duration = ffmpeg::get_duration(&self.app, Path::new(&input_path)).await.map_err(|_| {
+            AppError::Pipeline(format!("Gagal mendeteksi durasi video: {}", name))
+        })?;
+        let target_dur = input_duration.max(0.001) * if use_pingpong { 2.0 } else { 1.0 };
 
-        if use_pingpong || need_reencode || watermark_path.is_some() {
+        if use_pingpong || should_reencode || watermark_path.is_some() {
             {
                 let mut lock = jobs_arc.lock().await;
                 lock[i].current_step = if use_pingpong { "1/2 Upscaling & Ping-Pong".into() } else { "1/2 Re-encode video".into() };
@@ -435,8 +512,10 @@ impl Pipeline {
                 let video_cfg_clone = video_cfg.clone();
                 let control_clone = control.clone();
                 let wm_clone = watermark_path.cloned();
+                let app_clone = self.app.clone();
                 async move {
                     video_loop::create_ping_pong_video(video_loop::PingPongVideoParams {
+                        app: &app_clone,
                         input: &input_clone,
                         output: &ping_pong_path_clone,
                         video_settings: &video_cfg_clone,
@@ -500,6 +579,7 @@ impl Pipeline {
                 &ping_pong_path,
                 target_dur,
                 &target_override,
+                loop_count,
                 youtube_timestamps,
             )
             .await?;
@@ -525,8 +605,10 @@ impl Pipeline {
             let video_list_path_clone = video_list_path.clone();
             let output_path_clone = output_path.clone();
             let control_clone = control.clone();
+            let app_clone = self.app.clone();
             async move {
                 muxer::mux_final_video(
+                    &app_clone,
                     &audio_list_path_clone,
                     &video_list_path_clone,
                     &output_path_clone,
@@ -601,20 +683,35 @@ impl Pipeline {
             None => fs::scan_files(&fs::to_absolute(Path::new(default_dir)), extensions).await,
         };
         files.sort_by(|a, b| fs::compare_natural(a, b));
-        files.dedup();
+        let mut seen = HashSet::new();
+        files.retain(|f| {
+            std::path::Path::new(f)
+                .canonicalize()
+                .ok()
+                .is_none_or(|p| seen.insert(p))
+        });
         Ok(files)
     }
 }
 
-fn parse_bitrate_k(value: &str) -> Option<u32> {
+fn parse_bitrate_to_kbps(value: &str) -> Option<u32> {
     let normalized = value.trim().to_ascii_lowercase();
     let number = normalized.strip_suffix('k').unwrap_or(&normalized);
     number.parse::<u32>().ok()
 }
 
 fn sanitize_filename_component(value: &str) -> String {
-    value.chars().filter(|c| !c.is_control()).map(|c| match c {
+    let sanitized: String = value.chars().filter(|c| !c.is_control()).map(|c| match c {
         '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
         _ => c,
-    }).collect::<String>().trim().trim_matches('.').to_string()
+    }).collect::<String>().trim().trim_matches('.').to_string();
+    let stem = Path::new(&sanitized).file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let reserved = ["CON", "NUL", "PRN", "AUX",
+        "COM1","COM2","COM3","COM4","COM5","COM6","COM7","COM8","COM9",
+        "LPT1","LPT2","LPT3","LPT4","LPT5","LPT6","LPT7","LPT8","LPT9"];
+    if reserved.contains(&stem.to_ascii_uppercase().as_str()) {
+        format!("_{}", sanitized)
+    } else {
+        sanitized
+    }
 }

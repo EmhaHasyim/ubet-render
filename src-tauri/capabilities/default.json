@@ -6,6 +6,31 @@
   "permissions": [
     "core:default",
     "dialog:default",
-    "notification:default"
+    "notification:default",
+        {
+          "identifier": "shell:allow-execute",
+          "allow": [
+            {
+              "name": "ffmpeg",
+              "sidecar": true,
+              "args": true
+            },
+            {
+              "name": "binaries/ffmpeg",
+              "sidecar": true,
+              "args": true
+            },
+            {
+              "name": "ffprobe",
+              "sidecar": true,
+              "args": true
+            },
+            {
+              "name": "binaries/ffprobe",
+              "sidecar": true,
+              "args": true
+            }
+          ]
+        }
   ]
 }

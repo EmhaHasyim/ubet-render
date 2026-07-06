@@ -5,6 +5,7 @@ use crate::models::media::ProcessedAudio;
 use std::path::Path;
 
 pub struct PingPongVideoParams<'a> {
+    pub app: &'a tauri::AppHandle,
     pub input: &'a str,
     pub output: &'a Path,
     pub video_settings: &'a VideoSettings,
@@ -17,6 +18,7 @@ pub struct PingPongVideoParams<'a> {
 
 pub async fn create_ping_pong_video(params: PingPongVideoParams<'_>) -> Result<(), AppError> {
     let PingPongVideoParams {
+        app,
         input,
         output,
         video_settings,
@@ -97,8 +99,8 @@ pub async fn create_ping_pong_video(params: PingPongVideoParams<'_>) -> Result<(
             bufsize,
         ]);
     }
-    args.extend(["-r".into(), fps_str, output_str]);
-    ffmpeg::run(&args, tx_progress, cancel_control).await
+    args.extend(["-r".into(), fps_str, "-vsync".into(), "cfr".into(), output_str]);
+    ffmpeg::run(app, &args, tx_progress, cancel_control).await
 }
 
 fn format_timestamp(seconds: f64, force_hours: bool) -> String {
@@ -118,6 +120,7 @@ pub async fn generate_loop_playlists(
     ping_pong_path: &Path,
     ping_pong_duration: f64,
     target: &Target,
+    loop_count: Option<usize>,
     youtube_timestamps: bool,
 ) -> Result<(String, String, Vec<String>, f64), AppError> {
     let single_loop_duration: f64 = songs.iter().map(|s| s.duration).sum();
@@ -125,10 +128,10 @@ pub async fn generate_loop_playlists(
         return Err(AppError::Pipeline("Audio loop duration is zero".into()));
     }
     fn escape_concat_path(path: &str) -> String {
-        let mut result = String::with_capacity(path.len() + 10);
+        let mut result = String::with_capacity(path.len());
         for c in path.chars() {
             match c {
-                '\'' => result.push_str("'\\''"),
+                '\'' => result.push('_'),
                 '\n' | '\r' => continue,
                 '\\' => result.push('/'),
                 _ => result.push(c),
@@ -136,19 +139,41 @@ pub async fn generate_loop_playlists(
         }
         result
     }
+    let repeat_count = match loop_count {
+        Some(n) => n,
+        None => (target.min_duration_sec as f64 / single_loop_duration).ceil() as usize,
+    };
+    let repeat_count = repeat_count.max(1);
     let mut audio_content = String::new();
-    let mut total_audio_duration = 0.0;
-    while total_audio_duration < target.min_duration_sec as f64 {
+    for _ in 0..repeat_count {
         for song in songs {
             let safe_path = escape_concat_path(&song.path);
             audio_content.push_str(&format!("file '{}'\n", safe_path));
         }
-        total_audio_duration += single_loop_duration;
     }
+    let total_audio_duration = single_loop_duration * repeat_count as f64;
     let force_hours = total_audio_duration >= 3600.0;
     let mut timestamps = Vec::new();
     let mut current_time = 0.0;
-    if youtube_timestamps {
+    if loop_count.is_some() || !youtube_timestamps {
+        let mut play_num = 1;
+        for _ in 0..repeat_count {
+            for song in songs {
+                let song_name = Path::new(&song.original_name)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(&song.original_name);
+                let label = if repeat_count > 1 {
+                    format!("{} (Play {})", song_name, play_num)
+                } else {
+                    song_name.to_string()
+                };
+                timestamps.push(format!("{} - {}", format_timestamp(current_time, force_hours), label));
+                current_time += song.duration;
+                play_num += 1;
+            }
+        }
+    } else {
         for song in songs {
             let song_name = Path::new(&song.original_name)
                 .file_stem()
@@ -159,27 +184,6 @@ pub async fn generate_loop_playlists(
         }
         if current_time < total_audio_duration {
             timestamps.push(format!("{} - Looping", format_timestamp(current_time, force_hours)));
-        }
-    } else {
-        let mut loop_num = 1;
-        while current_time < total_audio_duration {
-            for song in songs {
-                if current_time >= total_audio_duration {
-                    break;
-                }
-                let song_name = Path::new(&song.original_name)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(&song.original_name);
-                timestamps.push(format!(
-                    "{} - {} (Loop {})",
-                    format_timestamp(current_time, force_hours),
-                    song_name,
-                    loop_num
-                ));
-                current_time += song.duration;
-            }
-            loop_num += 1;
         }
     }
     if ping_pong_duration <= 0.0 {

@@ -1,4 +1,6 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use sha2::{Digest, Sha256};
 
 pub fn to_absolute(path: &Path) -> PathBuf {
     if path.is_absolute() {
@@ -24,13 +26,11 @@ pub async fn safe_delete(file: &Path) -> Result<(), std::io::Error> {
     Ok(())
 }
 
-pub fn hash_fnv1a(data: &[u8]) -> u64 {
-    let mut hash = 0xcbf29ce484222325;
-    for &byte in data {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
+pub fn hash_path(data: &[u8]) -> u64 {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    let result = hasher.finalize();
+    u64::from_ne_bytes(result[..8].try_into().unwrap())
 }
 
 pub async fn scan_files(dir: &Path, extensions: &[&str]) -> Vec<String> {
@@ -39,6 +39,10 @@ pub async fn scan_files(dir: &Path, extensions: &[&str]) -> Vec<String> {
     }
     let mut files = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
+    let mut visited = HashSet::new();
+    if let Ok(canonical) = tokio::fs::canonicalize(dir).await {
+        visited.insert(canonical);
+    }
     while let Some(current_dir) = stack.pop() {
         let mut entries = match tokio::fs::read_dir(current_dir).await {
             Ok(entries) => entries,
@@ -49,6 +53,9 @@ pub async fn scan_files(dir: &Path, extensions: &[&str]) -> Vec<String> {
                 Ok(ft) => ft,
                 Err(_) => continue,
             };
+            if file_type.is_symlink() {
+                continue;
+            }
             if file_type.is_file() {
                 let name = entry.file_name().to_string_lossy().to_string();
                 let lower = name.to_lowercase();
@@ -56,7 +63,10 @@ pub async fn scan_files(dir: &Path, extensions: &[&str]) -> Vec<String> {
                     files.push(entry.path().to_string_lossy().to_string());
                 }
             } else if file_type.is_dir() {
-                stack.push(entry.path());
+                let canonical = tokio::fs::canonicalize(entry.path()).await.unwrap_or(entry.path());
+                if visited.insert(canonical) {
+                    stack.push(entry.path());
+                }
             }
         }
     }
@@ -81,7 +91,7 @@ impl Ord for Chunk<'_> {
             }
             (Chunk::Num(_, _), Chunk::Str(_)) => std::cmp::Ordering::Less,
             (Chunk::Str(_), Chunk::Num(_, _)) => std::cmp::Ordering::Greater,
-            (Chunk::Str(s1), Chunk::Str(s2)) => cmp_str(s1, s2),
+            (Chunk::Str(s1), Chunk::Str(s2)) => compare_string_case_insensitive(s1, s2),
         }
     }
 }
@@ -92,7 +102,7 @@ impl PartialOrd for Chunk<'_> {
     }
 }
 
-fn cmp_str(s1: &str, s2: &str) -> std::cmp::Ordering {
+fn compare_string_case_insensitive(s1: &str, s2: &str) -> std::cmp::Ordering {
     let mut chars1 = s1.chars().flat_map(|c| c.to_lowercase());
     let mut chars2 = s2.chars().flat_map(|c| c.to_lowercase());
 
@@ -104,15 +114,10 @@ fn cmp_str(s1: &str, s2: &str) -> std::cmp::Ordering {
                     non_eq => return non_eq,
                 }
             }
-            (None, None) => break,
+            (None, None) => return s1.cmp(s2),
             (None, Some(_)) => return std::cmp::Ordering::Less,
             (Some(_), None) => return std::cmp::Ordering::Greater,
         }
-    }
-
-    match s1.len().cmp(&s2.len()) {
-        std::cmp::Ordering::Equal => s1.cmp(s2),
-        non_eq => non_eq,
     }
 }
 

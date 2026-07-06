@@ -1,4 +1,4 @@
-import { createSignal, createEffect } from 'solid-js';
+import { createSignal, createEffect, onCleanup } from 'solid-js';
 import { DEFAULT_CONFIG } from '../core/config';
 import type { MediaSource } from '../core/types';
 
@@ -39,6 +39,8 @@ export function usePersistedConfig() {
     youtubeTimestamps: true,
     songsPerPlaylist: DEFAULT_CONFIG.audio.songsPerPlaylist,
     minDurationHours: DEFAULT_CONFIG.target.minDurationSec / 3600,
+    loopMode: 'duration' as 'duration' | 'count',
+    loopCount: 1,
     codec: 'av1',
     maxConcurrentJobs: 1,
     watermarkPath: undefined as string | undefined,
@@ -74,6 +76,8 @@ export function usePersistedConfig() {
           DEFAULT_CONFIG.target.minDurationSec / 3600,
           0.1,
         ),
+        loopMode: parsed.loopMode === 'count' ? 'count' : 'duration',
+        loopCount: numberOr(parsed.loopCount, 1, 1),
         codec: ['h264', 'h265', 'av1'].includes(String(parsed.codec))
           ? String(parsed.codec)
           : 'av1',
@@ -82,7 +86,7 @@ export function usePersistedConfig() {
           typeof parsed.watermarkPath === 'string'
             ? parsed.watermarkPath
             : undefined,
-        watermarkOpacity: numberOr(parsed.watermarkOpacity, 0.8, 0.1),
+        watermarkOpacity: numberOr(parsed.watermarkOpacity, 0.8, 0),
       };
     }
   } catch (err) {
@@ -112,6 +116,10 @@ export function usePersistedConfig() {
   const [minDurationHours, setMinDurationHours] = createSignal(
     initial.minDurationHours,
   );
+  const [loopMode, setLoopMode] = createSignal<'duration' | 'count'>(
+    initial.loopMode,
+  );
+  const [loopCount, setLoopCount] = createSignal(initial.loopCount);
   const [codec, setCodec] = createSignal(initial.codec);
   const [maxConcurrentJobs, setMaxConcurrentJobs] = createSignal(
     initial.maxConcurrentJobs,
@@ -122,26 +130,29 @@ export function usePersistedConfig() {
   );
 
   createEffect(() => {
-    try {
-      localStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify({
-          videoSource: videoSource(),
-          audioSource: audioSource(),
-          outputPath: outputPath(),
-          outputPrefix: outputPrefix(),
-          maxrate: maxrate(),
-          usePingpong: usePingpong(),
-          youtubeTimestamps: youtubeTimestamps(),
-          songsPerPlaylist: songsPerPlaylist(),
-          minDurationHours: minDurationHours(),
-          codec: codec(),
-          maxConcurrentJobs: maxConcurrentJobs(),
-          watermarkPath: watermarkPath(),
-          watermarkOpacity: watermarkOpacity(),
-        }),
-      );
-    } catch {}
+    const snapshot = {
+      videoSource: videoSource(),
+      audioSource: audioSource(),
+      outputPath: outputPath(),
+      outputPrefix: outputPrefix(),
+      maxrate: maxrate(),
+      usePingpong: usePingpong(),
+      youtubeTimestamps: youtubeTimestamps(),
+      songsPerPlaylist: songsPerPlaylist(),
+      minDurationHours: minDurationHours(),
+      loopMode: loopMode(),
+      loopCount: loopCount(),
+      codec: codec(),
+      maxConcurrentJobs: maxConcurrentJobs(),
+      watermarkPath: watermarkPath(),
+      watermarkOpacity: watermarkOpacity(),
+    };
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+      } catch {}
+    }, 300);
+    onCleanup(() => clearTimeout(timer));
   });
 
   return {
@@ -154,6 +165,8 @@ export function usePersistedConfig() {
     youtubeTimestamps,
     songsPerPlaylist,
     minDurationHours,
+    loopMode,
+    loopCount,
     codec,
     maxConcurrentJobs,
     watermarkPath,
@@ -167,6 +180,8 @@ export function usePersistedConfig() {
     setYoutubeTimestamps,
     setSongsPerPlaylist,
     setMinDurationHours,
+    setLoopMode,
+    setLoopCount,
     setCodec,
     setMaxConcurrentJobs,
     setWatermarkPath,

@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 use sysinfo::System;
+use tauri_plugin_shell::ShellExt;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -8,6 +9,7 @@ use std::os::windows::process::CommandExt;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct HardwareInfo {
     pub cpu_name: String,
     pub gpu_name: String,
@@ -16,8 +18,8 @@ pub struct HardwareInfo {
 }
 
 #[tauri::command]
-pub async fn detect_hardware() -> HardwareInfo {
-    tokio::task::spawn_blocking(move || {
+pub async fn detect_hardware(app: tauri::AppHandle) -> HardwareInfo {
+    let (cpu_name, ram_gb, gpu_name) = tokio::task::spawn_blocking(move || {
         let mut sys = System::new_all();
         sys.refresh_cpu_all();
         sys.refresh_memory();
@@ -31,22 +33,23 @@ pub async fn detect_hardware() -> HardwareInfo {
         let ram_gb = (sys.total_memory() as f64 / (1024.0 * 1024.0 * 1024.0)).round() as u64;
 
         let gpu_name = get_gpu_name();
-        let av1_supported = check_av1_support();
-
-        HardwareInfo {
-            cpu_name,
-            gpu_name,
-            ram_gb,
-            av1_supported,
-        }
+        (cpu_name, ram_gb, gpu_name)
     })
     .await
-    .unwrap_or_else(|_| HardwareInfo {
-        cpu_name: "Tidak diketahui".to_string(),
-        gpu_name: "Tidak diketahui".to_string(),
-        ram_gb: 0,
-        av1_supported: false,
-    })
+    .unwrap_or_else(|_| (
+        "Tidak diketahui".to_string(),
+        0,
+        "Tidak diketahui".to_string(),
+    ));
+
+    let av1_supported = check_av1_support(&app).await;
+
+    HardwareInfo {
+        cpu_name,
+        gpu_name,
+        ram_gb,
+        av1_supported,
+    }
 }
 
 fn get_gpu_name() -> String {
@@ -91,16 +94,39 @@ fn parse_gpu_names(stdout: &str) -> Vec<String> {
         .collect()
 }
 
-fn check_av1_support() -> bool {
-    let mut ffmpeg_cmd = Command::new("ffmpeg");
-    ffmpeg_cmd.args(["-hide_banner", "-encoders"]);
-    #[cfg(target_os = "windows")]
-    ffmpeg_cmd.creation_flags(CREATE_NO_WINDOW);
-    ffmpeg_cmd
+async fn check_av1_support(app: &tauri::AppHandle) -> bool {
+    let hw_encoders = ["av1_nvenc", "av1_amf", "av1_qsv"];
+    
+    for encoder in hw_encoders {
+        let Ok(sidecar_command) = app.shell().sidecar("ffmpeg") else {
+            continue;
+        };
+        let sidecar_command = sidecar_command.args([
+                "-v", "error",
+                "-f", "lavfi",
+                "-i", "color=c=black:s=256x256",
+                "-vframes", "1",
+                "-c:v", encoder,
+                "-f", "null",
+                "-"
+            ]);
+        
+        if let Ok(output) = sidecar_command.output().await && output.status.success() {
+            return true;
+        }
+    }
+
+    let Ok(sidecar_command) = app.shell().sidecar("ffmpeg") else {
+        return false;
+    };
+    let sidecar_command = sidecar_command.args(["-hide_banner", "-encoders"]);
+        
+    sidecar_command
         .output()
+        .await
         .map(|out| {
             let stdout = String::from_utf8_lossy(&out.stdout);
-            stdout.contains("av1_nvenc") || stdout.contains("av1_amf") || stdout.contains("av1_qsv") || stdout.contains("libsvtav1")
+            stdout.contains("libsvtav1")
         })
         .unwrap_or(false)
 }

@@ -22,4 +22,7 @@ pub enum AppError {
 
     #[error("Render dibatalkan: {0}")]
     Cancelled(String),
+
+    #[error("Render dijeda: {0}")]
+    Paused(String),
 }

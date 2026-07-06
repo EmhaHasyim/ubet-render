@@ -18,20 +18,20 @@ export function useHardware(
 
   onMount(() => {
     invoke<{
-      cpu_name: string;
-      gpu_name: string;
-      ram_gb: number;
-      av1_supported: boolean;
+      cpuName: string;
+      gpuName: string;
+      ramGb: number;
+      av1Supported: boolean;
     }>('detect_hardware')
       .then((info) => {
         setHardwareInfo({
-          cpuModel: info.cpu_name,
-          gpuModel: info.gpu_name,
-          totalRamGB: info.ram_gb,
-          av1Supported: info.av1_supported,
+          cpuModel: info.cpuName,
+          gpuModel: info.gpuName,
+          totalRamGB: info.ramGb,
+          av1Supported: info.av1Supported,
         });
 
-        if (!info.av1_supported && currentCodec() === 'av1') {
+        if (!info.av1Supported && currentCodec() === 'av1') {
           setCodec('h265');
         }
       })

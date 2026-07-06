@@ -7,3 +7,4 @@ export { SettingsCard } from './layout/SettingsCard';
 export { JobTable } from './layout/JobTable';
 export { LogViewer } from './layout/LogViewer';
 export { SourceSelector } from './media/SourceSelector';
+export { FatalScreen } from './ui/FatalScreen';

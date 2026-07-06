@@ -10,6 +10,8 @@ const MAX_DURATION_HOURS: f64 = 24.0;
 const MIN_DURATION_HOURS: f64 = 0.1;
 const MAX_CONCURRENT_JOBS: usize = 32;
 const MIN_CONCURRENT_JOBS: usize = 1;
+const MAX_LOOP_COUNT: usize = 100;
+const MIN_LOOP_COUNT: usize = 1;
 const MAX_WATERMARK_OPACITY: f32 = 1.0;
 const MIN_WATERMARK_OPACITY: f32 = 0.0;
 const VALID_ENCODERS: &[&str] = &[
@@ -19,6 +21,29 @@ const VALID_ENCODERS: &[&str] = &[
 ];
 const MAX_PREFIX_LEN: usize = 100;
 const MAX_PATH_LEN: usize = 4096;
+
+const WINDOWS_RESERVED: &[&str] = &[
+    "CON", "NUL", "PRN", "AUX",
+    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
+
+/// Unicode characters that can be used to bypass `..` detection
+const TRAVERSAL_UNICODE_VARIANTS: &[char] = &[
+    '\u{2025}', // ‥  double vertical line (looks like ..)
+    '\u{2026}', // …  horizontal ellipsis
+    '\u{2044}', // ⁄  fraction slash (like /)
+    '\u{2215}', // ∕  division slash (like /)
+    '\u{FF0F}', // ／ fullwidth solidus (like /)
+    '\u{FF0E}', // ． fullwidth full stop (like .)
+    '\u{2E2F}', // ⸯ vertical tilde
+    '\u{2E3C}', // ⸼ stenographic full stop
+    '\u{2E3D}', // ⸽ vertical six dots
+];
+
+fn has_traversal_unicode(path: &str) -> bool {
+    path.chars().any(|c| TRAVERSAL_UNICODE_VARIANTS.contains(&c))
+}
 
 fn sanitize_path(path: &str) -> Result<PathBuf, AppError> {
     if path.len() > MAX_PATH_LEN {
@@ -30,6 +55,9 @@ fn sanitize_path(path: &str) -> Result<PathBuf, AppError> {
     if path.chars().any(|c| c.is_control()) {
         return Err(AppError::Pipeline("Path contains control characters".into()));
     }
+    if has_traversal_unicode(path) {
+        return Err(AppError::Pipeline("Path contains Unicode traversal characters".into()));
+    }
     let path = Path::new(path);
     if path.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
         return Err(AppError::Pipeline("Path traversal detected".into()));
@@ -37,12 +65,31 @@ fn sanitize_path(path: &str) -> Result<PathBuf, AppError> {
     if cfg!(windows) && path.to_string_lossy().starts_with("\\\\") {
         return Err(AppError::Pipeline("UNC paths are not allowed".into()));
     }
+    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+        if name.starts_with('-') {
+            return Err(AppError::Pipeline("Filename starts with '-' which may be misinterpreted as a flag".into()));
+        }
+        if cfg!(windows) {
+            let stem = Path::new(name).file_stem().and_then(|s| s.to_str()).unwrap_or(name).to_ascii_uppercase();
+            if WINDOWS_RESERVED.contains(&stem.as_str()) {
+                return Err(AppError::Pipeline(format!("Windows reserved filename: {}", name)));
+            }
+        }
+    }
     Ok(path.to_path_buf())
 }
 
-#[allow(dead_code)]
-fn resolve_and_validate_path(path: &Path, allowed_roots: &[PathBuf]) -> Result<PathBuf, AppError> {
-    let canonical = path.canonicalize().map_err(|e| AppError::Pipeline(format!("Failed to resolve path: {}", e)))?;
+pub fn resolve_and_validate_path(path: &Path, allowed_roots: &[PathBuf]) -> Result<PathBuf, AppError> {
+    let canonical = match path.canonicalize() {
+        Ok(c) => c,
+        Err(_) => {
+            let parent = path.parent().unwrap_or(path);
+            let canonical_parent = parent.canonicalize().map_err(|e| {
+                AppError::Pipeline(format!("Failed to resolve path: {}", e))
+            })?;
+            canonical_parent.join(path.file_name().unwrap_or(path.as_os_str()))
+        }
+    };
     let is_allowed = allowed_roots.iter().any(|root| canonical.starts_with(root));
     if !is_allowed {
         return Err(AppError::Pipeline("Path resolves outside allowed directories".into()));
@@ -54,9 +101,6 @@ fn validate_media_source(source: &MediaSource, media_type: &str) -> Result<(), A
     match source {
         MediaSource::Folder { path } => {
             let _ = sanitize_path(path)?;
-            if !Path::new(path).exists() {
-                return Err(AppError::Pipeline(format!("{} folder does not exist: {}", media_type, path)));
-            }
         }
         MediaSource::Files { paths } => {
             if paths.is_empty() {
@@ -64,9 +108,6 @@ fn validate_media_source(source: &MediaSource, media_type: &str) -> Result<(), A
             }
             for p in paths {
                 let _ = sanitize_path(p)?;
-                if !Path::new(p).exists() {
-                    return Err(AppError::Pipeline(format!("{} file does not exist: {}", media_type, p)));
-                }
             }
         }
     }
@@ -101,6 +142,10 @@ pub fn validate_override_config(overrides: &OverrideConfig) -> Result<(), AppErr
         && (!(MIN_DURATION_HOURS..=MAX_DURATION_HOURS).contains(&hours)) {
             return Err(AppError::Pipeline(format!("Min duration {}h out of range ({}-{}h)", hours, MIN_DURATION_HOURS, MAX_DURATION_HOURS)));
         }
+    if let Some(count) = overrides.loop_count
+        && (!(MIN_LOOP_COUNT..=MAX_LOOP_COUNT).contains(&count)) {
+            return Err(AppError::Pipeline(format!("Loop count {} out of range ({}-{})", count, MIN_LOOP_COUNT, MAX_LOOP_COUNT)));
+        }
     if let Some(ref encoder) = overrides.encoder
         && !VALID_ENCODERS.contains(&encoder.as_str()) {
             return Err(AppError::Pipeline(format!("Invalid encoder: {}. Valid: {:?}", encoder, VALID_ENCODERS)));
@@ -124,6 +169,9 @@ pub fn validate_override_config(overrides: &OverrideConfig) -> Result<(), AppErr
         let _ = sanitize_path(watermark)?;
         if !watermark.to_lowercase().ends_with(".png") {
             return Err(AppError::Pipeline("Watermark must be a PNG file".into()));
+        }
+        if !std::path::Path::new(watermark).exists() {
+            return Err(AppError::Pipeline(format!("Watermark file not found: {}", watermark)));
         }
     }
     if let Some(opacity) = overrides.watermark_opacity

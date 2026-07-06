@@ -56,14 +56,17 @@ pub async fn start_render(
                 cleanup();
             }
             Err(e) => {
+                cleanup();
                 let event = match e {
                     AppError::Cancelled(message) => {
                         crate::models::job::PipelineEvent::Cancelled(message)
                     }
+                    AppError::Paused(_) => {
+                        crate::models::job::PipelineEvent::Paused
+                    }
                     other => crate::models::job::PipelineEvent::FatalError(other.to_string()),
                 };
                 event::emit(&app_handle, event);
-                cleanup();
             }
         }
     });
@@ -73,24 +76,43 @@ pub async fn start_render(
 
 #[tauri::command]
 pub fn cancel_render(state: tauri::State<'_, crate::RenderState>) {
-    let control = state
-        .control
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone();
+    let control = match state.control.lock() {
+        Ok(guard) => guard.clone(),
+        Err(poisoned) => {
+            eprintln!("RenderState mutex poisoned: {}", poisoned);
+            poisoned.into_inner().clone()
+        }
+    };
     if let Some(control) = control {
         control.cancel();
     }
 }
 
 #[tauri::command]
-pub fn pause_render(state: tauri::State<'_, crate::RenderState>) {
-    let control = state
-        .control
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone();
+pub fn pause_render(app: tauri::AppHandle, state: tauri::State<'_, crate::RenderState>) {
+    let control = match state.control.lock() {
+        Ok(guard) => guard.clone(),
+        Err(poisoned) => {
+            eprintln!("RenderState mutex poisoned: {}", poisoned);
+            poisoned.into_inner().clone()
+        }
+    };
     if let Some(control) = control {
         control.pause();
+        event::emit(&app, crate::models::job::PipelineEvent::Paused);
+    }
+}
+
+#[tauri::command]
+pub fn resume_render(state: tauri::State<'_, crate::RenderState>) {
+    let control = match state.control.lock() {
+        Ok(guard) => guard.clone(),
+        Err(poisoned) => {
+            eprintln!("RenderState mutex poisoned: {}", poisoned);
+            poisoned.into_inner().clone()
+        }
+    };
+    if let Some(control) = control {
+        control.resume();
     }
 }

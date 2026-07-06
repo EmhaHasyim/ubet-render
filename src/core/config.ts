@@ -5,7 +5,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     video: './videos',
     audio: './audios',
     output: './outputs',
-    cache: './cache',
+    cache: '',
   },
   metadata: {
     channelPrefix: 'Ubet Render',

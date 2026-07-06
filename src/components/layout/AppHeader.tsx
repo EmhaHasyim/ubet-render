@@ -3,7 +3,9 @@ import { Icon } from '@iconify-icon/solid';
 
 export function AppHeader(props: {
   running: boolean;
+  paused: boolean;
   onStart: (resume: boolean) => void;
+  onResume: () => void;
   onCancel: () => void;
   onPause: () => void;
   canStart: boolean;
@@ -20,10 +22,10 @@ export function AppHeader(props: {
       <section class="panel p-4">
         <div class="flex items-start gap-3">
           <div
-            class={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${props.running ? 'bg-warning/15 text-warning' : 'bg-primary/10 text-primary'}`}
+            class={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${props.running ? 'bg-warning/15 text-warning' : props.paused ? 'bg-info/15 text-info' : 'bg-primary/10 text-primary'}`}
           >
             <Icon
-              icon={props.running ? 'lucide:loader-2' : 'lucide:play'}
+              icon={props.running ? 'lucide:loader-2' : props.paused ? 'lucide:pause-circle' : 'lucide:play'}
               class={props.running ? 'animate-spin' : ''}
               width="20"
               height="20"
@@ -31,47 +33,41 @@ export function AppHeader(props: {
           </div>
           <div class="min-w-0 flex-1">
             <h3 class="font-semibold">
-              {props.running ? 'Rendering batch' : 'Ready'}
+              {props.running ? 'Rendering batch' : props.paused ? 'Render dijeda' : 'Ready'}
             </h3>
             <p class="mt-1 text-sm text-base-content/60">
               {props.running
                 ? 'Batch in progress.'
-                : props.canStart
-                  ? 'All paths set.'
-                  : 'Missing paths.'}
+                : props.paused
+                  ? 'Render sedang dijeda.'
+                  : props.canStart
+                    ? 'All paths set.'
+                    : 'Missing paths.'}
             </p>
           </div>
         </div>
 
         <div class="mt-4 flex flex-col gap-2">
-          <button
-            type="button"
-            class="btn btn-primary w-full gap-2"
-            disabled={props.running || !props.canStart}
-            onClick={() => props.onStart(false)}
-          >
-            <Show
-              when={props.running}
-              fallback={
-                <>
-                  <Icon icon="lucide:play" width="18" height="18" />
-                  Start new batch
-                </>
-              }
-            >
-              <span class="loading loading-spinner loading-sm" />
-              Processing
-            </Show>
-          </button>
-
-          <Show when={!props.running && props.canStart}>
+          <Show when={!props.running && !props.paused}>
             <button
               type="button"
-              class="btn btn-secondary w-full gap-2"
+              class="btn btn-primary w-full gap-2"
+              disabled={!props.canStart}
+              onClick={() => props.onStart(false)}
+            >
+              <Icon icon="lucide:play" width="18" height="18" />
+              Start new batch
+            </button>
+          </Show>
+
+          <Show when={!props.running && props.paused}>
+            <button
+              type="button"
+              class="btn btn-primary w-full gap-2"
               onClick={() => props.onStart(true)}
             >
               <Icon icon="lucide:play-circle" width="18" height="18" />
-              Resume batch
+              Resume render
             </button>
           </Show>
 

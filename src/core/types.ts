@@ -43,6 +43,7 @@ export interface RenderJob {
   progressPercent: number;
   currentStep: string;
   error?: string;
+  timestamps: string[];
 }
 
 export type MediaSource = { type: 'files'; paths: string[] };
@@ -50,7 +51,6 @@ export type MediaSource = { type: 'files'; paths: string[] };
 export interface PipelineProgress {
   total: number;
   completed: number;
-  current_video: string;
   jobs: RenderJob[];
 }
 
@@ -70,4 +70,5 @@ export type PipelineEvent =
   | { type: 'Log'; data: PipelineLog }
   | { type: 'Done'; data: PipelineDone }
   | { type: 'Cancelled'; data: string }
+  | { type: 'Paused'; data?: undefined }
   | { type: 'FatalError'; data: string };

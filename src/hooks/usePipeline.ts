@@ -26,14 +26,6 @@ async function notify(title: string, body: string) {
   }
 }
 
-const [running, setRunning] = createSignal(false);
-const [jobs, setJobs] = createSignal<RenderJob[]>([]);
-const [overallProgress, setOverallProgress] = createSignal(0);
-const [overallEta, setOverallEta] = createSignal<string>('');
-const [logs, setLogs] = createSignal<string[]>([]);
-let unlisten: UnlistenFn | null = null;
-let startProgress = 0;
-
 export function usePipeline() {
   const config = usePersistedConfig();
   const { hardwareInfo, resolveEncoder } = useHardware(
@@ -46,10 +38,29 @@ export function usePipeline() {
     config.setOutputPath,
   );
 
+  const [running, setRunning] = createSignal(false);
+  const [paused, setPaused] = createSignal(false);
+  const [jobs, setJobs] = createSignal<RenderJob[]>([]);
+  const [overallProgress, setOverallProgress] = createSignal(0);
+  const [overallEta, setOverallEta] = createSignal<string>('');
+  const [logs, setLogs] = createSignal<string[]>([]);
+  let unlisten: UnlistenFn | null = null;
+  let unlistenGuard = false;
+  let startProgress = 0;
+  let etaSamples: { elapsed: number; gained: number }[] = [];
+
+  const safeUnlisten = () => {
+    if (!unlistenGuard && unlisten) {
+      unlistenGuard = true;
+      unlisten();
+      unlisten = null;
+    }
+  };
+
   const appendLog = (line: string) => {
     setLogs((prev) => {
       const updated = [...prev, line];
-      return updated.length > 500 ? updated.slice(-500) : updated;
+      return updated.length > 2000 ? updated.slice(-2000) : updated;
     });
   };
 
@@ -57,8 +68,8 @@ export function usePipeline() {
     const v = config.videoSource();
     const a = config.audioSource();
     const o = config.outputPath();
-    const videoOk = v !== null && v.paths.length > 0;
-    const audioOk = a !== null && a.paths.length > 0;
+    const videoOk = v !== null && v.type === 'files' && v.paths.length > 0;
+    const audioOk = a !== null && a.type === 'files' && a.paths.length > 0;
     const outputOk = o.length > 0;
     return videoOk && audioOk && outputOk;
   };
@@ -72,6 +83,7 @@ export function usePipeline() {
   const startRender = async (resume: boolean = false) => {
     if (running() || (!resume && !canStart())) return;
     setRunning(true);
+    setPaused(false);
     if (!resume) {
       setJobs([]);
       setLogs([]);
@@ -84,11 +96,9 @@ export function usePipeline() {
     }
 
     let startTime = Date.now();
-
-    if (unlisten) {
-      unlisten();
-      unlisten = null;
-    }
+    etaSamples = [];
+    unlistenGuard = false;
+    safeUnlisten();
 
     try {
       unlisten = await listen<PipelineEvent>('pipeline-event', (event) => {
@@ -106,37 +116,41 @@ export function usePipeline() {
               (sum, j) => sum + j.progressPercent,
               0,
             );
-            const overallPct =
+            const overallPercent =
               totalJobs > 0
                 ? Math.min(100, Math.max(0, jobsProgressSum / totalJobs))
                 : 0;
-            setOverallProgress(overallPct);
+            setOverallProgress(overallPercent);
 
-            const progressGained = overallPct - startProgress;
-            if (progressGained > 0 && overallPct < 100) {
+            const progressGained = overallPercent - startProgress;
+            if (progressGained > 0.001 && overallPercent < 100) {
               const elapsedMs = Date.now() - startTime;
-              const progressLeft = 100 - overallPct;
-              const remainingMs = (progressLeft * elapsedMs) / progressGained;
-              if (remainingMs > 0) {
-                const s = Math.floor((remainingMs / 1000) % 60);
-                const m = Math.floor((remainingMs / (1000 * 60)) % 60);
-                const h = Math.floor(remainingMs / (1000 * 60 * 60));
-                setOverallEta(`${h > 0 ? h + 'j ' : ''}${m}m ${s}s tersisa`);
+              etaSamples.push({ elapsed: elapsedMs, gained: progressGained });
+              if (etaSamples.length > 10) {
+                etaSamples = etaSamples.slice(-10);
               }
-            } else if (overallPct === 100) {
+              const avgRate = etaSamples.reduce((sum, s) => sum + s.gained / s.elapsed, 0) / etaSamples.length;
+              if (avgRate > 0) {
+                const remainingMs = (100 - overallPercent) / avgRate;
+                if (remainingMs > 0 && remainingMs < 86400000) {
+                  const s = Math.floor((remainingMs / 1000) % 60);
+                  const m = Math.floor((remainingMs / (1000 * 60)) % 60);
+                  const h = Math.floor(remainingMs / (1000 * 60 * 60));
+                  setOverallEta(`${h > 0 ? h + 'j ' : ''}${m}m ${s}s tersisa`);
+                }
+              }
+            } else if (overallPercent >= 100) {
               setOverallEta('Selesai');
             }
             break;
           case 'Done':
             setRunning(false);
+            setPaused(false);
             setOverallProgress(100);
             setOverallEta(
               payload.data.failed > 0 ? 'Selesai dengan error' : 'Selesai',
             );
-            if (unlisten) {
-              unlisten();
-              unlisten = null;
-            }
+            safeUnlisten();
             notify(
               payload.data.failed > 0
                 ? 'Render selesai dengan error'
@@ -144,24 +158,27 @@ export function usePipeline() {
               `${payload.data.completed}/${payload.data.total} selesai, ${payload.data.failed} gagal.`,
             );
             break;
+          case 'Paused':
+            appendLog('[INFO] Render dijeda');
+            setRunning(false);
+            setPaused(true);
+            setOverallEta('Dijeda');
+            safeUnlisten();
+            notify('Render dijeda', 'Render sedang dijeda.');
+            break;
           case 'Cancelled':
             appendLog(`[INFO] ${payload.data}`);
             setRunning(false);
-            setOverallEta('Dibatalkan');
-            if (unlisten) {
-              unlisten();
-              unlisten = null;
-            }
-            notify('Render dibatalkan', payload.data);
+            setPaused(false);
+            setOverallEta('Render dibatalkan');
+            safeUnlisten();
             break;
           case 'FatalError':
             appendLog(`FATAL: ${payload.data}`);
             setRunning(false);
+            setPaused(false);
             setOverallEta('Gagal');
-            if (unlisten) {
-              unlisten();
-              unlisten = null;
-            }
+            safeUnlisten();
             notify('Render gagal', `Error: ${payload.data}`);
             break;
         }
@@ -169,12 +186,20 @@ export function usePipeline() {
 
       const encoder = resolveEncoder(config.codec());
 
+      if (!/^\d+k$/.test(config.maxrate())) {
+        safeUnlisten();
+        appendLog(`[WARN] Bitrate '${config.maxrate()}' tidak valid. Gunakan format seperti '4000k' (angka + huruf k).`);
+        setRunning(false);
+        setOverallEta('Gagal');
+        return;
+      }
+
       const overrides = {
         videoSource: config.videoSource(),
         audioSource: config.audioSource(),
         outputPath: config.outputPath(),
         songsPerPlaylist: config.songsPerPlaylist(),
-        minDurationHours: config.minDurationHours(),
+        minDurationHours: config.loopMode() === 'count' ? null : config.minDurationHours(),
         encoder,
         outputPrefix: config.outputPrefix(),
         maxrate: config.maxrate(),
@@ -183,6 +208,7 @@ export function usePipeline() {
         maxConcurrentJobs: config.maxConcurrentJobs(),
         watermarkPath: config.watermarkPath(),
         watermarkOpacity: config.watermarkOpacity(),
+        loopCount: config.loopMode() === 'count' ? config.loopCount() : null,
       };
 
       await invoke('start_render', {
@@ -190,14 +216,17 @@ export function usePipeline() {
         resume,
       });
     } catch (err) {
-      if (unlisten) {
-        unlisten();
-        unlisten = null;
-      }
+      safeUnlisten();
       appendLog(`Error: ${String(err)}`);
       setRunning(false);
+      setPaused(false);
       setOverallEta('Gagal');
     }
+  };
+
+  const resumeRender = async () => {
+    if (!paused()) return;
+    await startRender(true);
   };
 
   const cancelRender = async () => {
@@ -211,19 +240,23 @@ export function usePipeline() {
 
   const pauseRender = async () => {
     try {
+      setPaused(true);
+      setOverallEta('Menjeda...');
       await invoke('pause_render');
     } catch (err) {
       console.error('Pause render failed:', err);
       appendLog(`Error: Failed to pause render - ${String(err)}`);
+      setPaused(false);
     }
   };
 
   onCleanup(() => {
-    if (unlisten) unlisten();
+    safeUnlisten();
   });
 
   return {
     running,
+    paused,
     jobs,
     overallProgress,
     overallEta,
@@ -234,6 +267,7 @@ export function usePipeline() {
     canStart,
     dragHover,
     startRender,
+    resumeRender,
     cancelRender,
     pauseRender,
     ...config,

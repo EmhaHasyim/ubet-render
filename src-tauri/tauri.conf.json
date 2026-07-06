@@ -20,9 +20,13 @@
     "security": {
       "assetProtocol": {
         "enable": true,
-        "scope": ["**"]
+        "scope": [
+          "$APPDATA/**",
+          "$RESOURCE/**",
+          "$TEMP/ubet-render/**"
+        ]
       },
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data:; connect-src 'self' tauri: http://localhost:1420; font-src 'self' data:;"
     }
   },
   "bundle": {
@@ -34,6 +38,10 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "externalBin": [
+      "binaries/ffmpeg",
+      "binaries/ffprobe"
     ]
   }
 }

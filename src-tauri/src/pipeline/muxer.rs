@@ -3,6 +3,7 @@ use crate::ffmpeg;
 use std::path::Path;
 
 pub async fn mux_final_video(
+    app: &tauri::AppHandle,
     audio_list: &Path,
     video_list: &Path,
     output: &str,
@@ -40,5 +41,5 @@ pub async fn mux_final_video(
         total_duration_str,
         output.into(),
     ];
-    ffmpeg::run(&args, tx_progress, cancel_control).await
+    ffmpeg::run(app, &args, tx_progress, cancel_control).await
 }

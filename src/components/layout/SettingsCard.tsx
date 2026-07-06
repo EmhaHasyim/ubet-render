@@ -11,6 +11,8 @@ interface SettingsCardProps {
   outputPath: string;
   songsPerPlaylist: number;
   minDurationHours: number;
+  loopMode: 'duration' | 'count';
+  loopCount: number;
   codec: string;
   av1Supported: boolean;
   outputPrefix: string;
@@ -22,6 +24,8 @@ interface SettingsCardProps {
   onOutputChange: (path: string) => void;
   onSongsPerPlaylistChange: (val: number) => void;
   onMinDurationHoursChange: (val: number) => void;
+  onLoopModeChange: (val: 'duration' | 'count') => void;
+  onLoopCountChange: (val: number) => void;
   onCodecChange: (codec: string) => void;
   onOutputPrefixChange: (prefix: string) => void;
   onMaxrateChange: (val: string) => void;
@@ -165,26 +169,74 @@ export function SettingsCard(props: SettingsCardProps) {
             />
           </label>
 
-          <label class="form-control">
+          <div class="form-control">
             <span class="label py-1">
-              <span class="label-text font-medium">Minimum duration</span>
+              <span class="label-text font-medium">Repeat mode</span>
             </span>
-            <label class="input input-bordered flex items-center gap-2 bg-base-100">
+            <div class="join w-full">
+              <input
+                type="radio"
+                class="btn join-item btn-outline flex-1"
+                name="loopMode"
+                value="duration"
+                checked={props.loopMode === 'duration'}
+                onClick={() => props.onLoopModeChange('duration')}
+                aria-label="By Duration"
+              />
+              <input
+                type="radio"
+                class="btn join-item btn-outline flex-1"
+                name="loopMode"
+                value="count"
+                checked={props.loopMode === 'count'}
+                onClick={() => props.onLoopModeChange('count')}
+                aria-label="By Count"
+              />
+            </div>
+          </div>
+
+          <Show when={props.loopMode === 'duration'}>
+            <label class="form-control">
+              <span class="label py-1">
+                <span class="label-text font-medium">Minimum duration</span>
+              </span>
+              <label class="input input-bordered flex items-center gap-2 bg-base-100">
+                <input
+                  type="number"
+                  class="grow"
+                  min="0.1"
+                  step="0.1"
+                  value={props.minDurationHours}
+                  onInput={(e) =>
+                    props.onMinDurationHoursChange(
+                      Math.max(0.1, parseFloat(e.currentTarget.value) || 0.1),
+                    )
+                  }
+                />
+                <span class="text-sm text-base-content/55">hours</span>
+              </label>
+            </label>
+          </Show>
+
+          <Show when={props.loopMode === 'count'}>
+            <label class="form-control">
+              <span class="label py-1">
+                <span class="label-text font-medium">Repeat count</span>
+              </span>
               <input
                 type="number"
-                class="grow"
-                min="0.1"
-                step="0.1"
-                value={props.minDurationHours}
+                class="input input-bordered w-full bg-base-100"
+                min="1"
+                max="100"
+                value={props.loopCount}
                 onInput={(e) =>
-                  props.onMinDurationHoursChange(
-                    Math.max(0.1, parseFloat(e.currentTarget.value) || 0.1),
+                  props.onLoopCountChange(
+                    Math.max(1, Math.min(100, parseInt(e.currentTarget.value) || 1)),
                   )
                 }
               />
-              <span class="text-sm text-base-content/55">hours</span>
             </label>
-          </label>
+          </Show>
 
           <label class="form-control">
             <span class="label py-1">
@@ -333,14 +385,14 @@ export function SettingsCard(props: SettingsCardProps) {
               <input
                 type="number"
                 class="grow"
-                min="0.1"
+                min="0"
                 max="1.0"
                 step="0.1"
                 value={props.watermarkOpacity}
                 onInput={(e) =>
                   props.onWatermarkOpacityChange(
                     Math.max(
-                      0.1,
+                      0,
                       Math.min(1.0, parseFloat(e.currentTarget.value) || 0.8),
                     ),
                   )
