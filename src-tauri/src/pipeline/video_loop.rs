@@ -33,9 +33,10 @@ pub async fn create_ping_pong_video(params: PingPongVideoParams<'_>) -> Result<(
     } else {
         "[0:v]scale=1920:1080:flags=lanczos,unsharp=3:3:1.0:3:3:0.0[v_base]"
     };
-    let mut args: Vec<String> = vec!["-y".into(), "-i".into(), input.into()];
+    // Use Vec<&str> — borrow static strings and settings fields, no .into() allocation for static strings
+    let mut args: Vec<&str> = vec!["-y", "-i", input];
     let (final_map, filter_complex) = if let Some(wm) = watermark_path {
-        args.extend(["-i".into(), wm.clone()]);
+        args.extend(["-i", wm.as_str()]);
         (
             "[v]",
             format!(
@@ -47,7 +48,7 @@ pub async fn create_ping_pong_video(params: PingPongVideoParams<'_>) -> Result<(
         ("[v]", base_filter.replace("[v_base]", "[v]"))
     };
     let fps_str = video_settings.fps.to_string();
-    let output_str = output.to_string_lossy().to_string();
+    let output_str = output.to_string_lossy().into_owned();
     let maxrate_k = video_settings
         .bitrate_max
         .to_ascii_lowercase()
@@ -60,46 +61,46 @@ pub async fn create_ping_pong_video(params: PingPongVideoParams<'_>) -> Result<(
         || video_settings.encoder.contains("amf")
         || video_settings.encoder.contains("qsv");
     args.extend([
-        "-filter_complex".into(),
-        filter_complex,
-        "-map".into(),
-        final_map.into(),
-        "-c:v".into(),
-        video_settings.encoder.clone(),
+        "-filter_complex",
+        &filter_complex,
+        "-map",
+        final_map,
+        "-c:v",
+        &video_settings.encoder,
     ]);
     if video_settings.encoder.contains("nvenc") {
         args.extend([
-            "-preset".into(),
-            video_settings.preset.clone(),
-            "-rc".into(),
-            "vbr".into(),
-            "-b:v".into(),
-            video_settings.bitrate_target.clone(),
-            "-maxrate".into(),
-            video_settings.bitrate_max.clone(),
-            "-bufsize".into(),
-            bufsize,
+            "-preset",
+            &video_settings.preset,
+            "-rc",
+            "vbr",
+            "-b:v",
+            &video_settings.bitrate_target,
+            "-maxrate",
+            &video_settings.bitrate_max,
+            "-bufsize",
+            &bufsize,
         ]);
     } else if is_hw_encoder {
         args.extend([
-            "-b:v".into(),
-            video_settings.bitrate_target.clone(),
-            "-maxrate".into(),
-            video_settings.bitrate_max.clone(),
-            "-bufsize".into(),
-            bufsize,
+            "-b:v",
+            &video_settings.bitrate_target,
+            "-maxrate",
+            &video_settings.bitrate_max,
+            "-bufsize",
+            &bufsize,
         ]);
     } else {
         args.extend([
-            "-crf".into(),
-            "23".into(),
-            "-maxrate".into(),
-            video_settings.bitrate_max.clone(),
-            "-bufsize".into(),
-            bufsize,
+            "-crf",
+            "23",
+            "-maxrate",
+            &video_settings.bitrate_max,
+            "-bufsize",
+            &bufsize,
         ]);
     }
-    args.extend(["-r".into(), fps_str, "-vsync".into(), "cfr".into(), output_str]);
+    args.extend(["-r", &fps_str, "-vsync", "cfr", &output_str]);
     ffmpeg::run(app, &args, tx_progress, cancel_control).await
 }
 
@@ -128,11 +129,22 @@ pub async fn generate_loop_playlists(
         return Err(AppError::Pipeline("Audio loop duration is zero".into()));
     }
     fn escape_concat_path(path: &str) -> String {
-        let mut result = String::with_capacity(path.len());
+        // FFmpeg concat demuxer uses single-quoted file paths with -safe 0.
+        // File paths with special chars must be escaped:
+        // - Backslashes: converted to forward slashes (Windows path compat)
+        // - Single quotes: escaped by ending quote, inserting escaped quote, reopening
+        // - Newlines/carriage returns: replaced with space (cannot appear in paths)
+        let mut result = String::with_capacity(path.len() + 4);
         for c in path.chars() {
             match c {
-                '\'' => result.push('_'),
-                '\n' | '\r' => continue,
+                '\'' => {
+                    // FFmpeg concat escapes single quotes as: '\'' (end quote, escaped quote, reopen)
+                    result.push_str("'\\''");
+                }
+                '\n' | '\r' => {
+                    // Newlines cannot appear in concat file paths; replace with space
+                    result.push(' ');
+                }
                 '\\' => result.push('/'),
                 _ => result.push(c),
             }

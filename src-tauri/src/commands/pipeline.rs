@@ -104,7 +104,7 @@ pub fn pause_render(app: tauri::AppHandle, state: tauri::State<'_, crate::Render
 }
 
 #[tauri::command]
-pub fn resume_render(state: tauri::State<'_, crate::RenderState>) {
+pub fn resume_render(state: tauri::State<'_, crate::RenderState>) -> Result<(), String> {
     let control = match state.control.lock() {
         Ok(guard) => guard.clone(),
         Err(poisoned) => {
@@ -112,7 +112,11 @@ pub fn resume_render(state: tauri::State<'_, crate::RenderState>) {
             poisoned.into_inner().clone()
         }
     };
-    if let Some(control) = control {
-        control.resume();
+    match control {
+        Some(c) => {
+            c.resume();
+            Ok(())
+        }
+        None => Err("No active render to resume".into()),
     }
 }

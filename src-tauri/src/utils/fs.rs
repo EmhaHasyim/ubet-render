@@ -1,6 +1,6 @@
 use std::collections::HashSet;
+use std::hash::Hasher;
 use std::path::{Path, PathBuf};
-use sha2::{Digest, Sha256};
 
 pub fn to_absolute(path: &Path) -> PathBuf {
     if path.is_absolute() {
@@ -27,10 +27,9 @@ pub async fn safe_delete(file: &Path) -> Result<(), std::io::Error> {
 }
 
 pub fn hash_path(data: &[u8]) -> u64 {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    let result = hasher.finalize();
-    u64::from_ne_bytes(result[..8].try_into().unwrap())
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    hasher.write(data);
+    hasher.finish()
 }
 
 pub async fn scan_files(dir: &Path, extensions: &[&str]) -> Vec<String> {

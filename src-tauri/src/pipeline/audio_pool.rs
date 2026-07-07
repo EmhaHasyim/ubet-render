@@ -18,12 +18,17 @@ pub async fn build_master_audio_pool(
     let mut pool = Vec::new();
     let concurrent = settings.concurrent_prep.max(1);
     let cache_dir = Arc::new(cache_dir.to_path_buf());
-    let settings = Arc::new(settings.clone());
-    let mut stream = stream::iter(audio_files.iter().cloned().map(|song| {
+    // Extract fields early so the async move closure doesn't capture the whole AudioSettings
+    let loudnorm_params = settings.loudnorm_params.clone();
+    let bitrate = settings.bitrate.clone();
+    let sample_rate = settings.sample_rate;
+    let mut stream = stream::iter(audio_files.iter().cloned().map(move |song| {
         let cache_dir = Arc::clone(&cache_dir);
-        let settings = Arc::clone(&settings);
         let cancel_control = cancel_control.clone();
         let app_clone = app.clone();
+        // Clone strings for each invocation since FnMut may be called multiple times
+        let lp = loudnorm_params.clone();
+        let br = bitrate.clone();
         async move {
             if cancel_control
                 .as_ref()
@@ -37,25 +42,27 @@ pub async fn build_master_audio_pool(
             let file_hash = crate::utils::fs::hash_path(song.as_bytes());
             let cache_path = cache_dir.join(format!("master_audio_{:x}.m4a", file_hash));
             if !cache_path.exists() {
-                let loudnorm = &settings.loudnorm_params;
-                let bitrate = &settings.bitrate;
-                let sample_rate = settings.sample_rate.to_string();
-                let args: Vec<String> = vec![
-                    "-y".into(),
-                    "-i".into(),
-                    original_path.to_string_lossy().to_string(),
-                    "-vn".into(),
-                    "-af".into(),
-                    format!("loudnorm={}", loudnorm),
-                    "-c:a".into(),
-                    "aac".into(),
-                    "-b:a".into(),
-                    bitrate.clone(),
-                    "-ar".into(),
-                    sample_rate,
-                    "-ac".into(),
-                    "2".into(),
-                    cache_path.to_string_lossy().to_string(),
+                let sample_rate_str = sample_rate.to_string();
+                let input_path_str = original_path.to_string_lossy().into_owned();
+                let output_path_str = cache_path.to_string_lossy().into_owned();
+                let loudnorm_arg = format!("loudnorm={}", lp);
+                // Use &[&str] — static strings are borrowed, no .into() allocation needed
+                let args: Vec<&str> = vec![
+                    "-y",
+                    "-i",
+                    &input_path_str,
+                    "-vn",
+                    "-af",
+                    &loudnorm_arg,
+                    "-c:a",
+                    "aac",
+                    "-b:a",
+                    &br,
+                    "-ar",
+                    &sample_rate_str,
+                    "-ac",
+                    "2",
+                    &output_path_str,
                 ];
                 ffmpeg::run(&app_clone, &args, None, cancel_control.clone()).await?;
             }

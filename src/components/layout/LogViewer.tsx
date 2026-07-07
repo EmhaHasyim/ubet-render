@@ -8,7 +8,13 @@ export function LogViewer(props: { logs: string[] }) {
   createEffect(() => {
     props.logs.length;
     if (logContainerRef) {
-      logContainerRef.scrollTop = logContainerRef.scrollHeight;
+      // Capture DOM ref in closure to avoid null-safety issues with non-null assertion
+      const el = logContainerRef;
+      // Debounce via requestAnimationFrame to avoid forced layout thrashing
+      // when logs update at high frequency (e.g., during ffmpeg stderr output)
+      requestAnimationFrame(() => {
+        el.scrollTop = el.scrollHeight;
+      });
     }
   });
 

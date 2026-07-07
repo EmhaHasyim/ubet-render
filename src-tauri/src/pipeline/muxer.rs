@@ -11,35 +11,37 @@ pub async fn mux_final_video(
     tx_progress: Option<tokio::sync::mpsc::Sender<f64>>,
     cancel_control: Option<std::sync::Arc<crate::RenderControl>>,
 ) -> Result<(), AppError> {
-    let video_list_str = video_list.to_string_lossy().to_string();
-    let audio_list_str = audio_list.to_string_lossy().to_string();
+    // Convert paths to strings once for the concat demuxer
+    let video_list_str = video_list.to_string_lossy().into_owned();
+    let audio_list_str = audio_list.to_string_lossy().into_owned();
     let total_duration_str = total_duration.to_string();
 
-    let args: Vec<String> = vec![
-        "-y".into(),
-        "-f".into(),
-        "concat".into(),
-        "-safe".into(),
-        "0".into(),
-        "-i".into(),
-        video_list_str,
-        "-f".into(),
-        "concat".into(),
-        "-safe".into(),
-        "0".into(),
-        "-i".into(),
-        audio_list_str,
-        "-map".into(),
-        "0:v:0".into(),
-        "-map".into(),
-        "1:a:0".into(),
-        "-c:v".into(),
-        "copy".into(),
-        "-c:a".into(),
-        "copy".into(),
-        "-t".into(),
-        total_duration_str,
-        output.into(),
+    // Use &[&str] slice — static strings are borrowed, no .into() allocation needed
+    let args: Vec<&str> = vec![
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        &video_list_str,
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        &audio_list_str,
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "copy",
+        "-t",
+        &total_duration_str,
+        output,
     ];
     ffmpeg::run(app, &args, tx_progress, cancel_control).await
 }

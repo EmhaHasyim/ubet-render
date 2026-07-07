@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::path::Path;
 use std::sync::Arc;
 use tauri::AppHandle;
@@ -16,18 +17,18 @@ impl Drop for ChildGuard {
     }
 }
 
-pub async fn run(
+pub async fn run<S: AsRef<OsStr>>(
     app: &AppHandle,
-    args: &[String],
+    args: &[S],
     tx_progress: Option<tokio::sync::mpsc::Sender<f64>>,
     cancel_control: Option<Arc<crate::RenderControl>>,
 ) -> Result<(), AppError> {
     run_with_timeout(app, args, tx_progress, cancel_control, 86400).await
 }
 
-pub async fn run_with_timeout(
+pub async fn run_with_timeout<S: AsRef<OsStr>>(
     app: &AppHandle,
-    args: &[String],
+    args: &[S],
     tx_progress: Option<tokio::sync::mpsc::Sender<f64>>,
     cancel_control: Option<Arc<crate::RenderControl>>,
     max_timeout_sec: u64,
@@ -73,13 +74,17 @@ pub async fn run_with_timeout(
             event_res = rx.recv() => {
                 match event_res {
                     Some(CommandEvent::Stderr(line_bytes)) => {
-                        let line = String::from_utf8_lossy(&line_bytes).into_owned();
-                        if let (Some(tx), Some(time_sec)) = (&tx_progress, extract_time(&line)) {
+                        // Use Cow<str> to avoid allocation for valid UTF-8 (typical case),
+                        // only allocating for the rare invalid-UTF-8 scenario
+                        let line_cow = String::from_utf8_lossy(&line_bytes);
+                        if let (Some(tx), Some(time_sec)) = (&tx_progress, extract_time(&line_cow)) {
                             let _ = tx.send(time_sec).await;
                             deadline = tokio::time::Instant::now() + timeout_dur;
                         }
-                        if !line.trim().is_empty() {
-                            last_stderr = line;
+                        // Only capture non-progress lines as potential error messages
+                        let trimmed = line_cow.trim();
+                        if !trimmed.is_empty() && extract_time(trimmed).is_none() {
+                            last_stderr = trimmed.to_string();
                         }
                     }
                     Some(CommandEvent::Stdout(_)) => {}

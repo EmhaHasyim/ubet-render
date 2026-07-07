@@ -47,7 +47,29 @@ export function usePipeline() {
   let unlisten: UnlistenFn | null = null;
   let unlistenGuard = false;
   let startProgress = 0;
-  let etaSamples: { elapsed: number; gained: number }[] = [];
+
+  // Ring buffer for ETA samples — pre-allocated, no slice() allocations
+  const MAX_ETA_SAMPLES = 10;
+  const etaRing: { elapsed: number; gained: number }[] = Array.from({ length: MAX_ETA_SAMPLES });
+  let etaIndex = 0;
+  let etaCount = 0;
+
+  // Ring buffer for logs — pre-allocated, no spread/slice allocations on append
+  const MAX_LOG = 2000;
+  const logBuffer: string[] = Array.from({ length: MAX_LOG });
+  let logIndex = 0;
+  let logCount = 0;
+
+  // Rebuild the signal array from the ring buffer (only done once per batch, not per append)
+  const flushLogs = () => {
+    if (logCount < MAX_LOG) {
+      // Not yet wrapped — simple slice
+      setLogs(logBuffer.slice(0, logCount));
+    } else {
+      // Wrapped — concatenate the two segments
+      setLogs([...logBuffer.slice(logIndex), ...logBuffer.slice(0, logIndex)]);
+    }
+  };
 
   const safeUnlisten = () => {
     if (!unlistenGuard && unlisten) {
@@ -58,10 +80,14 @@ export function usePipeline() {
   };
 
   const appendLog = (line: string) => {
-    setLogs((prev) => {
-      const updated = [...prev, line];
-      return updated.length > 2000 ? updated.slice(-2000) : updated;
-    });
+    logBuffer[logIndex] = line;
+    logIndex = (logIndex + 1) % MAX_LOG;
+    logCount = Math.min(logCount + 1, MAX_LOG);
+    // Periodically flush to the signal so the UI updates.
+    // Flush every 10 entries to batch updates and avoid per-line allocations.
+    if (logIndex % 10 === 0 || logCount === 1) {
+      flushLogs();
+    }
   };
 
   const pathsReady = () => {
@@ -82,10 +108,20 @@ export function usePipeline() {
 
   const startRender = async (resume: boolean = false) => {
     if (running() || (!resume && !canStart())) return;
+
+    // Validate bitrate BEFORE setting up anything, so we fail fast
+    if (!/^\d+k$/.test(config.maxrate())) {
+      appendLog(`[WARN] Bitrate '${config.maxrate()}' tidak valid. Gunakan format seperti '4000k' (angka + huruf k).`);
+      return;
+    }
+
     setRunning(true);
     setPaused(false);
     if (!resume) {
       setJobs([]);
+      // Reset log ring buffer
+      logIndex = 0;
+      logCount = 0;
       setLogs([]);
       setOverallProgress(0);
       setOverallEta('Menghitung...');
@@ -96,7 +132,9 @@ export function usePipeline() {
     }
 
     let startTime = Date.now();
-    etaSamples = [];
+    // Reset ETA ring buffer
+    etaIndex = 0;
+    etaCount = 0;
     unlistenGuard = false;
     safeUnlisten();
 
@@ -125,11 +163,19 @@ export function usePipeline() {
             const progressGained = overallPercent - startProgress;
             if (progressGained > 0.001 && overallPercent < 100) {
               const elapsedMs = Date.now() - startTime;
-              etaSamples.push({ elapsed: elapsedMs, gained: progressGained });
-              if (etaSamples.length > 10) {
-                etaSamples = etaSamples.slice(-10);
+              // Ring buffer insert — no allocation
+              etaRing[etaIndex] = { elapsed: elapsedMs, gained: progressGained };
+              etaIndex = (etaIndex + 1) % MAX_ETA_SAMPLES;
+              etaCount = Math.min(etaCount + 1, MAX_ETA_SAMPLES);
+
+              // Compute average over ring buffer entries
+              const count = Math.min(etaCount, MAX_ETA_SAMPLES);
+              let sumRate = 0;
+              for (let i = 0; i < count; i++) {
+                const s = etaRing[i];
+                sumRate += s.gained / s.elapsed;
               }
-              const avgRate = etaSamples.reduce((sum, s) => sum + s.gained / s.elapsed, 0) / etaSamples.length;
+              const avgRate = sumRate / count;
               if (avgRate > 0) {
                 const remainingMs = (100 - overallPercent) / avgRate;
                 if (remainingMs > 0 && remainingMs < 86400000) {
@@ -163,7 +209,10 @@ export function usePipeline() {
             setRunning(false);
             setPaused(true);
             setOverallEta('Dijeda');
-            safeUnlisten();
+            // Do NOT call safeUnlisten() here — keep the listener alive so we can
+            // still receive Cancelled, FatalError, or a Done event if the pipeline
+            // terminates after pause. On resume, safeUnlisten() is called at the
+            // top of startRender() which will remove this listener before creating a new one.
             notify('Render dijeda', 'Render sedang dijeda.');
             break;
           case 'Cancelled':
@@ -185,14 +234,6 @@ export function usePipeline() {
       });
 
       const encoder = resolveEncoder(config.codec());
-
-      if (!/^\d+k$/.test(config.maxrate())) {
-        safeUnlisten();
-        appendLog(`[WARN] Bitrate '${config.maxrate()}' tidak valid. Gunakan format seperti '4000k' (angka + huruf k).`);
-        setRunning(false);
-        setOverallEta('Gagal');
-        return;
-      }
 
       const overrides = {
         videoSource: config.videoSource(),
@@ -226,7 +267,17 @@ export function usePipeline() {
 
   const resumeRender = async () => {
     if (!paused()) return;
-    await startRender(true);
+    // First try to resume the existing pipeline via the resume_render command
+    try {
+      await invoke('resume_render');
+      setPaused(false);
+      setRunning(true);
+      setOverallEta('Melanjutkan...');
+    } catch {
+      // If resume_render fails (e.g., old pipeline already terminated),
+      // fall back to starting a new pipeline with resume=true
+      await startRender(true);
+    }
   };
 
   const cancelRender = async () => {

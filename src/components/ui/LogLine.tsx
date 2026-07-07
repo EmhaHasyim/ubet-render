@@ -2,6 +2,7 @@ export function LogLine(props: { text: string }) {
   const colorClass = () => {
     const t = props.text;
     if (t.includes('[ERROR]') || t.includes('FATAL')) return 'text-error';
+    if (t.includes('[WARN]')) return 'text-warning';
     if (t.includes('[SUCCESS]')) return 'text-success';
     if (t.includes('[INFO]')) return 'text-info/80';
     return '';

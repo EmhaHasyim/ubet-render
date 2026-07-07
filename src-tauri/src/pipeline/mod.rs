@@ -48,15 +48,42 @@ impl Pipeline {
         resume: bool,
         control: Arc<crate::RenderControl>,
     ) -> Result<(), AppError> {
+        // Canonicalize a path for use in allowed_roots so that the comparison
+        // in resolve_and_validate_path (which uses canonicalize()) matches casing,
+        // especially on Windows where Path::starts_with is case-sensitive.
+        fn canonicalize_for_root(p: PathBuf) -> PathBuf {
+            p.canonicalize().unwrap_or(p)
+        }
+
         let output_dir = fs::to_absolute(&self.resolve_output_dir(&overrides));
-        let allowed_roots = vec![
-            output_dir.clone(),
-            fs::to_absolute(Path::new(&self.config.directories.video)),
-            fs::to_absolute(Path::new(&self.config.directories.audio)),
+        let mut allowed_roots = vec![
+            canonicalize_for_root(output_dir.clone()),
+            canonicalize_for_root(fs::to_absolute(Path::new(&self.config.directories.video))),
+            canonicalize_for_root(fs::to_absolute(Path::new(&self.config.directories.audio))),
         ];
-        if let Some(ref ov) = overrides
-            && let Some(ref output_path) = ov.output_path {
-            let _ = crate::validation::resolve_and_validate_path(Path::new(output_path), &allowed_roots)?;
+        // Add override source directories to allowed roots so path validation passes
+        if let Some(ref ov) = overrides {
+            if let Some(ref vs) = ov.video_source {
+                if let MediaSource::Files { paths } = vs {
+                    for p in paths {
+                        if let Some(parent) = Path::new(p).parent() {
+                            allowed_roots.push(canonicalize_for_root(fs::to_absolute(parent)));
+                        }
+                    }
+                }
+            }
+            if let Some(ref a_src) = ov.audio_source {
+                if let MediaSource::Files { paths } = a_src {
+                    for p in paths {
+                        if let Some(parent) = Path::new(p).parent() {
+                            allowed_roots.push(canonicalize_for_root(fs::to_absolute(parent)));
+                        }
+                    }
+                }
+            }
+            if let Some(ref output_path) = ov.output_path {
+                let _ = crate::validation::resolve_and_validate_path(Path::new(output_path), &allowed_roots)?;
+            }
         }
         let cache_dir = std::env::temp_dir().join("ubet-render").join("cache");
         let thumb_dir = std::env::temp_dir().join("ubet-render").join("thumbnails");
@@ -116,21 +143,23 @@ impl Pipeline {
             return Err(AppError::NoAudio);
         }
 
-        let use_pingpong = overrides.as_ref().and_then(|ov| ov.use_pingpong).unwrap_or(true);
-        let youtube_timestamps = overrides.as_ref().and_then(|ov| ov.youtube_timestamps).unwrap_or(self.config.youtube_timestamps);
-        let max_concurrent_jobs = overrides.as_ref().and_then(|ov| ov.max_concurrent_jobs).unwrap_or(self.config.max_concurrent_jobs).max(1);
-        let watermark_path = overrides.as_ref().and_then(|ov| ov.watermark_path.clone()).or(self.config.watermark_path.clone());
-        let watermark_opacity = overrides.as_ref().and_then(|ov| ov.watermark_opacity).unwrap_or(self.config.watermark_opacity);
+        // Extract overrides reference once to avoid repeated .as_ref() calls
+        let ov = overrides.as_ref();
+        let use_pingpong = ov.and_then(|o| o.use_pingpong).unwrap_or(true);
+        let youtube_timestamps = ov.and_then(|o| o.youtube_timestamps).unwrap_or(self.config.youtube_timestamps);
+        let max_concurrent_jobs = ov.and_then(|o| o.max_concurrent_jobs).unwrap_or(self.config.max_concurrent_jobs).max(1);
+        let watermark_path = ov.and_then(|o| o.watermark_path.clone()).or(self.config.watermark_path.clone());
+        let watermark_opacity = ov.and_then(|o| o.watermark_opacity).unwrap_or(self.config.watermark_opacity);
         
-        let songs_per_playlist = overrides.as_ref().and_then(|ov| ov.songs_per_playlist).unwrap_or(self.config.audio.songs_per_playlist).max(1);
-        let min_duration_sec = overrides.as_ref().and_then(|ov| ov.min_duration_hours).map(|h| (h * 3600.0) as u64).unwrap_or(self.config.target.min_duration_sec);
-        let loop_count = overrides.as_ref().and_then(|ov| ov.loop_count);
+        let songs_per_playlist = ov.and_then(|o| o.songs_per_playlist).unwrap_or(self.config.audio.songs_per_playlist).max(1);
+        let min_duration_sec = ov.and_then(|o| o.min_duration_hours).map(|h| (h * 3600.0) as u64).unwrap_or(self.config.target.min_duration_sec);
+        let loop_count = ov.and_then(|o| o.loop_count);
         
-        let encoder_selected = overrides.as_ref().and_then(|ov| ov.encoder.clone());
-        let prefix = overrides.as_ref().and_then(|ov| ov.output_prefix.as_deref()).unwrap_or(&self.config.metadata.channel_prefix);
+        let encoder_selected = ov.and_then(|o| o.encoder.clone());
+        let prefix = ov.and_then(|o| o.output_prefix.as_deref()).unwrap_or(&self.config.metadata.channel_prefix);
         let safe_prefix = sanitize_filename_component(prefix);
 
-        let maxrate_str = overrides.as_ref().and_then(|ov| ov.maxrate.clone()).unwrap_or_else(|| self.config.video.bitrate_target.clone());
+        let maxrate_str = ov.and_then(|o| o.maxrate.clone()).unwrap_or_else(|| self.config.video.bitrate_target.clone());
         let maxrate_k = parse_bitrate_to_kbps(&maxrate_str).unwrap_or_else(|| {
             event::emit(&self.app, PipelineEvent::Log {
                 level: "warn".into(),
@@ -229,10 +258,10 @@ impl Pipeline {
                     return;
                 }
                 if c_clone.is_paused() {
-                    c_clone.wait_for_resume().await;
-                    if c_clone.is_cancelled() {
-                        return;
-                    }
+                    // Don't wait for resume here - return early so the pipeline
+                    // terminates, runs cleanup, and saves state.
+                    // On resume, a fresh pipeline will be created from the state file.
+                    return;
                 }
 
                 let skip = {
@@ -274,7 +303,9 @@ impl Pipeline {
                         );
                     }
                     Err(AppError::Cancelled(_)) => {}
-                    Err(AppError::Paused(_)) => {}
+                    Err(AppError::Paused(_)) => {
+                // State is saved by the call at the bottom of this closure
+            }
                     Err(e) => {
                         {
                             let mut lock = j_arc.lock().await;
@@ -302,7 +333,7 @@ impl Pipeline {
 
         let final_jobs = jobs_arc.lock().await.clone();
 
-        let youtube_timestamps = overrides.as_ref().and_then(|ov| ov.youtube_timestamps).unwrap_or(pipeline_arc.config.youtube_timestamps);
+        let youtube_timestamps = ov.and_then(|o| o.youtube_timestamps).unwrap_or(pipeline_arc.config.youtube_timestamps);
         if youtube_timestamps && !final_jobs.is_empty() {
             let mut all_timestamps = Vec::new();
             for job in &final_jobs {
@@ -354,7 +385,7 @@ impl Pipeline {
         if now - last < 2 {
             return Ok(());
         }
-        if self.last_save_sec.compare_exchange(last, now, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::Relaxed).is_err() {
+        if self.last_save_sec.compare_exchange(last, now, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::Acquire).is_err() {
             return Ok(());
         }
         let jobs = jobs_arc.lock().await.clone();
@@ -399,22 +430,25 @@ impl Pipeline {
     }
 
     async fn generate_thumbnails(&self, jobs: &mut [RenderJob], thumb_dir: &Path, _render_timestamp: u64, control: Arc<crate::RenderControl>) {
-        let thumb_entries: Vec<(usize, String, u64)> = jobs.iter().enumerate().map(|(i, j)| {
-            (i, j.video.input_path.clone(), rand::random::<u64>())
-        }).collect();
-        let paths_and_ids: Vec<_> = thumb_entries.iter().map(|(i, path, id)| (*i, path.clone(), *id)).collect();
-        let stream = futures::stream::iter(paths_and_ids);
-        
-        stream.for_each_concurrent(4, |(i, input_path, thumb_id)| {
+        // Collect thumbnail tasks: (job_index, input_path_clone, thumb_id, thumb_path)
+        let thumb_tasks: Vec<(usize, String, u64, PathBuf)> = jobs.iter().enumerate().map(|(i, j)| {
+            let thumb_id = rand::random::<u64>();
             let thumb_path = thumb_dir.join(format!("thumb_{}_{}.jpg", thumb_id, i));
+            (i, j.video.input_path.clone(), thumb_id, thumb_path)
+        }).collect();
+        
+        let stream = futures::stream::iter(thumb_tasks.clone());
+        
+        stream.for_each_concurrent(4, |(i, input_path, _thumb_id, thumb_path)| {
             let self_app = self.app.clone();
             let control_clone = control.clone();
             async move {
                 if !thumb_path.exists() {
-                    let args = vec![
-                        "-y".into(), "-ss".into(), "00:00:01".into(), "-i".into(), input_path,
-                        "-vframes".into(), "1".into(), "-vf".into(), "scale=320:-1".into(),
-                        thumb_path.to_string_lossy().to_string(),
+                    let thumb_path_str = thumb_path.to_string_lossy().into_owned();
+                    // &[&str] slice avoids .into() allocations for static strings
+                    let args: Vec<&str> = vec![
+                        "-y", "-ss", "00:00:01", "-i", &input_path,
+                        "-vframes", "1", "-vf", "scale=320:-1", &thumb_path_str,
                     ];
                     if let Err(e) = ffmpeg::run(&self_app, &args, None, Some(control_clone)).await {
                         event::emit(&self_app, crate::models::job::PipelineEvent::Log {
@@ -427,10 +461,9 @@ impl Pipeline {
         }).await;
 
         for (i, job) in jobs.iter_mut().enumerate().filter(|(_, j)| j.video.thumbnail_path.is_none()) {
-            if let Some((_, _, thumb_id)) = thumb_entries.iter().find(|(idx, _, _)| *idx == i) {
-                let thumb_path = thumb_dir.join(format!("thumb_{}_{}.jpg", thumb_id, i));
+            if let Some((_, _, _, thumb_path)) = thumb_tasks.iter().find(|(idx, _, _, _)| *idx == i) {
                 if thumb_path.exists() {
-                    job.video.thumbnail_path = Some(thumb_path.to_string_lossy().to_string());
+                    job.video.thumbnail_path = Some(thumb_path.to_string_lossy().into_owned());
                 }
             }
         }
