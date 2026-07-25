@@ -58,7 +58,7 @@ src/
 │   └── persisted.ts       # localStorage persistence, schema versioning & migration
 │
 ├── context/               # SolidJS context providers
-│   └── pipeline.tsx        # PipelineContext + PipelineProvider + usePipelineContext
+│   └── pipeline.tsx        # PipelineContext + PipelineProvider (wrapped at call-site by PipelineBridge in App.tsx)
 │
 ├── hooks/                 # Custom SolidJS hooks
 │   ├── usePipeline.ts     # Central orchestrator: wires config, hardware, DnD, IPC events
@@ -89,7 +89,7 @@ src/
 ```
 <App>
   <ErrorBoundary fallback={<FatalScreen />}>
-    <PipelineProvider>
+    <PipelineBridge>          {/* calls usePipeline() inside the boundary */}
       ┌─ Header bar ─────────────────────────────┐
       │  Logo · Title · Tabs · Status badges     │
       └───────────────────────────────────────────┘
@@ -117,7 +117,7 @@ src/
       │  │   thumbnails)            │  scrolled) │
       │  └──────────────────────────────────┘   │
       └──────────────────────────────────────────┘
-    </PipelineProvider>
+    </PipelineBridge>
   </ErrorBoundary>
 </App>
 ```
@@ -171,10 +171,10 @@ To avoid GC pressure during high-frequency FFmpeg output:
 - **Log ring buffer**: Pre-allocated array of 2000 entries. New lines overwrite old ones. Flushed to the SolidJS signal every 10 lines via `flushLogs()`.
 - **ETA ring buffer**: Pre-allocated array of 10 `{ elapsed, gained }` samples. A sliding-window average estimates remaining time without allocations.
 
-### 3. Error Boundary + Fallback Pipeline
+### 3. Error Boundary + Recoverable Pipeline Bridge
 
 - `<ErrorBoundary>` wraps the entire app and displays `<FatalScreen>` on uncaught errors.
-- If `usePipeline()` throws during initialization (corrupt localStorage, missing Tauri IPC), `createFallbackPipeline()` provides a static placeholder. The user **never** sees a blank page.
+- `usePipeline()` is called inside a dedicated `PipelineBridge` component so that, if it throws during initialisation (corrupt localStorage, missing Tauri IPC, etc.), the boundary catches it and renders `<FatalScreen>`. The "Try Again" button remounts the bridge and retries the call without losing the application shell.
 - Every sub-hook (`useHardware`, `useDragDrop`, `usePersistedConfig`) is wrapped in its own `try-catch` so one failure doesn't cascade.
 
 ### 4. localStorage Schema Versioning
@@ -246,12 +246,18 @@ bun dev             # Opens http://localhost:1420 in browser
 
 ## Testing
 
-The project has **455+ tests** (313 Vitest + 142 Rust) across 35+ test files covering:
+The project has a comprehensive test suite spanning both Vitest (frontend) and
+`cargo test` (backend), covering:
 
 - **Core utilities**: Config defaults, bitrate validation, ETA formatting, localStorage persistence
 - **Hooks**: Config persistence, hardware detection, pipeline lifecycle
 - **Components**: Every component tested in isolation (rendered states, event handlers, edge cases)
+- **Rust backend**: Encoder mappings, path-traversal hardening, validation, audio pool lifecycle
 - **Integration**: Full render lifecycle with mocked Tauri IPC
+
+To get an exact test count after a fresh checkout, run `bun test` — vitest
+prints it on exit. The README intentionally avoids hard-coding the number so
+it does not drift as soon as a new test is added.
 
 ```bash
 bun test                 # Run all tests
@@ -263,7 +269,9 @@ bun test src/core/persisted.test.ts  # Single file
 
 ## Project Status
 
-**Version:** 0.1.2 • **License:** MIT
+**Version:** 0.2.1 • **License:** MIT
+
+See [CHANGELOG.md](./CHANGELOG.md) for what's new in this release.
 
 ---
 

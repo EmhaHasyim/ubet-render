@@ -1,10 +1,8 @@
-name: CI
-
-on:
+name: CIon:
   push:
     branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]  # run CI on PRs opened against either protected branch
 
 env:
   CI: true

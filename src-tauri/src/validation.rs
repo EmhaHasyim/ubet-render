@@ -411,6 +411,7 @@ fn canonicalize_lenient(path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipeline::estimator::{AUDIO_EXTENSIONS, VIDEO_EXTENSIONS};
 
     // -----------------------------------------------------------------------
     // sanitize_path
@@ -836,5 +837,35 @@ mod tests {
             output_format: None,
             skip_intermediate_on_codec_match: None,
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Drift-detection sentinels — media format allow-list
+    // -----------------------------------------------------------------------
+    //
+    // These EXPECTED_* lists are the **machine-enforced mirror** of the
+    // canonical allow-list documented in `docs/MEDIA_EXTENSIONS.md`. They
+    // mirror the TypeScript sentinels in `src/core/config.test.ts`.
+    //
+    // If a contributor changes VIDEO_EXTENSIONS / AUDIO_EXTENSIONS above
+    // without also updating BOTH the TS and the Rust sentinels, one side's
+    // drift test will fail in CI. Bump all three places together when adding
+    // a new format to the canonical list.
+
+    const EXPECTED_VIDEO_EXTENSIONS_RUST: &[&str] = &[
+        ".mp4", ".mkv", ".mov", ".webm", ".avi", ".flv", ".wmv",
+    ];
+    const EXPECTED_AUDIO_EXTENSIONS_RUST: &[&str] = &[
+        ".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac", ".wma",
+    ];
+
+    #[test]
+    fn test_video_extensions_match_canonical_list() {
+        assert_eq!(VIDEO_EXTENSIONS, EXPECTED_VIDEO_EXTENSIONS_RUST);
+    }
+
+    #[test]
+    fn test_audio_extensions_match_canonical_list() {
+        assert_eq!(AUDIO_EXTENSIONS, EXPECTED_AUDIO_EXTENSIONS_RUST);
     }
 }
