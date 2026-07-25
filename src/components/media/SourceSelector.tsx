@@ -3,6 +3,7 @@ import { dirname } from '@tauri-apps/api/path';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Icon } from '@iconify-icon/solid';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
+import { createLogger } from '../../core/logger';
 
 interface SourceSelectorProps {
   label: string;
@@ -12,6 +13,9 @@ interface SourceSelectorProps {
   icon: string;
   themeColor: 'primary' | 'secondary' | 'accent' | 'info';
 }
+
+// Replaces 1 ad-hoc console.warn call; see `src/core/logger.ts`.
+const log = createLogger('SourceSelector');
 
 const colorClass = {
   primary: 'border-primary/35 bg-primary/5 text-primary hover:border-primary',
@@ -34,7 +38,7 @@ export function SourceSelector(props: SourceSelectorProps) {
       try {
         currentDefault = await dirname(props.value[0]);
       } catch (e) {
-        console.warn('Could not get dirname', e);
+        log.warn('Could not get dirname', e);
       }
     }
 

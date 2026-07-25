@@ -3,6 +3,10 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { UnlistenFn } from '@tauri-apps/api/event';
 import type { MediaSource } from '../core/types';
 import { VIDEO_EXTENSIONS, AUDIO_EXTENSIONS } from '../core/config';
+import { createLogger } from '../core/logger';
+
+// Replaces 2 ad-hoc console.error calls; see `src/core/logger.ts`.
+const log = createLogger('DragDrop');
 
 type DropZone = 'video' | 'audio' | 'output';
 
@@ -138,14 +142,11 @@ export function useDragDrop(
             }
           }
         } catch (err) {
-          console.error('[DragDrop] Tauri event handler error:', err);
+          log.error('Tauri event handler error:', err);
         }
       });
     } catch (err) {
-      console.error(
-        '[DragDrop] Tauri DnD unavailable — will use HTML5 fallback:',
-        err,
-      );
+      log.error('Tauri DnD unavailable — will use HTML5 fallback:', err);
     }
   });
 

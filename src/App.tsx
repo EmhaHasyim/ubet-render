@@ -8,7 +8,7 @@ import {
   type JSX,
 } from 'solid-js';
 import { Icon } from '@iconify-icon/solid';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getCurrentWindow, ProgressBarStatus } from '@tauri-apps/api/window';
 import { usePipeline } from './hooks/usePipeline';
 import {
   AppHeader,
@@ -126,7 +126,7 @@ function Dashboard(props: { pipeline: Pipeline }) {
     } else if (hasFailed) {
       appWindow
         .setProgressBar({
-          status: 'error',
+          status: ProgressBarStatus.Error, // Tauri enum; runtime token = "error"
           progress: Math.round(Math.min(100, pct || 0)),
         })
         .catch(() => {});
@@ -134,7 +134,9 @@ function Dashboard(props: { pipeline: Pipeline }) {
       // Render complete, briefly show full bar then clear
       appWindow.setProgressBar({ progress: 100 }).catch(() => {});
     } else {
-      appWindow.setProgressBar({ status: 'none' }).catch(() => {});
+      appWindow
+        .setProgressBar({ status: ProgressBarStatus.None })
+        .catch(() => {});
     }
   });
 

@@ -4,12 +4,16 @@ import { Icon } from '@iconify-icon/solid';
 import { TAURI_COMMANDS } from '../../core/constants';
 import type { JobProgress } from '../../core/types';
 import { StatusBadge } from '../ui/StatusBadge';
+import { createLogger } from '../../core/logger';
+
+// Replaces 1 ad-hoc console.error call; see `src/core/logger.ts`.
+const log = createLogger('JobTable');
 
 const revealFile = async (path: string) => {
   try {
     await invoke(TAURI_COMMANDS.revealInExplorer, { path });
   } catch (e) {
-    console.error('Failed to reveal file:', e);
+    log.error('Failed to reveal file:', e);
   }
 };
 

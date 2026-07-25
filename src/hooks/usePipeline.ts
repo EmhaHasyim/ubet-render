@@ -15,9 +15,14 @@ import { RingBuffer } from '../core/ringBuffer';
 import { EtaCalculator } from '../core/eta';
 import { buildAppConfig } from '../core/buildAppConfig';
 import { TAURI_COMMANDS, TAURI_EVENTS } from '../core/constants';
+import { createLogger } from '../core/logger';
 
 const MAX_LOGS = 2000;
 const MAX_ETA_SAMPLES = 10;
+
+// Single namespaced logger for this hook.  Replaces 5 ad-hoc console.error
+// calls — see `src/core/logger.ts`.
+const log = createLogger('usePipeline');
 
 export function usePipeline() {
   const config = usePersistedConfig();
@@ -29,10 +34,7 @@ export function usePipeline() {
     hardwareInfo = hw.hardwareInfo;
     resolveEncoder = hw.resolveEncoder;
   } catch (err) {
-    console.error(
-      '[usePipeline] useHardware failed, using fallback encoder:',
-      err,
-    );
+    log.error('useHardware failed, using fallback encoder:', err);
     hardwareInfo = () => null;
     resolveEncoder = (codec) => {
       if (codec === 'av1') return 'libsvtav1';
@@ -49,7 +51,7 @@ export function usePipeline() {
       config.setOutputPath,
     ).dragHover;
   } catch (err) {
-    console.error('[usePipeline] useDragDrop failed, drag-drop disabled:', err);
+    log.error('useDragDrop failed, drag-drop disabled:', err);
     dragHover = () => null;
   }
 
@@ -289,7 +291,7 @@ export function usePipeline() {
     try {
       await invoke(TAURI_COMMANDS.cancelRender);
     } catch (err) {
-      console.error('Cancel render failed:', err);
+      log.error('Cancel render failed:', err);
       appendLog(`Error: Failed to cancel render - ${String(err)}`);
     } finally {
       // Always release the Tauri event listener so it doesn't linger
@@ -305,7 +307,7 @@ export function usePipeline() {
       setOverallEta('Pausing...');
       await invoke(TAURI_COMMANDS.pauseRender);
     } catch (err) {
-      console.error('Pause render failed:', err);
+      log.error('Pause render failed:', err);
       appendLog(`Error: Failed to pause render - ${String(err)}`);
       setPaused(false);
     }
@@ -358,8 +360,13 @@ export function usePipeline() {
   // Debounced save — persist config to backend whenever the user changes any
   // setting, so the backend's validation can surface errors early and the
   // persisted config file stays in sync with the front-end.
+  //
+  // The `void [...]` expression intentionally throws away the values; its
+  // sole purpose is to register each of the eight config fields as a
+  // SolidJS reactive dependency inside this effect's scope, so the
+  // effect re-runs whenever any of them changes.
   createEffect(() => {
-    const _deps = [
+    void [
       config.codec(),
       config.maxrate(),
       config.songsPerPlaylist(),
@@ -369,7 +376,6 @@ export function usePipeline() {
       config.embedChapters(),
       config.audioMode(),
     ];
-    void _deps;
 
     const timer = setTimeout(async () => {
       try {
@@ -377,7 +383,7 @@ export function usePipeline() {
           config: buildAppConfig(config, resolveEncoder),
         });
       } catch (err) {
-        console.error('Failed to save backend config:', err);
+        log.error('Failed to save backend config:', err);
       }
     }, 500);
 

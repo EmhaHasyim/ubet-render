@@ -3,6 +3,10 @@ import {
   requestPermission,
   sendNotification,
 } from '@tauri-apps/plugin-notification';
+import { createLogger } from './logger';
+
+// Replaces 1 ad-hoc console.error call; see `src/core/logger.ts`.
+const log = createLogger('notify');
 
 // Cache the permission grant so we don't re-request on every call.
 let permissionCached: boolean | null = null;
@@ -29,6 +33,6 @@ export async function notify(title: string, body: string) {
       await sendNotification({ title, body });
     }
   } catch (err) {
-    console.error('Notification failed:', err);
+    log.error('Notification failed:', err);
   }
 }

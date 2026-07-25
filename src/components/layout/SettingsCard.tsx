@@ -8,6 +8,10 @@ import { SourceSelector } from '../media/SourceSelector';
 import { TAURI_COMMANDS } from '../../core/constants';
 import { usePipelineContext } from '../../context/pipeline';
 import { normalizeBitrate } from '../../core/estimate';
+import { createLogger } from '../../core/logger';
+
+// Replaces 1 ad-hoc console.error call; see `src/core/logger.ts`.
+const log = createLogger('SettingsCard');
 
 // Stable empty array so the binding doesn't allocate a fresh `[]` on every
 // reactive re-evaluation when the source is unset.
@@ -24,7 +28,7 @@ const revealFile = async (path: string) => {
   try {
     await invoke(TAURI_COMMANDS.revealInExplorer, { path });
   } catch (e) {
-    console.error('Failed to reveal folder:', e);
+    log.error('Failed to reveal folder:', e);
   }
 };
 
