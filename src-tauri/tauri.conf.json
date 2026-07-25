@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "ubetRender",
+  "productName": "Ubet Render",
   "version": "0.1.2",
   "identifier": "com.ubetrender.app",
   "build": {
@@ -12,21 +12,25 @@
   "app": {
     "windows": [
       {
-        "title": "ubetRender",
+        "label": "main",
+        "title": "Ubet Render",
         "width": 1200,
-        "height": 800
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 500,
+        "decorations": false,
+        "maximized": true
       }
     ],
     "security": {
       "assetProtocol": {
         "enable": true,
         "scope": [
-          "$APPDATA/**",
-          "$RESOURCE/**",
-          "$TEMP/ubet-render/**"
+          "$TEMP/ubet-render/thumbnails/**",
+          "**/ubet-render/thumbnails/**"
         ]
       },
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data:; connect-src 'self' tauri: http://localhost:1420; font-src 'self' data:;"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost: data: blob:; connect-src 'self' tauri:; font-src 'self' data:;"
     }
   },
   "bundle": {

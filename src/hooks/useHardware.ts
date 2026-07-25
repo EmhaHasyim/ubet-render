@@ -17,6 +17,11 @@ export function useHardware(
   );
 
   onMount(() => {
+    // Capture the codec value *before* the async invoke so the
+    // downstream check is deterministic — the user may change the
+    // codec during the ~10ms IPC round-trip.
+    const codecOnCall = currentCodec();
+
     invoke<{
       cpuName: string;
       gpuName: string;
@@ -31,17 +36,17 @@ export function useHardware(
           av1Supported: info.av1Supported,
         });
 
-        if (!info.av1Supported && currentCodec() === 'av1') {
+        if (!info.av1Supported && codecOnCall === 'av1') {
           setCodec('h265');
         }
       })
       .catch(() => {
-        if (currentCodec() === 'av1') {
+        if (codecOnCall === 'av1') {
           setCodec('h265');
         }
         setHardwareInfo({
-          cpuModel: 'Tidak diketahui',
-          gpuModel: 'Tidak diketahui',
+          cpuModel: 'Unknown',
+          gpuModel: 'Unknown',
           totalRamGB: 0,
           av1Supported: false,
         });

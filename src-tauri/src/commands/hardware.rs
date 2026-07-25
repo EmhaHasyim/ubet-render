@@ -28,7 +28,7 @@ pub async fn detect_hardware(app: tauri::AppHandle) -> HardwareInfo {
             .cpus()
             .first()
             .map(|c| c.brand().to_string())
-            .unwrap_or_else(|| "Tidak diketahui".to_string());
+            .unwrap_or_else(|| "Unknown".to_string());
 
         let ram_gb = (sys.total_memory() as f64 / (1024.0 * 1024.0 * 1024.0)).round() as u64;
 
@@ -37,9 +37,9 @@ pub async fn detect_hardware(app: tauri::AppHandle) -> HardwareInfo {
     })
     .await
     .unwrap_or_else(|_| (
-        "Tidak diketahui".to_string(),
+        "Unknown".to_string(),
         0,
-        "Tidak diketahui".to_string(),
+        "Unknown".to_string(),
     ));
 
     let av1_supported = check_av1_support(&app).await;
@@ -53,38 +53,92 @@ pub async fn detect_hardware(app: tauri::AppHandle) -> HardwareInfo {
 }
 
 fn get_gpu_name() -> String {
-    let mut ps_cmd = Command::new("powershell");
-    ps_cmd.args([
-        "-NoProfile",
-        "-Command",
-        "(Get-CimInstance Win32_VideoController).Name",
-    ]);
+    // ── Windows: PowerShell + WMIC fallback ───────────────────────────
     #[cfg(target_os = "windows")]
-    ps_cmd.creation_flags(CREATE_NO_WINDOW);
-    if let Ok(output) = ps_cmd.output() {
-        let names = parse_gpu_names(&String::from_utf8_lossy(&output.stdout));
-        if !names.is_empty() {
-            return names.join(", ");
+    {
+        let mut ps_cmd = Command::new("powershell");
+        ps_cmd.args([
+            "-NoProfile",
+            "-Command",
+            "(Get-CimInstance Win32_VideoController).Name",
+        ]);
+        ps_cmd.creation_flags(CREATE_NO_WINDOW);
+        if let Ok(output) = ps_cmd.output() {
+            let names = parse_gpu_names(&String::from_utf8_lossy(&output.stdout));
+            if !names.is_empty() {
+                return names.join(", ");
+            }
+        }
+
+        let mut wmic_cmd = Command::new("wmic");
+        wmic_cmd.args(["path", "win32_VideoController", "get", "name"]);
+        wmic_cmd.creation_flags(CREATE_NO_WINDOW);
+        if let Ok(output) = wmic_cmd.output() {
+            let names: Vec<String> =
+                parse_gpu_names(&String::from_utf8_lossy(&output.stdout))
+                    .into_iter()
+                    .filter(|name| !name.eq_ignore_ascii_case("name"))
+                    .collect();
+            if !names.is_empty() {
+                return names.join(", ");
+            }
         }
     }
 
-    let mut wmic_cmd = Command::new("wmic");
-    wmic_cmd.args(["path", "win32_VideoController", "get", "name"]);
-    #[cfg(target_os = "windows")]
-    wmic_cmd.creation_flags(CREATE_NO_WINDOW);
-    if let Ok(output) = wmic_cmd.output() {
-        let names: Vec<String> = parse_gpu_names(&String::from_utf8_lossy(&output.stdout))
-            .into_iter()
-            .filter(|name| !name.eq_ignore_ascii_case("name"))
-            .collect();
-        if !names.is_empty() {
-            return names.join(", ");
+    // ── macOS: system_profiler ────────────────────────────────────────
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = Command::new("system_profiler")
+            .args(["SPDisplaysDataType"])
+            .output()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            // Extract lines like "Chipset Model: Apple M1 Pro"
+            let gpus: Vec<String> = stdout
+                .lines()
+                .filter_map(|line| {
+                    let trimmed = line.trim();
+                    trimmed
+                        .strip_prefix("Chipset Model: ")
+                        .or_else(|| trimmed.strip_prefix("Chipset Model:"))
+                        .map(str::to_string)
+                })
+                .collect();
+            if !gpus.is_empty() {
+                return gpus.join(", ");
+            }
         }
     }
 
-    "Tidak diketahui".to_string()
+    // ── Linux: lspci ──────────────────────────────────────────────────
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(output) = Command::new("lspci").args(["-mm"]).output() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let gpus: Vec<String> = stdout
+                .lines()
+                .filter(|line| {
+                    let lower = line.to_lowercase();
+                    lower.contains("vga") || lower.contains("3d") || lower.contains("display")
+                })
+                .filter_map(|line| {
+                    // "-mm" machine-readable: double-quoted fields.
+                    // rsplit('"') yields ["", last_field, " ", ..., first_field, ""];
+                    // nth(1) picks the last substantive field (the device name).
+                    line.rsplit('"').nth(1).map(|s| s.trim().to_string())
+                })
+                .collect();
+            if !gpus.is_empty() {
+                return gpus.join(", ");
+            }
+        }
+    }
+
+    "Unknown".to_string()
 }
 
+// Only called on Windows (cfg-gated inside get_gpu_name).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn parse_gpu_names(stdout: &str) -> Vec<String> {
     stdout
         .lines()
@@ -96,7 +150,8 @@ fn parse_gpu_names(stdout: &str) -> Vec<String> {
 
 async fn check_av1_support(app: &tauri::AppHandle) -> bool {
     let hw_encoders = ["av1_nvenc", "av1_amf", "av1_qsv"];
-    
+    let probe_timeout = std::time::Duration::from_secs(8);
+
     for encoder in hw_encoders {
         let Ok(sidecar_command) = app.shell().sidecar("ffmpeg") else {
             continue;
@@ -110,9 +165,10 @@ async fn check_av1_support(app: &tauri::AppHandle) -> bool {
                 "-f", "null",
                 "-"
             ]);
-        
-        if let Ok(output) = sidecar_command.output().await && output.status.success() {
-            return true;
+
+        match tokio::time::timeout(probe_timeout, sidecar_command.output()).await {
+            Ok(Ok(output)) if output.status.success() => return true,
+            _ => {}
         }
     }
 
@@ -120,13 +176,12 @@ async fn check_av1_support(app: &tauri::AppHandle) -> bool {
         return false;
     };
     let sidecar_command = sidecar_command.args(["-hide_banner", "-encoders"]);
-        
-    sidecar_command
-        .output()
-        .await
-        .map(|out| {
+
+    match tokio::time::timeout(probe_timeout, sidecar_command.output()).await {
+        Ok(Ok(out)) => {
             let stdout = String::from_utf8_lossy(&out.stdout);
             stdout.contains("libsvtav1")
-        })
-        .unwrap_or(false)
+        }
+        _ => false,
+    }
 }

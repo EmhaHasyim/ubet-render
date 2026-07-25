@@ -15,7 +15,6 @@ export interface AppConfig {
   video: {
     bitrateTarget: string;
     bitrateMax: string;
-    fps: number;
     encoder: string;
     preset: string;
   };
@@ -25,11 +24,9 @@ export interface AppConfig {
     bitrate: string;
     sampleRate: number;
     loudnormParams: string;
+    audioMode: string;
   };
-  youtubeTimestamps: boolean;
-  maxConcurrentJobs: number;
-  watermarkPath?: string;
-  watermarkOpacity: number;
+  embedChapters: boolean;
 }
 
 export interface RenderJob {
@@ -46,16 +43,28 @@ export interface RenderJob {
   timestamps: string[];
 }
 
-export type MediaSource = { type: 'files'; paths: string[] };
+export type MediaSource =
+  | { type: 'folder'; path: string }
+  | { type: 'files'; paths: string[] };
+
+export interface JobProgress {
+  index: number;
+  state: 'pending' | 'processing' | 'done' | 'error';
+  progressPercent: number;
+  currentStep: string;
+  name: string;
+  outputPath: string;
+  thumbnailPath?: string;
+}
 
 export interface PipelineProgress {
   total: number;
   completed: number;
-  jobs: RenderJob[];
+  jobs: JobProgress[];
 }
 
 export interface PipelineLog {
-  level: 'info' | 'error' | 'success';
+  level: 'info' | 'warn' | 'error' | 'success';
   message: string;
 }
 
@@ -71,4 +80,8 @@ export type PipelineEvent =
   | { type: 'Done'; data: PipelineDone }
   | { type: 'Cancelled'; data: string }
   | { type: 'Paused'; data?: undefined }
-  | { type: 'FatalError'; data: string };
+  | { type: 'FatalError'; data: string }
+  | {
+      type: 'Stats';
+      data: { speed: number; bitrateKbps: number; fps: number };
+    };

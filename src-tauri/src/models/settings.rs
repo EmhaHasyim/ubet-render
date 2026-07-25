@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+// NOTE: `deny_unknown_fields` is intentionally NOT used here, matching the
+// policy on `AppConfig` (see config.rs).  This allows forward compatibility —
+// when a future frontend version sends new fields, older backends can still
+// accept the IPC call and will simply ignore unknown fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverrideConfig {
@@ -13,12 +17,21 @@ pub struct OverrideConfig {
     pub output_prefix: Option<String>,
     pub maxrate: Option<String>,
     pub use_pingpong: Option<bool>,
-    pub youtube_timestamps: Option<bool>,
-    pub max_concurrent_jobs: Option<usize>,
-    pub watermark_path: Option<String>,
-    pub watermark_opacity: Option<f32>,
+    pub audio_mode: Option<String>,
+    pub embed_chapters: Option<bool>,
+    pub output_format: Option<String>,
+    /// When true (default), a codec-matched source is concatenated via the
+    /// concat demuxer with `-c copy` and the intermediate re-encode step is
+    /// bypassed. Set to false to always run the intermediate step (even on
+    /// matched codecs, e.g. when the user explicitly wants the visual filter
+    /// chain applied for the ping-pong mirror effect).
+    pub skip_intermediate_on_codec_match: Option<bool>,
 }
 
+// NOTE: `deny_unknown_fields` is intentionally NOT used here, matching the
+// policy on `AppConfig` and `OverrideConfig`.  This allows forward
+// compatibility — when a future frontend version sends new fields inside a
+// MediaSource payload, older backends can still deserialize it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum MediaSource {

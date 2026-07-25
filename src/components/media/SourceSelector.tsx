@@ -2,6 +2,7 @@ import { createSignal, For, Show } from 'solid-js';
 import { dirname } from '@tauri-apps/api/path';
 import { open } from '@tauri-apps/plugin-dialog';
 import { Icon } from '@iconify-icon/solid';
+import { ConfirmDialog } from '../ui/ConfirmDialog';
 
 interface SourceSelectorProps {
   label: string;
@@ -22,6 +23,7 @@ const colorClass = {
 
 export function SourceSelector(props: SourceSelectorProps) {
   const [lastDir, setLastDir] = createSignal<string>();
+  const [showClearConfirm, setShowClearConfirm] = createSignal(false);
 
   const fileName = (path: string) =>
     path.replace(/\\/g, '/').split('/').pop() || path;
@@ -87,7 +89,7 @@ export function SourceSelector(props: SourceSelectorProps) {
       <Show
         when={props.value.length > 0}
         fallback={
-          <div class="rounded-lg border border-base-300 bg-base-100 px-3 py-2 text-xs text-base-content/55">
+          <div class="rounded-lg border border-base-300 bg-base-100 px-3 py-2 text-xs text-base-content/60">
             {props.allowedExtensions.join(', ')}
           </div>
         }
@@ -99,8 +101,8 @@ export function SourceSelector(props: SourceSelectorProps) {
             </span>
             <button
               type="button"
-              class="btn btn-ghost btn-xs text-error"
-              onClick={() => props.onChange(null)}
+              class="btn btn-ghost btn-xs text-accent"
+              onClick={() => setShowClearConfirm(true)}
             >
               Clear
             </button>
@@ -109,7 +111,7 @@ export function SourceSelector(props: SourceSelectorProps) {
             <For each={props.value.slice(0, 8)}>
               {(file) => (
                 <div
-                  class="truncate rounded-md px-2 py-1 text-xs text-base-content/80"
+                  class="truncate rounded-md px-2 py-1 text-xs text-base-content/80 hover:bg-base-content/5 transition-colors"
                   title={file}
                 >
                   {fileName(file)}
@@ -117,13 +119,25 @@ export function SourceSelector(props: SourceSelectorProps) {
               )}
             </For>
             <Show when={props.value.length > 8}>
-              <div class="px-2 py-1 text-xs text-base-content/55">
+              <div class="px-2 py-1 text-xs text-base-content/60">
                 +{props.value.length - 8} more
               </div>
             </Show>
           </div>
         </div>
       </Show>
+
+      <ConfirmDialog
+        isOpen={showClearConfirm()}
+        title={`Clear ${props.label}`}
+        message={`Are you sure you want to clear all ${props.label.toLowerCase()}?`}
+        confirmLabel="Clear"
+        onConfirm={() => {
+          setShowClearConfirm(false);
+          props.onChange(null);
+        }}
+        onCancel={() => setShowClearConfirm(false)}
+      />
     </div>
   );
 }

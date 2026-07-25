@@ -4,7 +4,8 @@ const statusMap: Record<RenderJob['state'], { class: string; label: string }> =
   {
     pending: { class: 'badge-ghost', label: 'Pending' },
     processing: {
-      class: 'badge-info animate-pulse shadow-[0_0_8px_rgba(56,189,248,0.5)]',
+      class:
+        'badge-info motion-safe:animate-pulse shadow-[0_0_8px_color-mix(in_oklch,var(--color-info)_50%,transparent)]',
       label: 'Processing',
     },
     done: { class: 'badge-success', label: 'Done' },

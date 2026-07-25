@@ -7,30 +7,13 @@
     "core:default",
     "dialog:default",
     "notification:default",
-        {
-          "identifier": "shell:allow-execute",
-          "allow": [
-            {
-              "name": "ffmpeg",
-              "sidecar": true,
-              "args": true
-            },
-            {
-              "name": "binaries/ffmpeg",
-              "sidecar": true,
-              "args": true
-            },
-            {
-              "name": "ffprobe",
-              "sidecar": true,
-              "args": true
-            },
-            {
-              "name": "binaries/ffprobe",
-              "sidecar": true,
-              "args": true
-            }
-          ]
-        }
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-close",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-is-maximized",
+    "core:window:allow-set-fullscreen",
+    "core:window:allow-set-progress-bar"
   ]
 }

@@ -5,7 +5,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     video: './videos',
     audio: './audios',
     output: './outputs',
-    cache: '',
+    cache: './cache',
   },
   metadata: {
     channelPrefix: 'Ubet Render',
@@ -17,7 +17,6 @@ export const DEFAULT_CONFIG: AppConfig = {
   video: {
     bitrateTarget: '4000k',
     bitrateMax: '5000k',
-    fps: 30,
     encoder: 'av1_nvenc',
     preset: 'p6',
   },
@@ -27,12 +26,17 @@ export const DEFAULT_CONFIG: AppConfig = {
     bitrate: '192k',
     sampleRate: 44100,
     loudnormParams: 'I=-14:LRA=11:TP=-1',
+    audioMode: 'original',
   },
-  youtubeTimestamps: true,
-  maxConcurrentJobs: 1,
-  watermarkOpacity: 0.8,
+  embedChapters: true,
 };
 
+// IMPORTANT: These extension lists MUST stay in sync with the Rust constants
+// in `src-tauri/src/validation.rs` (VIDEO_EXTENSIONS / AUDIO_EXTENSIONS) and
+// `src-tauri/src/pipeline/source_scanner.rs`.
+// When adding or removing an extension here, mirror the change in the Rust side
+// so that frontend drag-and-drop filtering and backend directory scanning
+// agree on which files are eligible.
 export const VIDEO_EXTENSIONS = [
   '.mp4',
   '.mkv',

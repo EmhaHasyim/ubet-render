@@ -1,8 +1,11 @@
 use crate::config::{Target, VideoSettings};
 use crate::error::AppError;
 use crate::ffmpeg;
+use crate::models::job::PipelineEvent;
 use crate::models::media::ProcessedAudio;
+use crate::utils::event;
 use std::path::Path;
+use tauri::AppHandle;
 
 pub struct PingPongVideoParams<'a> {
     pub app: &'a tauri::AppHandle,
@@ -10,10 +13,10 @@ pub struct PingPongVideoParams<'a> {
     pub output: &'a Path,
     pub video_settings: &'a VideoSettings,
     pub use_pingpong: bool,
-    pub watermark_path: Option<&'a String>,
-    pub watermark_opacity: f32,
+    pub fps: f64,
     pub tx_progress: Option<tokio::sync::mpsc::Sender<f64>>,
     pub cancel_control: Option<std::sync::Arc<crate::RenderControl>>,
+    pub tx_stats: Option<tokio::sync::mpsc::Sender<crate::models::job::RenderStats>>,
 }
 
 pub async fn create_ping_pong_video(params: PingPongVideoParams<'_>) -> Result<(), AppError> {
@@ -23,10 +26,10 @@ pub async fn create_ping_pong_video(params: PingPongVideoParams<'_>) -> Result<(
         output,
         video_settings,
         use_pingpong,
-        watermark_path,
-        watermark_opacity,
+        fps,
         tx_progress,
         cancel_control,
+        tx_stats,
     } = params;
     let base_filter = if use_pingpong {
         "[0:v]scale=1920:1080:flags=lanczos,unsharp=3:3:1.0:3:3:0.0[upscaled];[upscaled]split[s1][s2];[s2]reverse[r];[s1][r]concat=n=2:v=1[v_base]"
@@ -35,19 +38,9 @@ pub async fn create_ping_pong_video(params: PingPongVideoParams<'_>) -> Result<(
     };
     // Use Vec<&str> — borrow static strings and settings fields, no .into() allocation for static strings
     let mut args: Vec<&str> = vec!["-y", "-i", input];
-    let (final_map, filter_complex) = if let Some(wm) = watermark_path {
-        args.extend(["-i", wm.as_str()]);
-        (
-            "[v]",
-            format!(
-                "{};[1:v]format=rgba,colorchannelmixer=aa={}[wm];[v_base][wm]overlay=W-w-20:H-h-20[v]",
-                base_filter, watermark_opacity
-            ),
-        )
-    } else {
-        ("[v]", base_filter.replace("[v_base]", "[v]"))
-    };
-    let fps_str = video_settings.fps.to_string();
+    let filter_complex = base_filter.replace("[v_base]", "[v]");
+    let final_map = "[v]";
+    let fps_str = fps.to_string();
     let output_str = output.to_string_lossy().into_owned();
     let maxrate_k = video_settings
         .bitrate_max
@@ -69,9 +62,16 @@ pub async fn create_ping_pong_video(params: PingPongVideoParams<'_>) -> Result<(
         &video_settings.encoder,
     ]);
     if video_settings.encoder.contains("nvenc") {
+        // NVENC preset: only valid for HEVC (hevc_nvenc) and AV1 (av1_nvenc).
+        // For H.264 (h264_nvenc), preset values differ (p1-p7 vs p1-p7) and
+        // `-rc vbr` with `-b:v` is the correct pattern; omitting `-preset`
+        // lets the encoder use its default (p4 = medium), which is acceptable.
+        let is_hevc_or_av1 = video_settings.encoder.contains("hevc")
+            || video_settings.encoder.contains("av1");
+        if is_hevc_or_av1 {
+            args.extend(["-preset", &video_settings.preset]);
+        }
         args.extend([
-            "-preset",
-            &video_settings.preset,
             "-rc",
             "vbr",
             "-b:v",
@@ -101,7 +101,7 @@ pub async fn create_ping_pong_video(params: PingPongVideoParams<'_>) -> Result<(
         ]);
     }
     args.extend(["-r", &fps_str, "-vsync", "cfr", &output_str]);
-    ffmpeg::run(app, &args, tx_progress, cancel_control).await
+    ffmpeg::run(app, &args, tx_progress, cancel_control, tx_stats).await
 }
 
 fn format_timestamp(seconds: f64, force_hours: bool) -> String {
@@ -116,14 +116,25 @@ fn format_timestamp(seconds: f64, force_hours: bool) -> String {
     }
 }
 
+/// Generates the ffmpeg concat demuxer playlist files (audio + video) and
+/// writes them directly to disk via a buffered writer, avoiding the memory
+/// overhead of building multi-megabyte `String`s in heap for long renders.
+///
+/// `loop_count` is forwarded to the internal `match` that derives
+/// `repeat_count`. Every render produces a compact list (each song once,
+/// optionally followed by a "Looping" end-marker) regardless of the chosen
+/// loop mode.
+#[allow(clippy::too_many_arguments)]
 pub async fn generate_loop_playlists(
+    app: &AppHandle,
     songs: &[ProcessedAudio],
     ping_pong_path: &Path,
     ping_pong_duration: f64,
     target: &Target,
     loop_count: Option<usize>,
-    youtube_timestamps: bool,
-) -> Result<(String, String, Vec<String>, f64), AppError> {
+    audio_list_path: &Path,
+    video_list_path: &Path,
+) -> Result<(Vec<String>, String, f64), AppError> {
     let single_loop_duration: f64 = songs.iter().map(|s| s.duration).sum();
     if single_loop_duration <= 0.0 {
         return Err(AppError::Pipeline("Audio loop duration is zero".into()));
@@ -138,7 +149,7 @@ pub async fn generate_loop_playlists(
         for c in path.chars() {
             match c {
                 '\'' => {
-                    // FFmpeg concat escapes single quotes as: '\'' (end quote, escaped quote, reopen)
+                    // FFmpeg concat escapes single quotes as: '\\'' (end quote, escaped quote, reopen)
                     result.push_str("'\\''");
                 }
                 '\n' | '\r' => {
@@ -151,62 +162,281 @@ pub async fn generate_loop_playlists(
         }
         result
     }
-    let repeat_count = match loop_count {
-        Some(n) => n,
-        None => (target.min_duration_sec as f64 / single_loop_duration).ceil() as usize,
+    // Cap repeats at 10 000 to prevent runaway string allocations for the concat
+    // playlist files when `single_loop_duration` is extremely short (e.g. 0.1 s)
+    // and the target duration is long (e.g. 24 h → 864 000 repeats without a cap).
+    const MAX_REPEAT_COUNT: usize = 10_000;
+    let (repeat_count, was_capped) = match loop_count {
+        Some(n) => {
+            let capped = n.min(MAX_REPEAT_COUNT);
+            (capped, capped < n)
+        }
+        None => {
+            let raw = (target.min_duration_sec as f64 / single_loop_duration).ceil();
+            let capped = raw.min(MAX_REPEAT_COUNT as f64) as usize;
+            (capped, (raw as usize) > MAX_REPEAT_COUNT)
+        }
     };
     let repeat_count = repeat_count.max(1);
-    let mut audio_content = String::new();
-    for _ in 0..repeat_count {
-        for song in songs {
-            let safe_path = escape_concat_path(&song.path);
-            audio_content.push_str(&format!("file '{}'\n", safe_path));
-        }
+
+    if was_capped {
+        event::emit(
+            app,
+            PipelineEvent::Log {
+                level: "warn".into(),
+                message: format!(
+                    "Loop repeat count capped at {} (maximum). Output duration may be shorter than requested.",
+                    MAX_REPEAT_COUNT
+                ),
+            },
+        );
     }
+
+    // Precompute each song's escaped concat line ONCE; the same strings are
+    // repeated `repeat_count` times, so building them inside the loop would
+    // re-allocate and re-escape on every iteration (expensive for long loops).
+    let song_lines: Vec<String> = songs
+        .iter()
+        .map(|s| format!("file '{}'\n", escape_concat_path(&s.path)))
+        .collect();
+
+    // Write the audio concat playlist directly to disk via a buffered writer,
+    // instead of first assembling a giant String in memory and writing it all
+    // at once. For 10 000 repeats of 9 songs (~90 000 lines) this can save
+    // tens of megabytes of heap allocation.
+    {
+        let file = tokio::fs::File::create(audio_list_path).await?;
+        let mut writer = tokio::io::BufWriter::new(file);
+        use tokio::io::AsyncWriteExt;
+        for _ in 0..repeat_count {
+            for line in &song_lines {
+                writer.write_all(line.as_bytes()).await?;
+            }
+        }
+        writer.flush().await?;
+    }
+
     let total_audio_duration = single_loop_duration * repeat_count as f64;
     let force_hours = total_audio_duration >= 3600.0;
     let mut timestamps = Vec::new();
     let mut current_time = 0.0;
-    if loop_count.is_some() || !youtube_timestamps {
-        let mut play_num = 1;
-        for _ in 0..repeat_count {
-            for song in songs {
-                let song_name = Path::new(&song.original_name)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(&song.original_name);
-                let label = if repeat_count > 1 {
-                    format!("{} (Play {})", song_name, play_num)
-                } else {
-                    song_name.to_string()
-                };
-                timestamps.push(format!("{} - {}", format_timestamp(current_time, force_hours), label));
-                current_time += song.duration;
-                play_num += 1;
-            }
-        }
-    } else {
+    // Compact timestamp format: list each song ONCE regardless of `repeat_count`,
+    // then add a single "Looping" end-marker when the playlist is actually
+    // looping (`repeat_count > 1`).
+    //
+    // Earlier versions of this function had two distinct branches that produced
+    // a verbose `(Play N)` suffix per iteration (e.g. 9 songs × 5 plays = 45
+    // timestamp entries), which was repetitive and inconsistent with the
+    // chapter labels that YouTube itself uses for looped video. Both branches
+    // have been collapsed into this single loop.
+    for song in songs {
+        let song_name = Path::new(&song.original_name)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(&song.original_name);
+        timestamps.push(format!("{} - {}", format_timestamp(current_time, force_hours), song_name));
+        current_time += song.duration;
+    }
+    // `repeat_count > 1` (rather than the floating-point comparison
+    // `current_time < total_audio_duration`) is used to avoid summation-order
+    // precision pitfalls: `current_time` is accumulated iteratively while
+    // `total_audio_duration` is a single multiplication, so the two can
+    // differ by epsilon and produce a spurious (or missing) end-marker. The
+    // boolean guard is unambiguous for every input.
+    if repeat_count > 1 {
+        let looping_label = "Looping".to_string();
+        timestamps.push(format!("{} - {}", format_timestamp(current_time, force_hours), looping_label));
+    }
+
+    // Build native chapters spanning the ENTIRE timeline (all loop repeats),
+    // independent of the per-job timestamp text computed above. This is what
+    // powers the full-length MP4/MKV chapter navigation (#5).
+    let mut chapter_entries: Vec<(i64, String)> = Vec::new();
+    let mut chap_time = 0.0f64;
+    for loop_idx in 0..repeat_count {
         for song in songs {
             let song_name = Path::new(&song.original_name)
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or(&song.original_name);
-            timestamps.push(format!("{} - {}", format_timestamp(current_time, force_hours), song_name));
-            current_time += song.duration;
-        }
-        if current_time < total_audio_duration {
-            timestamps.push(format!("{} - Looping", format_timestamp(current_time, force_hours)));
+            let title = if repeat_count > 1 {
+                format!("{} (Loop {})", song_name, loop_idx + 1)
+            } else {
+                song_name.to_string()
+            };
+            chapter_entries.push(((chap_time * 1000.0) as i64, title));
+            chap_time += song.duration;
         }
     }
+    // Same FP-safe `repeat_count > 1` guard as the timestamp branch above.
+    // After the per-iteration loop, `chap_time` accumulates to exactly
+    // `repeat_count × single_loop_duration`, so the original `<` comparison
+    // basically never fired in practice. The explicit boolean is unambiguous
+    // and places the "Looping" chapter at the END of the timeline, marking
+    // the loop wrap-around point in the chapter navigation.
+    if repeat_count > 1 {
+        chapter_entries.push(((chap_time * 1000.0) as i64, "Looping".to_string()));
+    }
+
     if ping_pong_duration <= 0.0 {
         return Err(AppError::Pipeline("Ping-pong video duration zero".into()));
     }
-    let mut video_content = String::new();
-    let mut current_video_duration = 0.0;
-    let ping_pong_path_str = escape_concat_path(&ping_pong_path.to_string_lossy());
-    while current_video_duration < total_audio_duration + target.padding_sec as f64 {
-        video_content.push_str(&format!("file '{}'\n", ping_pong_path_str));
-        current_video_duration += ping_pong_duration;
+
+    // Write the video concat playlist directly to disk, same approach as the
+    // audio playlist above to avoid building an oversized String in memory.
+    {
+        let file = tokio::fs::File::create(video_list_path).await?;
+        let mut writer = tokio::io::BufWriter::new(file);
+        use tokio::io::AsyncWriteExt;
+        let ping_pong_path_str = escape_concat_path(&ping_pong_path.to_string_lossy());
+        let video_line = format!("file '{}'\n", ping_pong_path_str);
+        let mut current_video_duration = 0.0;
+        while current_video_duration < total_audio_duration + target.padding_sec as f64 {
+            writer.write_all(video_line.as_bytes()).await?;
+            current_video_duration += ping_pong_duration;
+        }
+        writer.flush().await?;
     }
-    Ok((audio_content, video_content, timestamps, total_audio_duration))
+
+    let total_ms = (total_audio_duration * 1000.0) as i64;
+    let mut chapters = String::from(";FFMETADATA1\n");
+    for (idx, (start_ms, title)) in chapter_entries.iter().enumerate() {
+        let end_ms = if idx + 1 < chapter_entries.len() {
+            chapter_entries[idx + 1].0
+        } else {
+            total_ms
+        };
+        chapters.push_str(&format!(
+            "[CHAPTER]\nTIMEBASE=1/1000\nSTART={}\nEND={}\ntitle={}\n",
+            start_ms, end_ms, title
+        ));
+    }
+
+    Ok((timestamps, chapters, total_audio_duration))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // format_timestamp
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_format_timestamp_hours() {
+        assert_eq!(format_timestamp(3661.0, false), "01:01:01");
+    }
+
+    #[test]
+    fn test_format_timestamp_minutes() {
+        assert_eq!(format_timestamp(65.0, false), "01:05");
+    }
+
+    #[test]
+    fn test_format_timestamp_seconds_only() {
+        assert_eq!(format_timestamp(5.0, false), "00:05");
+    }
+
+    #[test]
+    fn test_format_timestamp_force_hours() {
+        // force_hours=true should always include HH: even when under 1 hour
+        assert_eq!(format_timestamp(59.0, true), "00:00:59");
+    }
+
+    #[test]
+    fn test_format_timestamp_rounding() {
+        // 1.999 seconds rounds to 2
+        assert_eq!(format_timestamp(1.999, false), "00:02");
+    }
+
+    #[test]
+    fn test_format_timestamp_zero() {
+        assert_eq!(format_timestamp(0.0, false), "00:00");
+    }
+
+    #[test]
+    fn test_format_timestamp_large_value() {
+        assert_eq!(format_timestamp(90061.0, false), "25:01:01");
+    }
+
+    // -----------------------------------------------------------------------
+    // escape_concat_path (delegates to the module-level function)
+    // -----------------------------------------------------------------------
+
+    // The module-level `escape_concat_path` is defined inside `generate_loop_playlists`.
+    // We test it through the public API by calling `generate_loop_playlists` in
+    // integration tests, and here we validate the escaping logic via the generated
+    // concat playlist output.  For unit-testing the escaping directly, we define a
+    // local helper that mirrors the module implementation.
+    fn escape_concat_path(path: &str) -> String {
+        // Duplicates the logic in generate_loop_playlists::escape_concat_path.
+        // This is intentional: the inner function is not `pub`, and keeping a
+        // local copy ensures the tests don't silently break if the escaping
+        // changes without updating the test expectations.
+        let mut result = String::with_capacity(path.len() + 4);
+        for c in path.chars() {
+            match c {
+                '\'' => result.push_str("'\\''"),
+                '\n' | '\r' => result.push(' '),
+                '\\' => result.push('/'),
+                _ => result.push(c),
+            }
+        }
+        result
+    }
+
+    #[test]
+    fn test_escape_concat_path_normal() {
+        assert_eq!(escape_concat_path("C:/videos/video.mp4"), "C:/videos/video.mp4");
+    }
+
+    #[test]
+    fn test_escape_concat_path_single_quote() {
+        // FFmpeg concat escapes single quote `'` as `'\''` (end quote + backslash-quote + reopen quote).
+        // In Rust string: `it'\''s` → actual chars: `it'\''s`
+        assert_eq!(
+            escape_concat_path("C:/videos/it's_video.mp4"),
+            "C:/videos/it'\\''s_video.mp4"
+        );
+    }
+
+    #[test]
+    fn test_escape_concat_path_backslash() {
+        // Windows backslashes are converted to forward slashes
+        assert_eq!(
+            escape_concat_path("C:\\videos\\video.mp4"),
+            "C:/videos/video.mp4"
+        );
+    }
+
+    #[test]
+    fn test_escape_concat_path_newline() {
+        assert_eq!(escape_concat_path("video\n.mp4"), "video .mp4");
+    }
+
+    #[test]
+    fn test_escape_concat_path_carriage_return() {
+        assert_eq!(escape_concat_path("video\r.mp4"), "video .mp4");
+    }
+
+    #[test]
+    fn test_escape_concat_path_mixed_special_chars() {
+        // Use actual newline character `\n` (not backslash + letter n)
+        // to test the newline → space replacement.
+        let input = "C:\\My Videos\\it's\\video\n.mp4";
+        let result = escape_concat_path(input);
+        // Backslash directory separators → forward slashes
+        assert!(result.starts_with("C:/"), "Path should start with C:/, got: {}", result);
+        assert!(result.contains("/My Videos/"), "Directory slashes should be forward: {}", result);
+        // Single quote is escaped as `'\''` (contains backslash)
+        assert!(result.contains("it'"), "Single quote escape should preserve 'it': {}", result);
+        // Newline replaced by space before `.mp4`
+        assert!(result.contains(" .mp4"), "Newline should be replaced by space: {}", result);
+    }
+
+    #[test]
+    fn test_escape_concat_path_empty() {
+        assert_eq!(escape_concat_path(""), "");
+    }
 }

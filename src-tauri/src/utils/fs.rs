@@ -2,6 +2,12 @@ use std::collections::HashSet;
 use std::hash::Hasher;
 use std::path::{Path, PathBuf};
 
+/// Shared temp directory for ubet-render (cache, thumbnails, logs).
+/// Returns `{TEMP}/ubet-render`.
+pub fn ubet_temp_dir() -> PathBuf {
+    std::env::temp_dir().join("ubet-render")
+}
+
 pub fn to_absolute(path: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()
@@ -12,24 +18,48 @@ pub fn to_absolute(path: &Path) -> PathBuf {
     }
 }
 
+/// Ensure a directory exists. `create_dir_all` is idempotent so the
+/// previous `try_exists` guard was removed — it added an unnecessary syscall
+/// without providing any correctness benefit.
 pub async fn ensure_dir(dir: &Path) -> Result<(), std::io::Error> {
-    if !tokio::fs::try_exists(dir).await.unwrap_or(false) {
-        tokio::fs::create_dir_all(dir).await?;
-    }
-    Ok(())
+    tokio::fs::create_dir_all(dir).await
 }
 
 pub async fn safe_delete(file: &Path) -> Result<(), std::io::Error> {
-    if tokio::fs::try_exists(file).await.unwrap_or(false) {
-        tokio::fs::remove_file(file).await?;
+    match tokio::fs::remove_file(file).await {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
     }
-    Ok(())
 }
 
+/// Hash input bytes to a 64-bit value using SipHash-1-3 (DefaultHasher).
+/// Suitable for bloom filters and quick lookups where collision probability
+/// is acceptable (< 0.0003 % for 10 000 entries).
 pub fn hash_path(data: &[u8]) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     hasher.write(data);
     hasher.finish()
+}
+
+/// Hash input bytes to a 128-bit value by combining two independent
+/// SipHash-1-3 outputs.  This provides ~2× the collision resistance of
+/// [`hash_path`] without pulling in a crypto dependency — sufficient for
+/// cache-key deduplication across hundreds of thousands of entries.
+pub fn hash_path128(data: &[u8]) -> u128 {
+    // First pass: hash the data as-is.
+    let mut h1 = std::collections::hash_map::DefaultHasher::new();
+    h1.write(data);
+    let hi = h1.finish() as u128;
+
+    // Second pass: prefix with a sentinel byte so the two hashes are
+    // statistically independent (different seeds via different input).
+    let mut h2 = std::collections::hash_map::DefaultHasher::new();
+    h2.write(&[0x5A]);
+    h2.write(data);
+    let lo = h2.finish() as u128;
+
+    (hi << 64) | lo
 }
 
 pub async fn scan_files(dir: &Path, extensions: &[&str]) -> Vec<String> {
@@ -102,13 +132,18 @@ impl PartialOrd for Chunk<'_> {
 }
 
 fn compare_string_case_insensitive(s1: &str, s2: &str) -> std::cmp::Ordering {
-    let mut chars1 = s1.chars().flat_map(|c| c.to_lowercase());
-    let mut chars2 = s2.chars().flat_map(|c| c.to_lowercase());
+    // `to_ascii_lowercase()` returns a `char` with no heap allocation, unlike
+    // `to_lowercase()` which can allocate for Unicode case mappings. Filenames
+    // are overwhelmingly ASCII, so this is both cheaper and sufficient here.
+    let mut chars1 = s1.chars();
+    let mut chars2 = s2.chars();
 
     loop {
         match (chars1.next(), chars2.next()) {
             (Some(c1), Some(c2)) => {
-                match c1.cmp(&c2) {
+                let lower1 = c1.to_ascii_lowercase();
+                let lower2 = c2.to_ascii_lowercase();
+                match lower1.cmp(&lower2) {
                     std::cmp::Ordering::Equal => {}
                     non_eq => return non_eq,
                 }
@@ -154,8 +189,8 @@ impl<'a> Iterator for Chunks<'a> {
 
         let slice = &self.s[start..end];
         if is_digit {
-            if let Ok(num) = slice.parse::<u128>() {
-                Some(Chunk::Num(num, slice))
+            if let Ok(num) = slice.parse::<u64>() {
+                Some(Chunk::Num(num as u128, slice))
             } else {
                 Some(Chunk::Str(slice))
             }
@@ -188,6 +223,76 @@ pub fn compare_natural(a: &str, b: &str) -> std::cmp::Ordering {
 mod tests {
     use super::*;
 
+    // -----------------------------------------------------------------------
+    // to_absolute
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_to_absolute_absolute_path() {
+        let p = Path::new("C:\\Windows");
+        let result = to_absolute(p);
+        assert!(result.is_absolute());
+    }
+
+    #[test]
+    fn test_to_absolute_relative_path() {
+        let p = Path::new("./videos");
+        let result = to_absolute(p);
+        assert!(result.is_absolute());
+        assert!(result.to_string_lossy().contains("videos"));
+    }
+
+    // -----------------------------------------------------------------------
+    // hash_path
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_hash_path_deterministic() {
+        let data = b"test_data_for_hashing";
+        let h1 = hash_path(data);
+        let h2 = hash_path(data);
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn test_hash_path_different_inputs() {
+        let h1 = hash_path(b"input_a");
+        let h2 = hash_path(b"input_b");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn test_hash_path_empty() {
+        let h = hash_path(b"");
+        // Should not panic, returns some u64
+        assert_eq!(h, hash_path(b""));
+    }
+
+    // -----------------------------------------------------------------------
+    // safe_delete (sync variant — tests the match logic directly)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_safe_delete_non_existent() {
+        let p = Path::new("C:\\this_path_should_not_exist_12345abcde.tmp");
+        // Deleting a non-existent file should return Ok (NotFound is ignored)
+        let result = safe_delete(p).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_safe_delete_existing() {
+        let tmp = std::env::temp_dir().join("ubet_safe_delete_test.tmp");
+        let _ = tokio::fs::write(&tmp, b"test").await;
+        let result = safe_delete(&tmp).await;
+        assert!(result.is_ok());
+        assert!(!tmp.exists());
+    }
+
+    // -----------------------------------------------------------------------
+    // compare_natural (existing)
+    // -----------------------------------------------------------------------
+
     #[test]
     fn test_compare_natural() {
         let mut files = vec![
@@ -210,4 +315,3 @@ mod tests {
         );
     }
 }
-

@@ -1,48 +1,46 @@
 import { Show } from 'solid-js';
 import { Icon } from '@iconify-icon/solid';
 import { open } from '@tauri-apps/plugin-dialog';
+import { invoke } from '@tauri-apps/api/core';
 import { AUDIO_EXTENSIONS, VIDEO_EXTENSIONS } from '../../core/config';
 import type { MediaSource } from '../../core/types';
 import { SourceSelector } from '../media/SourceSelector';
+import { TAURI_COMMANDS } from '../../core/constants';
+import { usePipelineContext } from '../../context/pipeline';
+import { normalizeBitrate } from '../../core/estimate';
 
-interface SettingsCardProps {
-  videoSource: MediaSource | null;
-  audioSource: MediaSource | null;
-  outputPath: string;
-  songsPerPlaylist: number;
-  minDurationHours: number;
-  loopMode: 'duration' | 'count';
-  loopCount: number;
-  codec: string;
-  av1Supported: boolean;
-  outputPrefix: string;
-  maxrate: string;
-  usePingpong: boolean;
-  youtubeTimestamps: boolean;
-  onVideoChange: (src: MediaSource | null) => void;
-  onAudioChange: (src: MediaSource | null) => void;
-  onOutputChange: (path: string) => void;
-  onSongsPerPlaylistChange: (val: number) => void;
-  onMinDurationHoursChange: (val: number) => void;
-  onLoopModeChange: (val: 'duration' | 'count') => void;
-  onLoopCountChange: (val: number) => void;
-  onCodecChange: (codec: string) => void;
-  onOutputPrefixChange: (prefix: string) => void;
-  onMaxrateChange: (val: string) => void;
-  onUsePingpongChange: (val: boolean) => void;
-  onYoutubeTimestampsChange: (val: boolean) => void;
-  maxConcurrentJobs: number;
-  watermarkPath?: string;
-  watermarkOpacity: number;
-  onMaxConcurrentJobsChange: (val: number) => void;
-  onWatermarkPathChange: (path?: string) => void;
-  onWatermarkOpacityChange: (val: number) => void;
-  dragHover?: 'video' | 'audio' | 'output' | null;
+// Stable empty array so the binding doesn't allocate a fresh `[]` on every
+// reactive re-evaluation when the source is unset.
+const EMPTY_PATHS: string[] = [];
+
+/** Extract file paths from a MediaSource regardless of variant. */
+function getSourcePaths(source: MediaSource | null): string[] {
+  if (source?.type === 'files') return source.paths;
+  if (source?.type === 'folder') return [source.path];
+  return EMPTY_PATHS;
 }
 
-export function SettingsCard(props: SettingsCardProps) {
+const revealFile = async (path: string) => {
+  try {
+    await invoke(TAURI_COMMANDS.revealInExplorer, { path });
+  } catch (e) {
+    console.error('Failed to reveal folder:', e);
+  }
+};
+
+/** Shared collapse-title classes for consistent section headers. */
+const collapseTitleClass =
+  'text-sm font-semibold uppercase tracking-wider text-base-content/60 flex items-center gap-2';
+
+/** Shared collapse-content grid that mirrors the outer grid columns. */
+const collapseContentGrid =
+  'grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 pt-1';
+
+export function SettingsCard() {
+  const pipeline = usePipelineContext();
+
   const dropState = (target: 'video' | 'audio' | 'output') =>
-    props.dragHover === target
+    pipeline.dragHover() === target
       ? 'ring-2 ring-primary ring-offset-2 ring-offset-base-200'
       : '';
 
@@ -50,13 +48,14 @@ export function SettingsCard(props: SettingsCardProps) {
     const selected = await open({
       directory: true,
       multiple: false,
-      defaultPath: props.outputPath || undefined,
+      defaultPath: pipeline.outputPath() || undefined,
     });
-    if (selected) props.onOutputChange(selected as string);
+    if (selected) pipeline.setOutputPath(selected as string);
   };
 
   return (
     <section class="panel overflow-hidden">
+      {/* ---- Sources header ---- */}
       <div class="border-b border-base-300 px-4 py-4 sm:px-5">
         <div class="flex flex-col gap-1">
           <h3 class="text-base font-semibold">Sources and output</h3>
@@ -66,14 +65,15 @@ export function SettingsCard(props: SettingsCardProps) {
         </div>
       </div>
 
+      {/* ---- Source selectors ---- */}
       <div class="grid grid-cols-1 gap-4 p-4 sm:p-5 lg:grid-cols-3">
         <div id="video-dropzone" class={`rounded-lg ${dropState('video')}`}>
           <SourceSelector
             label="Master video"
             allowedExtensions={VIDEO_EXTENSIONS}
-            value={props.videoSource?.paths || []}
+            value={getSourcePaths(pipeline.videoSource())}
             onChange={(paths) =>
-              props.onVideoChange(paths ? { type: 'files', paths } : null)
+              pipeline.setVideoSource(paths ? { type: 'files', paths } : null)
             }
             icon="lucide:video"
             themeColor="primary"
@@ -84,9 +84,9 @@ export function SettingsCard(props: SettingsCardProps) {
           <SourceSelector
             label="Audio tracks"
             allowedExtensions={AUDIO_EXTENSIONS}
-            value={props.audioSource?.paths || []}
+            value={getSourcePaths(pipeline.audioSource())}
             onChange={(paths) =>
-              props.onAudioChange(paths ? { type: 'files', paths } : null)
+              pipeline.setAudioSource(paths ? { type: 'files', paths } : null)
             }
             icon="lucide:music-2"
             themeColor="secondary"
@@ -111,15 +111,17 @@ export function SettingsCard(props: SettingsCardProps) {
                 Output folder
               </span>
               <span class="mt-1 block text-xs text-base-content/60">
-                {props.outputPath ? 'Destination selected' : 'Choose folder'}
+                {pipeline.outputPath()
+                  ? 'Destination selected'
+                  : 'Choose folder'}
               </span>
             </span>
           </button>
 
           <Show
-            when={props.outputPath}
+            when={pipeline.outputPath()}
             fallback={
-              <div class="rounded-lg border border-base-300 bg-base-100 px-3 py-2 text-xs text-base-content/55">
+              <div class="rounded-lg border border-base-300 bg-base-100 px-3 py-2 text-xs text-base-content/60">
                 No folder selected.
               </div>
             }
@@ -130,16 +132,25 @@ export function SettingsCard(props: SettingsCardProps) {
               </p>
               <p
                 class="truncate text-xs text-base-content/80"
-                title={props.outputPath}
+                title={pipeline.outputPath()}
               >
-                {props.outputPath}
+                {pipeline.outputPath()}
               </p>
+              <button
+                type="button"
+                class="btn btn-outline btn-xs mt-2"
+                onClick={() => revealFile(pipeline.outputPath()!)}
+              >
+                <Icon icon="lucide:folder-open" width="14" height="14" />
+                Open in Explorer
+              </button>
             </div>
           </Show>
         </div>
       </div>
 
-      <div class="border-t border-base-300 bg-base-100/60 p-4 sm:p-5">
+      {/* ---- Render options ---- */}
+      <div class="border-t border-base-300 bg-base-200 p-4 sm:p-5">
         <div class="mb-4 flex items-center gap-2">
           <Icon
             icon="lucide:sliders-horizontal"
@@ -151,255 +162,314 @@ export function SettingsCard(props: SettingsCardProps) {
         </div>
 
         <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          <label class="form-control">
-            <span class="label py-1">
-              <span class="label-text font-medium">Songs per video</span>
-            </span>
-            <input
-              type="number"
-              class="input input-bordered w-full bg-base-100"
-              min="1"
-              max="50"
-              value={props.songsPerPlaylist}
-              onInput={(e) =>
-                props.onSongsPerPlaylistChange(
-                  Math.max(1, parseInt(e.currentTarget.value) || 1),
-                )
-              }
-            />
-          </label>
-
-          <div class="form-control">
-            <span class="label py-1">
-              <span class="label-text font-medium">Repeat mode</span>
-            </span>
-            <div class="join w-full">
-              <input
-                type="radio"
-                class="btn join-item btn-outline flex-1"
-                name="loopMode"
-                value="duration"
-                checked={props.loopMode === 'duration'}
-                onClick={() => props.onLoopModeChange('duration')}
-                aria-label="By Duration"
-              />
-              <input
-                type="radio"
-                class="btn join-item btn-outline flex-1"
-                name="loopMode"
-                value="count"
-                checked={props.loopMode === 'count'}
-                onClick={() => props.onLoopModeChange('count')}
-                aria-label="By Count"
-              />
+          {/* ════ Audio ════ */}
+          <div class="col-span-full collapse collapse-arrow bg-base-100 rounded-lg border border-base-300">
+            <input type="checkbox" checked />
+            <div class={collapseTitleClass}>
+              <Icon icon="lucide:music" width="14" height="14" />
+              Audio
             </div>
-          </div>
-
-          <Show when={props.loopMode === 'duration'}>
-            <label class="form-control">
-              <span class="label py-1">
-                <span class="label-text font-medium">Minimum duration</span>
-              </span>
-              <label class="input input-bordered flex items-center gap-2 bg-base-100">
+            <div class={collapseContentGrid}>
+              <label class="form-control">
+                <span class="label py-1">
+                  <span class="label-text font-medium">Songs per video</span>
+                </span>
                 <input
                   type="number"
-                  class="grow"
-                  min="0.1"
-                  step="0.1"
-                  value={props.minDurationHours}
+                  class="input input-bordered w-full bg-base-100"
+                  min="1"
+                  max="50"
+                  value={pipeline.songsPerPlaylist()}
                   onInput={(e) =>
-                    props.onMinDurationHoursChange(
-                      Math.max(0.1, parseFloat(e.currentTarget.value) || 0.1),
+                    pipeline.setSongsPerPlaylist(
+                      Math.max(1, parseInt(e.currentTarget.value) || 1),
                     )
                   }
                 />
-                <span class="text-sm text-base-content/55">hours</span>
               </label>
-            </label>
-          </Show>
 
-          <Show when={props.loopMode === 'count'}>
-            <label class="form-control">
-              <span class="label py-1">
-                <span class="label-text font-medium">Repeat count</span>
-              </span>
-              <input
-                type="number"
-                class="input input-bordered w-full bg-base-100"
-                min="1"
-                max="100"
-                value={props.loopCount}
-                onInput={(e) =>
-                  props.onLoopCountChange(
-                    Math.max(1, Math.min(100, parseInt(e.currentTarget.value) || 1)),
-                  )
-                }
-              />
-            </label>
-          </Show>
+              <div class="fieldset p-0">
+                <span class="fieldset-legend">Audio mode</span>
+                <div class="join w-full">
+                  <input
+                    type="radio"
+                    class="btn join-item btn-outline flex-1"
+                    name="audioMode"
+                    value="original"
+                    checked={pipeline.audioMode() === 'original'}
+                    onChange={() => pipeline.setAudioMode('original')}
+                    aria-label="Original"
+                  />
+                  <input
+                    type="radio"
+                    class="btn join-item btn-outline flex-1"
+                    name="audioMode"
+                    value="normalize"
+                    checked={pipeline.audioMode() === 'normalize'}
+                    onChange={() => pipeline.setAudioMode('normalize')}
+                    aria-label="Normalize"
+                  />
+                </div>
+                <span class="fieldset-label">
+                  Original keeps audio faithful; Normalize applies YouTube Music
+                  loudness.
+                </span>
+              </div>
+            </div>
+          </div>
 
-          <label class="form-control">
-            <span class="label py-1">
-              <span class="label-text font-medium">Video codec</span>
-            </span>
-            <select
-              class="select select-bordered w-full bg-base-100"
-              value={props.codec}
-              onChange={(e) => props.onCodecChange(e.currentTarget.value)}
-            >
-              <option value="h264">H.264</option>
-              <option value="h265">H.265</option>
-              <option value="av1" disabled={!props.av1Supported}>
-                AV1 {!props.av1Supported ? '(unsupported)' : ''}
-              </option>
-            </select>
-          </label>
-
-          <label class="form-control">
-            <span class="label py-1">
-              <span class="label-text font-medium">Max bitrate</span>
-            </span>
-            <input
-              type="text"
-              class="input input-bordered w-full bg-base-100"
-              placeholder="4000k"
-              value={props.maxrate}
-              onInput={(e) => props.onMaxrateChange(e.currentTarget.value)}
-            />
-          </label>
-
-          <label class="form-control">
-            <span class="label py-1">
-              <span class="label-text font-medium">Output prefix</span>
-            </span>
-            <input
-              type="text"
-              class="input input-bordered w-full bg-base-100"
-              placeholder="Ubet Render"
-              value={props.outputPrefix}
-              onInput={(e) => props.onOutputPrefixChange(e.currentTarget.value)}
-            />
-          </label>
-
-          <label class="flex min-h-20 items-center justify-between gap-4 rounded-lg border border-base-300 bg-base-100 px-4 py-3">
-            <span>
-              <span class="block text-sm font-medium">Ping-pong effect</span>
-              <span class="block text-xs text-base-content/55">
-                Mirrored loop
-              </span>
-            </span>
-            <input
-              type="checkbox"
-              class="toggle toggle-primary"
-              checked={props.usePingpong}
-              onChange={(e) =>
-                props.onUsePingpongChange(e.currentTarget.checked)
-              }
-            />
-          </label>
-
-          <label class="flex min-h-20 items-center justify-between gap-4 rounded-lg border border-base-300 bg-base-100 px-4 py-3">
-            <span>
-              <span class="block text-sm font-medium">YouTube Timestamps</span>
-              <span class="block text-xs text-base-content/55">
-                Looping disatukan
-              </span>
-            </span>
-            <input
-              type="checkbox"
-              class="toggle toggle-primary"
-              checked={props.youtubeTimestamps}
-              onChange={(e) =>
-                props.onYoutubeTimestampsChange(e.currentTarget.checked)
-              }
-            />
-          </label>
-        </div>
-
-        <div class="mt-6 mb-4 flex items-center gap-2">
-          <Icon icon="lucide:cpu" class="text-primary" width="18" height="18" />
-          <h3 class="text-base font-semibold">Advanced</h3>
-        </div>
-
-        <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          <label class="form-control">
-            <span class="label py-1">
-              <span class="label-text font-medium">Max Concurrent Jobs</span>
-            </span>
-            <input
-              type="number"
-              class="input input-bordered w-full bg-base-100"
-              min="1"
-              max="16"
-              value={props.maxConcurrentJobs}
-              onInput={(e) =>
-                props.onMaxConcurrentJobsChange(
-                  Math.max(1, parseInt(e.currentTarget.value) || 1),
-                )
-              }
-            />
-          </label>
-
-          <label class="form-control">
-            <span class="label py-1">
-              <span class="label-text font-medium">Watermark Path (PNG)</span>
-            </span>
-            <div class="flex gap-2">
-              <input
-                type="text"
-                class="input input-bordered w-full bg-base-100"
-                placeholder="Optional watermark..."
-                value={props.watermarkPath || ''}
-                readOnly
-              />
-              <button
-                type="button"
-                class="btn btn-outline"
-                onClick={async () => {
-                  const selected = await open({
-                    filters: [{ name: 'Image', extensions: ['png'] }],
-                    multiple: false,
-                  });
-                  if (selected) props.onWatermarkPathChange(selected as string);
-                }}
-              >
-                Browse
-              </button>
-              <Show when={props.watermarkPath}>
-                <button
-                  type="button"
-                  class="btn btn-ghost px-2 text-error"
-                  onClick={() => props.onWatermarkPathChange(undefined)}
+          {/* ════ Video & Encoding ════ */}
+          <div class="col-span-full collapse collapse-arrow bg-base-100 rounded-lg border border-base-300">
+            <input type="checkbox" checked />
+            <div class={collapseTitleClass}>
+              <Icon icon="lucide:monitor" width="14" height="14" />
+              Video & Encoding
+            </div>
+            <div class={collapseContentGrid}>
+              <label class="form-control">
+                <span class="label py-1">
+                  <span class="label-text font-medium">Video codec</span>
+                </span>
+                <select
+                  class="select select-bordered w-full bg-base-100"
+                  value={pipeline.codec()}
+                  onChange={(e) => pipeline.setCodec(e.currentTarget.value)}
                 >
-                  <Icon icon="lucide:x" width="18" height="18" />
-                </button>
+                  <option value="h264">H.264</option>
+                  <option value="h265">H.265</option>
+                  <option value="av1" disabled={!pipeline.av1Supported()}>
+                    AV1 {!pipeline.av1Supported() ? '(unsupported)' : ''}
+                  </option>
+                </select>
+              </label>
+
+              <label class="form-control">
+                <span class="label py-1">
+                  <span class="label-text font-medium">Max bitrate</span>
+                </span>
+                <input
+                  type="text"
+                  inputmode="numeric"
+                  class={`input input-bordered w-full bg-base-100 ${!pipeline.maxrateValid() ? 'input-error' : ''}`}
+                  placeholder="5000"
+                  value={pipeline.maxrate()}
+                  onInput={(e) => pipeline.setMaxrate(e.currentTarget.value)}
+                  onBlur={(e) => {
+                    const normalized = normalizeBitrate(e.currentTarget.value);
+                    if (normalized !== e.currentTarget.value) {
+                      pipeline.setMaxrate(normalized);
+                    }
+                  }}
+                  aria-invalid={!pipeline.maxrateValid()}
+                />
+                <Show when={!pipeline.maxrateValid()}>
+                  <span class="mt-1 text-xs text-error">
+                    Enter a number between 100 and 50000 (e.g. 5000).
+                  </span>
+                </Show>
+              </label>
+
+              <div class="fieldset p-0">
+                <span class="fieldset-legend">Output format</span>
+                <div class="join w-full">
+                  <input
+                    type="radio"
+                    class="btn join-item btn-outline flex-1"
+                    name="outputFormat"
+                    value="mp4"
+                    checked={pipeline.outputFormat() === 'mp4'}
+                    onChange={() => pipeline.setOutputFormat('mp4')}
+                    aria-label="MP4"
+                  />
+                  <input
+                    type="radio"
+                    class="btn join-item btn-outline flex-1"
+                    name="outputFormat"
+                    value="mkv"
+                    checked={pipeline.outputFormat() === 'mkv'}
+                    onChange={() => pipeline.setOutputFormat('mkv')}
+                    aria-label="MKV"
+                  />
+                </div>
+                <span class="fieldset-label">
+                  MP4 for widest compatibility; MKV for AV1 and best player
+                  support.
+                </span>
+              </div>
+
+              <label class="form-control">
+                <span class="label py-1">
+                  <span class="label-text font-medium">Output prefix</span>
+                </span>
+                <input
+                  type="text"
+                  class="input input-bordered w-full bg-base-100"
+                  placeholder="Ubet Render"
+                  value={pipeline.outputPrefix()}
+                  onInput={(e) =>
+                    pipeline.setOutputPrefix(e.currentTarget.value)
+                  }
+                />
+              </label>
+            </div>
+          </div>
+
+          {/* ════ Looping ════ */}
+          <div class="col-span-full collapse collapse-arrow bg-base-100 rounded-lg border border-base-300">
+            <input type="checkbox" checked />
+            <div class={collapseTitleClass}>
+              <Icon icon="lucide:repeat-2" width="14" height="14" />
+              Looping
+            </div>
+            <div class={collapseContentGrid}>
+              <div class="fieldset p-0">
+                <span class="fieldset-legend">Repeat mode</span>
+                <div class="join w-full">
+                  <input
+                    type="radio"
+                    class="btn join-item btn-outline flex-1"
+                    name="loopMode"
+                    value="duration"
+                    checked={pipeline.loopMode() === 'duration'}
+                    onChange={() => pipeline.setLoopMode('duration')}
+                    aria-label="By Duration"
+                  />
+                  <input
+                    type="radio"
+                    class="btn join-item btn-outline flex-1"
+                    name="loopMode"
+                    value="count"
+                    checked={pipeline.loopMode() === 'count'}
+                    onChange={() => pipeline.setLoopMode('count')}
+                    aria-label="By Count"
+                  />
+                </div>
+              </div>
+
+              <Show when={pipeline.loopMode() === 'duration'}>
+                <label class="form-control">
+                  <span class="label py-1">
+                    <span class="label-text font-medium">Minimum duration</span>
+                  </span>
+                  <label class="input input-bordered flex items-center gap-2 bg-base-100">
+                    <input
+                      type="number"
+                      class="grow"
+                      min="0.1"
+                      step="0.1"
+                      value={pipeline.minDurationHours()}
+                      onInput={(e) =>
+                        pipeline.setMinDurationHours(
+                          Math.max(
+                            0.1,
+                            parseFloat(e.currentTarget.value) || 0.1,
+                          ),
+                        )
+                      }
+                    />
+                    <span class="text-sm text-base-content/60">hours</span>
+                  </label>
+                </label>
+              </Show>
+
+              <Show when={pipeline.loopMode() === 'count'}>
+                <label class="form-control">
+                  <span class="label py-1">
+                    <span class="label-text font-medium">Repeat count</span>
+                  </span>
+                  <input
+                    type="number"
+                    class="input input-bordered w-full bg-base-100"
+                    min="1"
+                    max="100"
+                    value={pipeline.loopCount()}
+                    onInput={(e) =>
+                      pipeline.setLoopCount(
+                        Math.max(
+                          1,
+                          Math.min(100, parseInt(e.currentTarget.value) || 1),
+                        ),
+                      )
+                    }
+                  />
+                </label>
               </Show>
             </div>
-          </label>
+          </div>
 
-          <label class="form-control">
-            <span class="label py-1">
-              <span class="label-text font-medium">Watermark Opacity</span>
-            </span>
-            <label class="input input-bordered flex items-center gap-2 bg-base-100">
-              <input
-                type="number"
-                class="grow"
-                min="0"
-                max="1.0"
-                step="0.1"
-                value={props.watermarkOpacity}
-                onInput={(e) =>
-                  props.onWatermarkOpacityChange(
-                    Math.max(
-                      0,
-                      Math.min(1.0, parseFloat(e.currentTarget.value) || 0.8),
-                    ),
-                  )
-                }
-              />
-            </label>
-          </label>
+          {/* ════ Features ════ */}
+          <div class="col-span-full collapse collapse-arrow bg-base-100 rounded-lg border border-base-300">
+            <input type="checkbox" checked />
+            <div class={collapseTitleClass}>
+              <Icon icon="lucide:sparkles" width="14" height="14" />
+              Features
+            </div>
+            <div class={collapseContentGrid}>
+              <label class="flex min-h-20 items-center justify-between gap-4 rounded-lg border border-base-300 bg-base-100 px-4 py-3">
+                <span>
+                  <span class="block text-sm font-medium">
+                    Ping-pong effect
+                  </span>
+                  <span class="block text-xs text-base-content/60">
+                    Mirrored loop
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  class="toggle toggle-primary"
+                  checked={pipeline.usePingpong()}
+                  onChange={(e) =>
+                    pipeline.setUsePingpong(e.currentTarget.checked)
+                  }
+                />
+              </label>
+
+              <label class="flex min-h-20 items-center justify-between gap-4 rounded-lg border border-base-300 bg-base-100 px-4 py-3">
+                <span>
+                  <span class="block text-sm font-medium">Embed chapters</span>
+                  <span class="block text-xs text-base-content/60">
+                    Native MP4/MKV chapters
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  class="toggle toggle-primary"
+                  checked={pipeline.embedChapters()}
+                  onChange={(e) =>
+                    pipeline.setEmbedChapters(e.currentTarget.checked)
+                  }
+                />
+              </label>
+
+              <label
+                class="flex min-h-20 items-center justify-between gap-4 rounded-lg border-2 border-primary/30 bg-primary/5 px-4 py-3"
+                data-testid="zero-reencode-toggle"
+                title="When ON, the intermediate re-encode step is skipped and the source video is muxed with the audio track via -c copy. Best when source codec already matches the target. If codecs truly differ, FFmpeg will surface a clear error instead of silently re-encoding."
+              >
+                <span>
+                  <span class="block text-sm font-semibold text-primary">
+                    Skip re-encode (zero-reencode / stream copy)
+                  </span>
+                  <span class="block text-xs text-base-content/70">
+                    Bypass the intermediate re-encode completely. Overrides
+                    ping-pong and codec checks. Recommended when source codec
+                    already matches target.
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  class="toggle toggle-primary"
+                  checked={pipeline.skipIntermediateOnCodecMatch()}
+                  onChange={(e) =>
+                    pipeline.setSkipIntermediateOnCodecMatch(
+                      e.currentTarget.checked,
+                    )
+                  }
+                  aria-label="Skip re-encode (zero-reencode / stream copy)"
+                />
+              </label>
+            </div>
+          </div>
         </div>
       </div>
     </section>

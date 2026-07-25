@@ -12,12 +12,11 @@ mod validation;
 
 use commands::{
     hardware,
-    pipeline::{cancel_render, pause_render, resume_render, start_render},
+    opener::{reveal_in_explorer},
+    pipeline::{cancel_render, pause_render, resume_render, save_config, start_render},
 };
-use std::path::Path;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
 };
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
@@ -25,73 +24,83 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Manager, WindowEvent,
 };
-use tokio::sync::Notify;
+use tokio::sync::watch;
 
 pub struct RenderControl {
-    cancel_notify: Notify,
-    pause_notify: Notify,
-    resume_notify: Notify,
-    cancelled: AtomicBool,
-    paused: AtomicBool,
+    cancel_tx: watch::Sender<bool>,
+    cancel_rx: watch::Receiver<bool>,
+    pause_tx: watch::Sender<bool>,
+    pause_rx: watch::Receiver<bool>,
 }
 
 impl RenderControl {
     pub fn new() -> Self {
-        Self {
-            cancel_notify: Notify::new(),
-            pause_notify: Notify::new(),
-            resume_notify: Notify::new(),
-            cancelled: AtomicBool::new(false),
-            paused: AtomicBool::new(false),
-        }
+        let (cancel_tx, cancel_rx) = watch::channel(false);
+        let (pause_tx, pause_rx) = watch::channel(false);
+        Self { cancel_tx, cancel_rx, pause_tx, pause_rx }
     }
 
-    pub fn cancel_notify(&self) -> &Notify {
-        &self.cancel_notify
+    /// Returns a clone of the cancel receiver so external code can wait for
+    /// cancellation without holding a borrow on `RenderControl`. The returned
+    /// receiver sees the latest value (cancelled or not).
+    pub fn subscribe_cancel(&self) -> watch::Receiver<bool> {
+        self.cancel_rx.clone()
     }
 
-    pub fn pause_notify(&self) -> &Notify {
-        &self.pause_notify
-    }
-
-    pub fn resume_notify(&self) -> &Notify {
-        &self.resume_notify
+    /// Returns a clone of the pause receiver so external code can wait for
+    /// pause/resume toggles. The returned receiver sees the latest value.
+    pub fn subscribe_pause(&self) -> watch::Receiver<bool> {
+        self.pause_rx.clone()
     }
 
     pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::SeqCst);
-        self.cancel_notify.notify_waiters();
+        let _ = self.cancel_tx.send(true);
     }
 
     pub fn pause(&self) {
-        self.paused.store(true, Ordering::SeqCst);
-        self.pause_notify.notify_waiters();
+        let _ = self.pause_tx.send(true);
     }
 
-    pub fn resume(&self) {
-        self.paused.store(false, Ordering::SeqCst);
-        self.resume_notify.notify_waiters();
+    /// Resumes the pipeline by setting paused state to `false`. Does nothing
+    /// if the pipeline was not paused. Returns `true` when the state actually
+    /// changed (i.e. the pipeline was paused and is now resumed).
+    pub fn resume(&self) -> bool {
+        self.pause_tx.send_if_modified(|paused| {
+            if *paused {
+                *paused = false;
+                true
+            } else {
+                false
+            }
+        })
     }
 
     pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::SeqCst)
+        *self.cancel_rx.borrow()
     }
 
     pub fn is_paused(&self) -> bool {
-        self.paused.load(Ordering::SeqCst)
+        *self.pause_rx.borrow()
     }
 
+    /// Waits until the pipeline is either resumed (paused becomes false) or
+    /// cancelled (cancelled becomes true). Uses `watch::Receiver::changed()`
+    /// which only resolves on actual value transitions — unlike `Notify` it
+    /// cannot spuriously resolve from a stale prior notification.
     pub async fn wait_for_resume(&self) {
+        let mut cancel_rx = self.cancel_rx.clone();
+        let mut pause_rx = self.pause_rx.clone();
         loop {
-            if self.cancelled.load(Ordering::Acquire) {
+            if *cancel_rx.borrow() {
                 return;
             }
-            if !self.paused.load(Ordering::Acquire) {
+            if !*pause_rx.borrow() {
                 return;
             }
+            // Wait for either cancel or pause to change value
             tokio::select! {
-                _ = self.resume_notify.notified() => {}
-                _ = self.cancel_notify.notified() => {}
+                _ = cancel_rx.changed() => {}
+                _ = pause_rx.changed() => {}
             }
         }
     }
@@ -107,11 +116,79 @@ pub struct RenderState {
     pub control: Mutex<Option<Arc<RenderControl>>>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_render_control_new_is_not_cancelled() {
+        let rc = RenderControl::new();
+        assert!(!rc.is_cancelled());
+    }
+
+    #[test]
+    fn test_render_control_new_is_not_paused() {
+        let rc = RenderControl::new();
+        assert!(!rc.is_paused());
+    }
+
+    #[test]
+    fn test_render_control_cancel() {
+        let rc = RenderControl::new();
+        assert!(!rc.is_cancelled());
+        rc.cancel();
+        assert!(rc.is_cancelled());
+    }
+
+    #[test]
+    fn test_render_control_pause() {
+        let rc = RenderControl::new();
+        assert!(!rc.is_paused());
+        rc.pause();
+        assert!(rc.is_paused());
+    }
+
+    #[test]
+    fn test_render_control_resume_returns_true_when_paused() {
+        let rc = RenderControl::new();
+        rc.pause();
+        assert!(rc.is_paused());
+        let resumed = rc.resume();
+        assert!(resumed);
+        assert!(!rc.is_paused());
+    }
+
+    #[test]
+    fn test_render_control_resume_returns_false_when_not_paused() {
+        let rc = RenderControl::new();
+        let resumed = rc.resume();
+        assert!(!resumed);
+        assert!(!rc.is_paused());
+    }
+
+    #[test]
+    fn test_render_control_subscribe_cancel() {
+        let rc = RenderControl::new();
+        let rx = rc.subscribe_cancel();
+        assert!(!*rx.borrow());
+        rc.cancel();
+        assert!(*rx.borrow());
+    }
+
+    #[test]
+    fn test_render_control_default() {
+        let rc = RenderControl::default();
+        assert!(!rc.is_cancelled());
+        assert!(!rc.is_paused());
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(|app| {
             app.manage(RenderState {
                 control: Mutex::new(None),
@@ -155,7 +232,12 @@ fn main() {
             }
             tray.build(app)?;
 
-            let config = config::AppConfig::default();
+            // Initialize the file logger so all pipeline events are captured
+            // on disk even when the frontend is not visible.
+            utils::logger::init_logger();
+            utils::logger::log_line("=== Application started ===");
+
+            let config = config::AppConfig::load();
             std::fs::create_dir_all(&config.directories.cache).ok();
             std::fs::create_dir_all(&config.directories.output).ok();
             std::fs::create_dir_all(&config.directories.video).ok();
@@ -163,12 +245,12 @@ fn main() {
 
             {
                 let scope: FsScope = app.asset_protocol_scope();
-                let abs_output = crate::utils::fs::to_absolute(Path::new(&config.directories.output));
-                let _ = scope.allow_directory(&abs_output, true);
-                let abs_cache = crate::utils::fs::to_absolute(Path::new(&config.directories.cache));
-                let _ = scope.allow_directory(&abs_cache, true);
-                let temp_dir = std::env::temp_dir().join("ubet-render");
-                let _ = scope.allow_directory(&temp_dir, true);
+                // Only expose the thumbnails subdir to the webview via the asset
+                // protocol. Output files and the processing cache stay outside
+                // webview reach (hardens against a webview compromise reading
+                // processed media or written outputs).
+                let thumb_dir = utils::fs::ubet_temp_dir().join("thumbnails");
+                let _ = scope.allow_directory(&thumb_dir, true);
             }
 
             Ok(())
@@ -183,6 +265,8 @@ fn main() {
             cancel_render,
             pause_render,
             resume_render,
+            save_config,
+            reveal_in_explorer,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
