@@ -22,6 +22,7 @@ import {
 } from './components';
 import { PipelineProvider, type Pipeline } from './context/pipeline';
 import { FatalScreen } from './components/ui/FatalScreen';
+import { ToastViewport } from './components/ui/Toast';
 import logoUrl from './assets/logo.svg';
 
 type TabId = 'renderer' | 'activity';
@@ -170,12 +171,27 @@ function Dashboard(props: { pipeline: Pipeline }) {
                 setActiveTab((prev) =>
                   prev === 'renderer' ? 'activity' : 'renderer',
                 );
+                // Move keyboard focus to the newly selected tab so that
+                // subsequent arrow-key presses / Enter activation land on it.
+                // requestAnimationFrame is used instead of queueMicrotask
+                // because SolidJS flushes via its own microtask cycle and
+                // there is no guarantee the [aria-selected="true"] attribute
+                // has committed to the DOM by the time a microtask runs.
+                // One rAF tick is reliably after SolidJS's commit and
+                // matches the browser's natural paint timing.
+                requestAnimationFrame(() => {
+                  const el = document.querySelector(
+                    'button[role="tab"][aria-selected="true"]',
+                  ) as HTMLElement | null;
+                  el?.focus();
+                });
               }
             }}
           >
             <button
               role="tab"
               aria-selected={activeTab() === 'renderer'}
+              tabIndex={activeTab() === 'renderer' ? 0 : -1}
               class={tabClass('renderer')}
               onClick={() => setActiveTab('renderer')}
             >
@@ -185,6 +201,7 @@ function Dashboard(props: { pipeline: Pipeline }) {
             <button
               role="tab"
               aria-selected={activeTab() === 'activity'}
+              tabIndex={activeTab() === 'activity' ? 0 : -1}
               class={tabClass('activity')}
               onClick={() => setActiveTab('activity')}
             >
@@ -342,6 +359,8 @@ export default function App() {
       <PipelineBridge>
         {(pipeline) => <Dashboard pipeline={pipeline} />}
       </PipelineBridge>
+      {/* Global toast viewport — renders via portal so it overlays every tab. */}
+      <ToastViewport />
     </ErrorBoundary>
   );
 }

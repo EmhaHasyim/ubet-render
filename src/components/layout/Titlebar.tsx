@@ -1,14 +1,28 @@
 import { createSignal, onCleanup, onMount, Show } from 'solid-js';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Icon } from '@iconify-icon/solid';
+import {
+  applyTheme,
+  loadTheme,
+  toggleTheme,
+  type Theme,
+} from '../../core/theme';
 
 export function Titlebar() {
   const [isMaximized, setIsMaximized] = createSignal(false);
   const [showContextMenu, setShowContextMenu] = createSignal(false);
+  const [theme, setTheme] = createSignal<Theme>('business');
   let contextMenuRef: HTMLDivElement | undefined;
   const appWindow = getCurrentWindow();
 
   onMount(async () => {
+    // Load saved theme preference (or smart default from OS) and apply it
+    // to <html data-theme="..."> immediately. Doing this on mount keeps the
+    // initial paint theme-correct without waiting for the toggle click.
+    const initial = loadTheme();
+    setTheme(initial);
+    applyTheme(initial);
+
     setIsMaximized(await appWindow.isMaximized());
 
     // ── Resize listener (debounced) ──────────────────────
@@ -47,6 +61,11 @@ export function Titlebar() {
   const handleMinimize = () => appWindow.minimize();
   const handleToggleMaximize = () => appWindow.toggleMaximize();
   const handleClose = () => appWindow.hide();
+  const handleToggleTheme = () => {
+    const next = toggleTheme(theme());
+    setTheme(next);
+    applyTheme(next);
+  };
 
   // Double-click titlebar → toggle maximize (Windows convention)
   const handleDoubleClick = () => appWindow.toggleMaximize();
@@ -81,6 +100,27 @@ export function Titlebar() {
 
       {/* Right: window controls */}
       <div class="flex h-full" data-tauri-drag-region={false}>
+        <button
+          type="button"
+          class="flex h-full w-12 items-center justify-center text-base-content/50 transition-colors hover:bg-base-200 hover:text-base-content"
+          onClick={handleToggleTheme}
+          aria-label={
+            theme() === 'business'
+              ? 'Switch to light theme'
+              : 'Switch to dark theme'
+          }
+          title={
+            theme() === 'business'
+              ? 'Switch to light theme'
+              : 'Switch to dark theme'
+          }
+        >
+          <Icon
+            icon={theme() === 'business' ? 'lucide:sun' : 'lucide:moon'}
+            width="14"
+            height="14"
+          />
+        </button>
         <button
           type="button"
           class="flex h-full w-12 items-center justify-center text-base-content/50 transition-colors hover:bg-base-200 hover:text-base-content"

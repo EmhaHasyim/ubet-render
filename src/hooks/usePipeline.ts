@@ -11,6 +11,7 @@ import { usePersistedConfig } from './usePersistedConfig';
 import { useHardware } from './useHardware';
 import { useDragDrop } from './useDragDrop';
 import { notify } from '../core/notify';
+import { showToast } from '../core/toast';
 import { RingBuffer } from '../core/ringBuffer';
 import { EtaCalculator } from '../core/eta';
 import { buildAppConfig } from '../core/buildAppConfig';
@@ -71,6 +72,11 @@ export function usePipeline() {
   let unlistenGuard = false;
   let startProgress = 0;
   let startTime = 0;
+  // Reconciliation timer for {@link pauseRender}: if the backend never
+  // acknowledges the pause (IPC delay / drop / webview suspend), the UI
+  // would otherwise be stuck in `running=true, paused=true` indefinitely.
+  // The handlePaused event handler clears this timer once the ack arrives.
+  let pauseReconcileTimer: ReturnType<typeof setTimeout> | null = null;
 
   const logBuffer = new RingBuffer<string>(MAX_LOGS);
   const etaCalculator = new EtaCalculator(MAX_ETA_SAMPLES);
@@ -154,11 +160,20 @@ export function usePipeline() {
   };
 
   const handlePaused = () => {
+    // Backend acknowledged the pause \u2014 cancel the reconciliation timer.
+    if (pauseReconcileTimer !== null) {
+      clearTimeout(pauseReconcileTimer);
+      pauseReconcileTimer = null;
+    }
     appendLog('[INFO] Render paused');
     setRunning(false);
     setPaused(true);
     setOverallEta('Paused');
-    notify('Render paused', 'Render is paused.');
+    // Use the in-app toast only; the OS notification was removed in
+    // v0.2.3 because we don't know whether the user has the window
+    // visible or minimised to the tray when pause is acked, and a
+    // double-notify is noisy.
+    showToast('Render paused', { variant: 'info', ttl: 2500 });
   };
 
   const handleCancelled = (message: string) => {
@@ -288,6 +303,7 @@ export function usePipeline() {
   };
 
   const cancelRender = async () => {
+    cancelPauseReconcile();
     try {
       await invoke(TAURI_COMMANDS.cancelRender);
     } catch (err) {
@@ -301,15 +317,38 @@ export function usePipeline() {
     }
   };
 
+  const cancelPauseReconcile = (): void => {
+    if (pauseReconcileTimer !== null) {
+      clearTimeout(pauseReconcileTimer);
+      pauseReconcileTimer = null;
+    }
+  };
+
   const pauseRender = async () => {
+    cancelPauseReconcile();
     try {
       setPaused(true);
       setOverallEta('Pausing...');
+      // If the backend never acknowledges the pause (e.g. webview suspended,
+      // IPC dropped), auto-reconcile the UI back to "running" after 5s so the
+      // user is not stranded in a half-paused state. handlePaused cancels
+      // this timer the moment the ack arrives.
+      pauseReconcileTimer = setTimeout(() => {
+        pauseReconcileTimer = null;
+        if (running() && paused()) {
+          log.warn('Pause ack timeout; reverting paused state');
+          setPaused(false);
+          setOverallEta('Pause timeout');
+          showToast('Pause timed out', { variant: 'warning', ttl: 5000 });
+        }
+      }, 5000);
       await invoke(TAURI_COMMANDS.pauseRender);
     } catch (err) {
+      cancelPauseReconcile();
       log.error('Pause render failed:', err);
       appendLog(`Error: Failed to pause render - ${String(err)}`);
       setPaused(false);
+      setOverallEta('Failed');
     }
   };
 
@@ -392,6 +431,7 @@ export function usePipeline() {
 
   onCleanup(() => {
     safeUnlisten();
+    cancelPauseReconcile();
   });
 
   return {

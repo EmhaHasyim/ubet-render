@@ -1,5 +1,6 @@
 import { Show, createSignal, createEffect } from 'solid-js';
 import { Icon } from '@iconify-icon/solid';
+import { rememberFocus } from '../../core/focus';
 
 export function AppHeader(props: {
   running: boolean;
@@ -13,20 +14,37 @@ export function AppHeader(props: {
 }) {
   const [showCancelDialog, setShowCancelDialog] = createSignal(false);
   let cancelModalRef: HTMLDialogElement | undefined;
+  // Captured in the show-effect below; consumed by the close-handler so the
+  // opener button (or whatever had focus before showModal()) regains focus
+  // after the dialog closes — standard a11y pattern.
+  let returnFocus: (() => void) | null = null;
 
   createEffect(() => {
     // Show the dialog as soon as it enters the DOM; close on signal toggle.
     if (showCancelDialog() && cancelModalRef) {
+      returnFocus = rememberFocus();
       cancelModalRef.showModal();
     } else if (!showCancelDialog() && cancelModalRef?.open) {
       cancelModalRef.close();
     }
   });
 
+  // Close event: only restore focus. The "Keep rendering" backdrop button
+  // flips showCancelDialog=false via <form method="dialog">, so this
+  // fires for both ESC and backdrop click.
+  const restoreFocusOnClose = () => {
+    returnFocus?.();
+    returnFocus = null;
+  };
+
   const confirmCancel = () => {
+    // Self-close so the dialog's `close` event fires and restoreFocusOnClose
+    // runs to restore the opener's focus. We don't need to call returnFocus
+    // imperatively here — the close event flushes synchronously per the
+    // dialog polyfill and the handler covers it.
+    if (cancelModalRef?.open) cancelModalRef.close();
+    setShowCancelDialog(false);
     props.onCancel();
-    if (cancelModalRef) cancelModalRef.close();
-    // 'close' event → onClose → setShowCancelDialog(false) already handles cleanup
   };
 
   return (
@@ -134,7 +152,13 @@ export function AppHeader(props: {
         <dialog
           ref={cancelModalRef}
           class="modal modal-bottom sm:modal-middle"
-          onClose={() => setShowCancelDialog(false)}
+          onClose={() => {
+            setShowCancelDialog(false);
+            // Restore focus to whatever element was active before the modal
+            // opened — prevents screen readers and keyboard users from being
+            // stranded at <body> after dismissing the dialog.
+            restoreFocusOnClose();
+          }}
         >
           <div class="modal-box rounded-lg border border-error/20 bg-base-100">
             <h3 class="flex items-center gap-2 text-lg font-semibold text-error">

@@ -1,7 +1,11 @@
 @import 'tailwindcss';
 
 @plugin "daisyui" {
-  themes: business --default;
+  /* `business` = dark mode (cyan/rose/lime accents on neutral base).
+     `light` = hi-contrast day mode, used by the toggle in Titlebar. */
+  themes:
+    business --default,
+    light;
 }
 
 /* ── Theme tokens ───────────────────────────────────────────── */

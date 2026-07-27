@@ -131,4 +131,55 @@ describe('usePipeline', () => {
     await p.startRender();
     expect(p.running()).toBe(true);
   });
+
+  // v0.2.3 fix: if the backend's `Paused` event never arrives after
+  // `pause_render` succeeded (IPC dropped, webview suspended), the reconcile
+  // timer must revert `paused=true` back to `paused=false` so the user is not
+  // stranded in a half-paused state.
+  it('auto-reconciles paused state when backend never acks', async () => {
+    vi.useFakeTimers();
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const mockInvoke = invoke as unknown as ReturnType<typeof vi.fn>;
+      mockInvoke.mockImplementation(async (cmd: string) => {
+        if (cmd === 'detect_hardware') {
+          return {
+            cpuName: 'CPU',
+            gpuName: 'GPU',
+            ramGb: 16,
+            av1Supported: true,
+          };
+        }
+        // `pause_render` returns successfully but NO pipeline-event with
+        // `type: Paused` ever arrives → simulates an IPC drop.
+        return undefined;
+      });
+
+      const { ref: p } = mountRenderedHook(() => usePipeline());
+      p.setVideoSource({ type: 'files', paths: ['/v.mp4'] });
+      p.setAudioSource({ type: 'files', paths: ['/a.mp3'] });
+      p.setOutputPath('/o');
+
+      await vi.waitFor(() => expect(p.hardwareInfo()).not.toBeNull());
+
+      await p.startRender();
+      expect(p.running()).toBe(true);
+
+      // Fire-and-forget pause. The async function awaits invoke so we need
+      // to flush microtasks/timers before checking the state.
+      void p.pauseRender();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(p.paused()).toBe(true);
+
+      // 5 seconds pass without the Paused event arriving.
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(p.paused()).toBe(false);
+      expect(p.overallEta()).toBe('Pause timeout');
+      // `running()` should still be true — the UI reverts to "rendering".
+      expect(p.running()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
