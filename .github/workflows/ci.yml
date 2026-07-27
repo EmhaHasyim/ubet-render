@@ -1,4 +1,6 @@
-name: CIon:
+name: CI
+
+on:
   push:
     branches: [main, dev]
   pull_request:
