@@ -89,10 +89,16 @@ describe('notify', () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     await expect(notify('Title', 'Body')).resolves.toBeUndefined();
-    expect(consoleSpy).toHaveBeenCalledWith(
-      'Notification failed:',
-      expect.any(Error),
-    );
+    // The shared `logger.ts` formatter concatenates arguments into a single
+    // line (with timestamp + context prefixes) before calling
+    // `console.error`, so the spy sees a single string argument rather
+    // than the two-arg call site form. Asserting on substring + Error
+    // reference via the call's safeStringify output keeps the contract
+    // ("a failure was logged with the original Error captured") without
+    // coupling to the internal formatting style.
+    const calls = consoleSpy.mock.calls.flat().join('\n');
+    expect(calls).toContain('Notification failed');
+    expect(calls.toLowerCase()).toContain('send failed');
 
     consoleSpy.mockRestore();
   });

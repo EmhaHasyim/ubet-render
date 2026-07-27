@@ -22,6 +22,7 @@ import {
 } from './components';
 import { PipelineProvider, type Pipeline } from './context/pipeline';
 import { FatalScreen } from './components/ui/FatalScreen';
+import { ShortcutsDialog } from './components/ui/ShortcutsDialog';
 import { ToastViewport } from './components/ui/Toast';
 import logoUrl from './assets/logo.svg';
 
@@ -336,7 +337,10 @@ function Dashboard(props: { pipeline: Pipeline }) {
                     </span>
                   </div>
                   <div class="min-h-0 flex-1 overflow-auto p-3 custom-scrollbar">
-                    <JobTable jobs={pipeline.jobs()} />
+                    <JobTable
+                      jobs={pipeline.jobs()}
+                      onRetry={pipeline.retryJob ?? undefined}
+                    />
                   </div>
                 </section>
 
@@ -359,8 +363,35 @@ export default function App() {
       <PipelineBridge>
         {(pipeline) => <Dashboard pipeline={pipeline} />}
       </PipelineBridge>
+      {/* Global shortcuts dialog — mounted as a top-level component so
+          the F1 hotkey works regardless of which sub-tree has focus. */}
+      <ShortcutsDialogBridge />
       {/* Global toast viewport — renders via portal so it overlays every tab. */}
       <ToastViewport />
     </ErrorBoundary>
   );
+}
+
+/**
+ * Local bridge component so the ShortcutsDialog lives inside the same
+ * root as `Dashboard` but its `isOpen` signal does not bleed into the
+ * `pipeline` prop tree. Re-using `Dashboard`'s hook is overkill — the
+ * dialog only needs a single boolean (`isOpen`).
+ */
+function ShortcutsDialogBridge() {
+  const [isOpen, setIsOpen] = createSignal(false);
+  // Listen at the window level so F1 works regardless of which element
+  // currently has focus, including inside form inputs (where browser
+  // default F1 help page would otherwise activate).
+  onMount(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'F1') {
+        e.preventDefault();
+        setIsOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    onCleanup(() => window.removeEventListener('keydown', handler));
+  });
+  return <ShortcutsDialog isOpen={isOpen()} onClose={() => setIsOpen(false)} />;
 }

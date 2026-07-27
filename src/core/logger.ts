@@ -12,10 +12,15 @@
  * backend log to disk):
  *   `[2026-07-25 14:23:01.234] [usePipeline] Hardware detection failed`
  *
- * Future work: a `log_to_file` Tauri command can be invoked from the
- * `dispatch` step without changing any call-site signature. Until then,
- * the logger routes only to the browser console.
+ * Each logged line is also pushed to a small in-memory queue and flushed
+ * to the backend `log_to_file` command on a 500 ms debounce. The flush
+ * is fire-and-forget — if the IPC channel is unavailable (tests, browser
+ * dev mode) the line still appears in the browser console because the
+ * console dispatch is synchronous and happens first.
  */
+
+import { invoke } from '@tauri-apps/api/core';
+import { TAURI_COMMANDS } from './constants';
 
 type Level = 'debug' | 'info' | 'warn' | 'error';
 
@@ -25,6 +30,57 @@ export interface Logger {
   warn(...args: unknown[]): void;
   error(...args: unknown[]): void;
 }
+
+// ---- File sink batching ------------------------------------------------
+
+interface FrontendLogEntry {
+  level: Level;
+  context: string;
+  message: string;
+}
+
+/** Max ms to wait before flushing buffered entries — coalesces high
+ *  frequency log traffic (e.g. during busy FFmpeg progress streams). */
+const BATCH_FLUSH_DELAY = 500;
+
+/** Cap-driven early flush: prevents the buffer from growing unboundedly
+ *  if logs arrive faster than the debounce timer can fire. */
+const BATCH_MAX_SIZE = 100;
+
+const logBatch: FrontendLogEntry[] = [];
+let pendingFlush: ReturnType<typeof setTimeout> | null = null;
+
+const flushBatch = (): void => {
+  if (logBatch.length === 0) return;
+  const batch = logBatch.splice(0, logBatch.length);
+  // Fire-and-forget: a failed IPC call must NOT abort the user-facing
+  // console dispatch that already happened synchronously above this
+  // function. The IP / WebView will surface the line regardless.
+  invoke(TAURI_COMMANDS.logToFile, { entries: batch }).catch(() => {});
+};
+
+const scheduleFlush = (): void => {
+  if (pendingFlush !== null) return;
+  pendingFlush = setTimeout(() => {
+    pendingFlush = null;
+    flushBatch();
+  }, BATCH_FLUSH_DELAY);
+};
+
+const dispatchToFile = (
+  level: Level,
+  context: string,
+  message: string,
+): void => {
+  logBatch.push({ level, context, message });
+  if (logBatch.length >= BATCH_MAX_SIZE) {
+    flushBatch();
+  } else {
+    scheduleFlush();
+  }
+};
+
+// ---- Formatting helpers ----------------------------------------------
 
 function safeStringify(value: unknown): string {
   if (typeof value === 'string') return value;
@@ -38,17 +94,21 @@ function safeStringify(value: unknown): string {
   }
 }
 
+// Hoisted to module scope so they're allocated once. (Was previously
+// recreated on every `formatTimestamp()` call — flagged by
+// `unicorn/consistent-function-scoping`.)
+const pad2 = (n: number): string => String(n).padStart(2, '0');
+const pad3 = (n: number): string => String(n).padStart(3, '0');
+
 function formatTimestamp(): string {
   // Local time, fixed-width precision so a `tail -f` of both frontend
   // console lines and the backend render log lines up by clock.
   // Mirrors `chrono::Utc::now().format("%H:%M:%S%.3f")` in
   // `src-tauri/src/utils/logger.rs::log_line`.
   const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const padMs = (n: number) => String(n).padStart(3, '0');
   return (
-    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
-    `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${padMs(d.getMilliseconds())}`
+    `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ` +
+    `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}.${pad3(d.getMilliseconds())}`
   );
 }
 
@@ -74,10 +134,12 @@ export function createLogger(context: string): Logger {
     }
 
     const line = `[${formatTimestamp()}] [${context}] ${messageParts.join(' ')}`;
-    // This module IS the abstraction; using bare `console` here
-    // deliberately bypasses any recursive logger invocation. Future
-    // swap to a file sink happens entirely inside this function.
+    // Sync console dispatch is the user-facing fallback that MUST run
+    // first so the line is visible regardless of IPC availability.
     (console as Record<Level, (...a: unknown[]) => void>)[level](line);
+
+    // Forward to the persistent backend file sink (debounced, best-effort).
+    dispatchToFile(level, context, messageParts.join(' '));
   };
 
   return {

@@ -1,6 +1,8 @@
 export { OverallProgress } from './ui/OverallProgress';
 export { HardwareInfo } from './ui/HardwareInfo';
 export { ConfirmDialog } from './ui/ConfirmDialog';
+export { ShortcutsDialog } from './ui/ShortcutsDialog';
+export { ToastViewport } from './ui/Toast';
 export { AppHeader } from './layout/AppHeader';
 export { Titlebar } from './layout/Titlebar';
 export { SettingsCard } from './layout/SettingsCard';

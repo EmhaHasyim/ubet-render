@@ -62,4 +62,73 @@ the SolidJS dashboard and improves keyboard/screen-reader ergonomics.
 
 ---
 
+## [0.2.4] — 2026-07-27
+
+**Stability & observability release.** The frontend polish of 0.2.3 holds;
+this release tightens the feedback loops (toast coverage, frontend
+persistence, log filtering) and exposes the keyboard shortcuts dialog so
+new users can discover the existing window controls.
+
+### Added
+
+- **Frontend logs persisted to disk.** New `log_to_file` Tauri command in
+  `src-tauri/src/commands/logger.rs` accepts batched `FrontendLogEntry`
+  payloads and appends them to the same `{TEMP}/ubet-render/logs/render_*.log`
+  file the backend uses. Frontend-side errors and warnings are now
+  inspectable after the webview is closed. Coalesced via a 500 ms debounce
+  in `src/core/logger.ts` with a 100-entry cap-driven early flush so busy
+  FFmpeg progress doesn't flood IPC.
+- **Wider toast coverage in `usePipeline`.** Eight additional `showToast`
+  call sites — hardware detection fallback (warning), drag-and-drop
+  unavailability (info), bitrate validation on Start (warning),
+  `handleDone` success vs warning completion, `handleFatalError` (sticky
+  error), start-error catch, pause-error catch, and the debounced
+  save-config IPC failure (info).
+- **Job retry button.** Each row in `JobTable` whose `state === 'error'`
+  now shows a `lucide:rotate-cw` retry button with `aria-label` per row.
+  Wired through `usePipeline.retryJob`, which validates the render
+  preconditions first and surfaces a toast when retry is impossible
+  (already running, or paths unset).
+- **LogViewer filter & search.** New header in `LogViewer.tsx` hosts
+  three level chips (Info / Warn / Error) and a substring search input.
+  The chip activation state mirrors the colour coding of `LogLine.tsx`
+  via a shared `parseLevel` helper exported from
+  `src/core/logLevels.ts`. The count badge toggles between the raw total
+  and a `X / Y` format when filtering is active; an extra empty state
+  ("No log lines match the current filter") is shown when filters narrow
+  to zero rows.
+- **F1 keyboard shortcuts dialog.** New `src/components/ui/ShortcutsDialog.tsx`
+  modal — built on the same `<dialog>` + `rememberFocus` + `onClose`
+  pattern as the existing `ConfirmDialog` — documents the global
+  shortcuts registered in `App.tsx` (Ctrl+W, F11, Ctrl+Shift+M, Ctrl+1/2)
+  plus the new F1 help hotkey itself. Bindings live in a
+  `ShortcutsDialogBridge` component so the hotkey works regardless of
+  which sub-tree has focus.
+
+### Changed
+
+- **Pause optimistic-state reconciliation** (from 0.2.3) was previously
+  silent except for the timeout warning toast. The new `retryJob` guard
+  path uses the same toast idiom to surface "Cannot retry" / "Already
+  rendering" dead-click feedback.
+- **LogViewer virtual scroll reset** now tracks filter/search inputs
+  rather than the filtered memo, so rapidly arriving raw log lines
+  don't yank the user back to the top mid-inspection.
+- **README test command** updated from `bun test` to `bun run test` with
+  a callout explaining that bare `bun test` activates Bun's built-in
+  test runner (different API surface than Vitest).
+
+### Fixed
+
+- **notify.test.ts line-92 assertion** was pre-existing: the test
+  assumed `log.error(msg, err)` would reach `console.error` with two
+  args, but `logger.ts` concatenates into a single prefixed line. The
+  assertion now checks that the formatted line contains both substrings.
+- **`ShortcutsDialog` dead/risky code removed** — auto-dismissing
+  sticky toasts via `querySelectorAll` and a stray `void dismissToast`
+  placeholder are gone; rendering switched to idiomatic SolidJS `<For>`
+  in place of `.map`.
+
+---
+
 ## [0.2.2] — 2026-07-27

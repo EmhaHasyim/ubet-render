@@ -12,6 +12,7 @@ mod validation;
 
 use commands::{
     hardware,
+    logger::log_to_file,
     opener::{reveal_in_explorer},
     pipeline::{cancel_render, pause_render, resume_render, save_config, start_render},
 };
@@ -267,6 +268,7 @@ fn main() {
             resume_render,
             save_config,
             reveal_in_explorer,
+            log_to_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

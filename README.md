@@ -260,10 +260,16 @@ prints it on exit. The README intentionally avoids hard-coding the number so
 it does not drift as soon as a new test is added.
 
 ```bash
-bun test                 # Run all tests
-bun test --watch         # Watch mode
-bun test src/core/persisted.test.ts  # Single file
+bun run test             # Run all tests (≈95 tests, Vitest + jsdom)
+bun run test --watch     # Watch mode
+bun run test src/core/persisted.test.ts  # Single file
 ```
+
+> **Important:** Use `bun run test` (which executes the `vitest run` script
+> in `package.json`), **not** the bare `bun test`. The latter activates
+> Bun's built-in test runner (a different API surface — `describe`/`it`/
+> `vi.mock`/jsdom polyfills) and produces confusing errors like
+> `ReferenceError: document is not defined`.
 
 ---
 

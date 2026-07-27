@@ -25,6 +25,7 @@ export function createMockPipeline(overrides?: Partial<Pipeline>): Pipeline {
     resumeRender: async () => {},
     cancelRender: async () => {},
     pauseRender: async () => {},
+    retryJob: async () => {},
     videoSource: () => null,
     audioSource: () => null,
     outputPath: () => '',

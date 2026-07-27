@@ -17,7 +17,17 @@ const revealFile = async (path: string) => {
   }
 };
 
-export function JobTable(props: { jobs: JobProgress[] }) {
+export function JobTable(props: {
+  jobs: JobProgress[];
+  /**
+   * Optional retry handler invoked per failed-job row. When provided,
+   * an additional action button appears next to "Reveal in folder" for
+   * jobs whose `state === 'error'`. Until the backend supports per-job
+   * requeue (a v0.3+ change), the handler triggers a full resume from
+   * the on-disk state file.
+   */
+  onRetry?: () => void;
+}) {
   return (
     <Show
       when={props.jobs.length > 0}
@@ -113,19 +123,37 @@ export function JobTable(props: { jobs: JobProgress[] }) {
                       </div>
                     </td>
                     <td>
-                      <button
-                        type="button"
-                        class="btn btn-ghost btn-xs"
-                        title="Reveal in folder"
-                        disabled={job().state !== 'done'}
-                        onClick={() => revealFile(job().outputPath)}
-                      >
-                        <Icon
-                          icon="lucide:folder-open"
-                          width="16"
-                          height="16"
-                        />
-                      </button>
+                      <div class="flex items-center gap-1">
+                        <button
+                          type="button"
+                          class="btn btn-ghost btn-xs"
+                          title="Reveal in folder"
+                          aria-label={`Reveal ${job().name} in folder`}
+                          disabled={job().state !== 'done'}
+                          onClick={() => revealFile(job().outputPath)}
+                        >
+                          <Icon
+                            icon="lucide:folder-open"
+                            width="16"
+                            height="16"
+                          />
+                        </button>
+                        <Show when={props.onRetry && job().state === 'error'}>
+                          <button
+                            type="button"
+                            class="btn btn-ghost btn-xs text-warning"
+                            title="Retry failed job"
+                            aria-label={`Retry failed job: ${job().name}`}
+                            onClick={() => props.onRetry?.()}
+                          >
+                            <Icon
+                              icon="lucide:rotate-cw"
+                              width="16"
+                              height="16"
+                            />
+                          </button>
+                        </Show>
+                      </div>
                     </td>
                   </tr>
                 );

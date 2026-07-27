@@ -36,6 +36,12 @@ export function usePipeline() {
     resolveEncoder = hw.resolveEncoder;
   } catch (err) {
     log.error('useHardware failed, using fallback encoder:', err);
+    // Surface a warning toast so the user knows the encoder may be slower
+    // (software fallback) — a silent log line is easy to miss.
+    showToast('Hardware detection failed — using software fallback', {
+      variant: 'warning',
+      ttl: 5000,
+    });
     hardwareInfo = () => null;
     resolveEncoder = (codec) => {
       if (codec === 'av1') return 'libsvtav1';
@@ -53,6 +59,10 @@ export function usePipeline() {
     ).dragHover;
   } catch (err) {
     log.error('useDragDrop failed, drag-drop disabled:', err);
+    showToast('Drag-and-drop is unavailable in this environment', {
+      variant: 'info',
+      ttl: 4000,
+    });
     dragHover = () => null;
   }
 
@@ -157,6 +167,18 @@ export function usePipeline() {
       data.failed > 0 ? 'Render finished with errors' : 'Render finished',
       `${data.completed}/${data.total} done, ${data.failed} failed.`,
     );
+    // Companion in-app toast: this fires for both minimised-to-tray and
+    // window-visible scenarios, complementing the OS-level notification.
+    // Distinct variant picks (success vs. warning) reinforce the result.
+    showToast(
+      data.failed > 0
+        ? `Render finished with ${data.failed} error${data.failed === 1 ? '' : 's'}`
+        : 'Render finished',
+      {
+        variant: data.failed > 0 ? 'warning' : 'success',
+        ttl: 4500,
+      },
+    );
   };
 
   const handlePaused = () => {
@@ -191,6 +213,9 @@ export function usePipeline() {
     setOverallEta('Failed');
     safeUnlisten();
     notify('Render failed', `Error: ${message}`);
+    // In-app toast mirrors the OS notification with a sticky error that
+    // requires explicit dismissal — fatal errors deserve user's attention.
+    showToast(`Render failed: ${message}`, { variant: 'error', ttl: 0 });
   };
 
   const startRender = async (resume: boolean = false) => {
@@ -200,6 +225,10 @@ export function usePipeline() {
       appendLog(
         `[WARN] Bitrate '${config.maxrate()}' is invalid. Enter a number between 100 and 50000.`,
       );
+      showToast('Enter a valid bitrate between 100 and 50000', {
+        variant: 'warning',
+        ttl: 4000,
+      });
       return;
     }
 
@@ -278,6 +307,7 @@ export function usePipeline() {
       setRunning(false);
       setPaused(false);
       setOverallEta('Failed');
+      showToast('Render failed to start', { variant: 'error', ttl: 0 });
     }
   };
 
@@ -349,6 +379,7 @@ export function usePipeline() {
       appendLog(`Error: Failed to pause render - ${String(err)}`);
       setPaused(false);
       setOverallEta('Failed');
+      showToast('Pause failed', { variant: 'error', ttl: 4000 });
     }
   };
 
@@ -423,6 +454,12 @@ export function usePipeline() {
         });
       } catch (err) {
         log.error('Failed to save backend config:', err);
+        // Best-effort info-level toast — debounced failures can stack up
+        // during normal use so the variant is muted (info) and ttl short.
+        showToast('Settings could not be saved to disk', {
+          variant: 'info',
+          ttl: 3500,
+        });
       }
     }, 500);
 
@@ -452,6 +489,40 @@ export function usePipeline() {
     resumeRender,
     cancelRender,
     pauseRender,
+    /**
+     * Retry a failed render from the last persisted state. Maps to
+     * `startRender(true)` so the backend resumes from the on-disk state
+     * file, picking up any failed jobs in the batch. Until the pipeline
+     * supports per-job indices (a v0.3+ change), this is a full-batch
+     * retry that only differs from a fresh run when a previous failure
+     * left durable state behind.
+     *
+     * Surfaces a toast for the two "dead click" cases so users get
+     * immediate feedback instead of a silent no-op:
+     *   - another render is already running
+     *   - start conditions are unmet (paths unset)
+     *
+     * `startRender` has its own internal try/catch that converts IPC
+     * failures into a sticky-error toast, so we do not wrap this call.
+     * A residual outer try/catch here would be unreachable.
+     */
+    retryJob: async () => {
+      if (running()) {
+        showToast('A render is already in progress', {
+          variant: 'info',
+          ttl: 3500,
+        });
+        return;
+      }
+      if (!canStart()) {
+        showToast('Cannot retry — configure sources and output first', {
+          variant: 'warning',
+          ttl: 4000,
+        });
+        return;
+      }
+      await startRender(true);
+    },
     ...config,
   };
 }
