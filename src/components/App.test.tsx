@@ -27,6 +27,17 @@ vi.mock('@tauri-apps/api/window', () => ({
     onResized: vi.fn(() => Promise.resolve(() => {})),
     setProgressBar: vi.fn(() => Promise.resolve()),
   })),
+  // Tauri 2 ProgressBarStatus enum (mirrors @tauri-apps/api/window).
+  // Required by `App.tsx`'s v0.2.3 import for the taskbar progress indicator.
+  // Without this the module-resolution fails and rendering falls through
+  // to the ErrorBoundary's <FatalScreen>.
+  ProgressBarStatus: {
+    None: 'none',
+    Normal: 'normal',
+    Indeterminate: 'indeterminate',
+    Paused: 'paused',
+    Error: 'error',
+  },
 }));
 vi.mock('@tauri-apps/plugin-notification', () => ({
   isPermissionGranted: vi.fn(() => Promise.resolve(true)),
