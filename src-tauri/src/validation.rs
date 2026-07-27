@@ -857,6 +857,7 @@ mod tests {
     ];
     const EXPECTED_AUDIO_EXTENSIONS_RUST: &[&str] = &[
         ".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac", ".wma",
+        ".opus", ".aiff", ".aif",
     ];
 
     #[test]

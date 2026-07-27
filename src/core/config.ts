@@ -65,4 +65,7 @@ export const AUDIO_EXTENSIONS = [
   '.ogg',
   '.aac',
   '.wma',
+  '.opus',
+  '.aiff',
+  '.aif',
 ];

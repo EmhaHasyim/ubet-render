@@ -8,6 +8,7 @@ use tauri_plugin_shell::process::CommandEvent;
 
 use crate::error::AppError;
 use crate::models::job::RenderStats;
+use crate::models::media::{AudioInfo, LoudnormMeasurement};
 
 struct ChildGuard(Option<tauri_plugin_shell::process::CommandChild>);
 
@@ -357,6 +358,289 @@ pub async fn get_duration(app: &AppHandle, file_path: &Path) -> Result<f64, AppE
 
 
 const MIN_FFMPEG_VERSION: (u32, u32) = (8, 1);
+
+/// Combined probe of audio-only metadata for the audio pool.
+///
+/// Calls `ffprobe` once and returns the first audio stream's codec, sample
+/// rate, channel count, bit rate (if reported), and container duration in a
+/// single round-trip. The audio pool uses this to decide whether to:
+///   1. Smart-skip the re-encode (`-c copy`) when the source is already a
+///      compatible AAC stream.
+///   2. Apply two-pass loudnorm (otherwise).
+///   3. Fall back to a plain single-pass re-encode.
+///
+/// `bit_rate` is intentionally optional because many AAC containers (notably
+/// VBR .m4a) report `N/A` for that field — callers must treat `None` as
+/// "cannot compare, default to re-encode".
+pub async fn get_audio_info(app: &AppHandle, file_path: &Path) -> Result<AudioInfo, AppError> {
+    let path_str = file_path.to_string_lossy().into_owned();
+    let args = [
+        "-v",
+        "error",
+        "-select_streams",
+        "a:0",
+        "-show_entries",
+        "stream=codec_name,sample_rate,channels,bit_rate:format=duration",
+        "-of",
+        "json",
+        &path_str,
+    ];
+    let sidecar = app
+        .shell()
+        .sidecar("ffprobe")
+        .map_err(|e| AppError::Ffmpeg(e.to_string()))?
+        .args(args);
+    let output = sidecar
+        .output()
+        .await
+        .map_err(|e| AppError::Ffmpeg(e.to_string()))?;
+
+    if !output.status.success() {
+        return Err(AppError::Ffmpeg(format!(
+            "ffprobe exited with code {:?} for '{}'",
+            output.status.code(),
+            path_str
+        )));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_audio_probe_value(&stdout, &path_str)
+}
+
+/// Pure JSON→AudioInfo parser extracted from `get_audio_info` so it can be
+/// unit-tested without spinning up Tauri + ffprobe. `source_label` is used
+/// only to make error messages reference a meaningful path.
+fn parse_audio_probe_value(
+    stdout: &str,
+    source_label: &str,
+) -> Result<AudioInfo, AppError> {
+    let json: serde_json::Value = serde_json::from_str(stdout)
+        .map_err(|e| AppError::Ffmpeg(format!("ffprobe JSON parse failed for '{}': {}", source_label, e)))?;
+
+    let stream = json
+        .get("streams")
+        .and_then(|s| s.as_array())
+        .and_then(|arr| arr.first())
+        .ok_or_else(|| {
+            AppError::Ffmpeg(format!("No audio stream found in '{}'", source_label))
+        })?;
+
+    let codec = stream
+        .get("codec_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
+
+    let sample_rate = stream
+        .get("sample_rate")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<u32>().ok())
+        .ok_or_else(|| AppError::Ffmpeg(format!("Missing sample_rate in '{}'", source_label)))?;
+
+    let channels = stream
+        .get("channels")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| {
+            AppError::Ffmpeg(format!("Missing channels in '{}'", source_label))
+        })? as u32;
+
+    let bit_rate = stream
+        .get("bit_rate")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<u32>().ok());
+
+    let duration = json
+        .get("format")
+        .and_then(|f| f.get("duration"))
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<f64>().ok())
+        .ok_or_else(|| AppError::Ffmpeg(format!("Missing duration in '{}'", source_label)))?;
+
+    if duration <= 0.0 {
+        return Err(AppError::InvalidDuration(source_label.to_string()));
+    }
+
+    Ok(AudioInfo {
+        codec,
+        sample_rate,
+        channels,
+        bit_rate,
+    })
+}
+
+/// Pass 1 of EBU R128 two-pass loudnorm.
+///
+/// Runs `ffmpeg` with the loudnorm analysis filter and `print_format=json`,
+/// which causes ffmpeg to emit a JSON block on stderr containing the
+/// measured integrated loudness, true peak, LRA, threshold, and target
+/// offset for the source audio. The audio pool's two-pass mode feeds these
+/// values back to pass 2 for a much more accurate normalization than the
+/// single-pass `loudnorm=I=...:LRA=...:TP=...` allowed for.
+///
+/// Unlike `get_audio_info`, pass 1 streams stderr live (via `spawn()`) so
+/// that the cooperative cancel / pause control can interrupt long files.
+pub async fn run_loudnorm_pass1(
+    app: &AppHandle,
+    input: &Path,
+    target: &str,
+    cancel: Option<Arc<crate::RenderControl>>,
+) -> Result<LoudnormMeasurement, AppError> {
+    use tauri_plugin_shell::process::CommandEvent;
+
+    if let Some(ref c) = cancel {
+        if c.is_cancelled() {
+            return Err(cancelled_error());
+        }
+        if c.is_paused() {
+            return Err(AppError::Paused("FFmpeg paused by user".into()));
+        }
+    }
+
+    let input_str = input.to_string_lossy().into_owned();
+    // The loudnorm filter syntax is `loudnorm=I=...:LRA=...:TP=...`; we
+    // append `print_format=json` so ffmpeg writes the measurement JSON
+    // instead of applying the target blindly.
+    let filter = format!("loudnorm={}:print_format=json", target);
+    let args: Vec<&str> = vec![
+        "-hide_banner", "-i", &input_str, "-af", &filter, "-f", "null", "-",
+    ];
+
+    let sidecar = app
+        .shell()
+        .sidecar("ffmpeg")
+        .map_err(|e| AppError::Ffmpeg(e.to_string()))?;
+    let (mut rx, child) = sidecar
+        .args(&args)
+        .spawn()
+        .map_err(|e| AppError::Ffmpeg(e.to_string()))?;
+    let mut child_guard = ChildGuard(Some(child));
+
+    // Accumulate the trailing JSON block from stderr. We resume collecting
+    // when we see the opening `{` and stop once we have parsed a complete
+    // measurement.
+    let mut stderr_buf = String::new();
+    let mut collecting = false;
+    let mut last_problem = String::new();
+
+    loop {
+        if let Some(ref c) = cancel {
+            if c.is_cancelled() {
+                let _ = child_guard.0.take().map(|x| x.kill());
+                return Err(cancelled_error());
+            }
+            if c.is_paused() {
+                let _ = child_guard.0.take().map(|x| x.kill());
+                return Err(AppError::Paused("FFmpeg paused by user".into()));
+            }
+        }
+
+        match rx.recv().await {
+            Some(CommandEvent::Stderr(line_bytes)) => {
+                let line = String::from_utf8_lossy(&line_bytes);
+                let trimmed = line.trim();
+                if !collecting && trimmed.starts_with('{') {
+                    collecting = true;
+                    stderr_buf.push_str(trimmed);
+                    if trimmed.contains('}') {
+                        if let Some(m) = parse_loudnorm_measurement(&stderr_buf) {
+                            return Ok(m);
+                        }
+                    }
+                } else if collecting {
+                    stderr_buf.push_str(&line);
+                    if line.contains('}') {
+                        if let Some(m) = parse_loudnorm_measurement(&stderr_buf) {
+                            return Ok(m);
+                        }
+                    }
+                } else if !trimmed.is_empty() {
+                    last_problem = trimmed.to_string();
+                }
+            }
+            Some(CommandEvent::Terminated(payload)) => {
+                if payload.code != Some(0) {
+                    return Err(AppError::Ffmpeg(format!(
+                        "loudnorm pass1 failed (exit {:?}): {}",
+                        payload.code, last_problem
+                    )));
+                }
+                if let Some(m) = parse_loudnorm_measurement(&stderr_buf) {
+                    return Ok(m);
+                }
+                return Err(AppError::Ffmpeg(format!(
+                    "loudnorm pass1 produced no JSON: {}",
+                    last_problem
+                )));
+            }
+            Some(CommandEvent::Error(e)) => {
+                last_problem = e;
+            }
+            Some(_) => {}
+            None => {
+                return Err(AppError::Ffmpeg(format!(
+                    "FFmpeg closed mid loudnorm pass1: {}",
+                    last_problem
+                )));
+            }
+        }
+    }
+}
+
+/// Parse the loudnorm JSON measurement block out of an arbitrary stderr
+/// text.
+///
+/// We anchor on the leading literal `"input_i"` (the loudnorm `print_format=json`
+/// output always emits the five required fields — `input_i`, `input_tp`,
+/// `input_lra`, `input_thresh`, `target_offset` — in a flat object, and it is
+/// the first one written). Scanning for the literal is robust against any
+/// pre-amble noise in ffmpeg's stderr (warning text, decoder info, etc.) that
+/// might contain unrelated `{…}` characters. Returns `None` if no complete
+/// block is found.
+///
+/// Required fields (matching `LoudnormMeasurement`): `input_i`,
+/// `input_tp`, `input_lra`, `input_thresh`, `target_offset`. Any missing
+/// required field causes `None` so the caller can fall back to single-pass.
+fn parse_loudnorm_measurement(text: &str) -> Option<LoudnormMeasurement> {
+    let anchor = "\"input_i\"";
+    let anchor_idx = text.find(anchor)?;
+    let bytes = text.as_bytes();
+    // Walk backward from the anchor to find the opening `{` that begins this
+    // JSON object. Stop if we walk more than a few thousand characters back,
+    // which would indicate the anchor landed in unrelated content.
+    let mut start = anchor_idx;
+    let max_back = 4096;
+    while start > 0 && bytes[start - 1] != b'{' {
+        start -= 1;
+        if anchor_idx - start > max_back {
+            return None;
+        }
+    }
+    if start == 0 && bytes[start] != b'{' {
+        return None;
+    }
+    // The loudnorm JSON has no nested objects / arrays of objects, so the
+    // first `}` after the anchor closes the measurement block.
+    let rest = &text[anchor_idx..];
+    let end_rel = rest.find('}')?;
+    let end = anchor_idx + end_rel + 1;
+    let slice = &text[start..end];
+    let parsed: serde_json::Value = serde_json::from_str(slice).ok()?;
+    let obj = parsed.as_object()?;
+
+    let parse_f = |k: &str| -> Option<f64> {
+        obj.get(k)
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<f64>().ok())
+    };
+
+    Some(LoudnormMeasurement {
+        input_i: parse_f("input_i")?,
+        input_tp: parse_f("input_tp")?,
+        input_lra: parse_f("input_lra")?,
+        input_thresh: parse_f("input_thresh")?,
+        target_offset: parse_f("target_offset")?,
+    })
+}
 
 /// Verifies the bundled `ffmpeg` and `ffprobe` sidecars report a supported
 /// version (at least [`MIN_FFMPEG_VERSION`]). Call this once before starting

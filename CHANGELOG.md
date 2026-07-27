@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.2.2] — 2026-07-27
+
+**Audio pipeline overhaul.** Significant changes to per-track encoding and
+loudness behaviour; the public surface area is unchanged but the cache
+schema and per-track progress stream are new.
+
+### Added
+
+- **Smart-skip re-encode** (`-c copy`) when the source AAC stream already
+  matches the user's request: codec `aac`, sample rate = target, channel
+  count exactly 2 (mono / 5.1 sources fall through to re-encode), and
+  source bitrate ≤ target. Eliminates re-encode for typical lossless-rip
+  collections of AAC files.
+- **Two-pass EBU R128 loudnorm** (default `-14 LUFS / LRA 11 / TP -1`
+  YouTube-Music preset). Pass 1 measures the source via
+  `loudnorm=...:print_format=json`; the measured values feed pass 2 with
+  `linear=true` for broadcast-grade normalisation rather than blind
+  single-pass application. Pass-1 measurements are cached on disk keyed
+  by `(path, size, mtime)` so subsequent renders skip the analysis.
+- **Per-track progress events.** Each processed track emits a
+  `Log { info, "Audio N/M ready: filename (copied | normalized 2-pass
+| normalized 1-pass fallback | re-encoded)" }` so the dashboard
+  shows the pool filling in real time rather than waiting for the
+  final aggregate.
+- **New accepted audio formats:** `.opus` (WebRTC / Opus-in-Ogg), `.aiff`
+  / `.aif` (Apple lossless PCM). Mirrored across `docs/MEDIA_EXTENSIONS.md`,
+  `src/core/config.ts`, `src-tauri/src/pipeline/estimator.rs`, and both
+  drift-detection sentinels (`src/core/config.test.ts` and
+  `validation.rs::tests`).
+
+### Changed
+
+- **Atomic plugin cache writes.** Every ffmpeg output for
+  `master_audio_<hash>.m4a` is now written to a `.tmp` sibling and
+  renamed into place only after a successful exit. A cancel mid-encode
+  no longer leaves a corrupt cache file visible to subsequent runs.
+- **Dedup at pool entry.** Duplicate input paths (drag-and-drop,
+  override `MediaSource::Files`) are collapsed via `HashSet` before
+  worker dispatch so two workers never race on the same cache key.
+
+### Fixed
+
+- **Mono (1-channel) AAC sources** no longer trigger smart-skip; the
+  previous `info.channels <= 2` check would cache a mono `.m4a` that
+  breaks the downstream 2-channel concat demuxer. Smart-skip is now
+  restricted to `info.channels == 2`; mono sources fall through to
+  the explicit `-ac 2` re-encode path.
+- **Cache key now includes file mtime**, defending against silent
+  stale measurement when a track is replaced in place at the same
+  byte length.
+
+### Maintenance
+
+- `file_size_non_zero` helper removed (no longer needed after the
+  audio-pool cache check collapsed to a single `Path::metadata`
+  syscall).
+
+---
+
 ## [0.2.1] — 2026-07-25
 
 **Housekeeping release.** No new features. The pipeline, UI, and rendering

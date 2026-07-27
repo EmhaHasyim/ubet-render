@@ -42,7 +42,7 @@ sentinel. If you add a row here but forget to update any of the following,
 
 ## Audio
 
-`.mp3`, `.wav`, `.m4a`, `.flac`, `.ogg`, `.aac`, `.wma`
+`.mp3`, `.wav`, `.m4a`, `.flac`, `.ogg`, `.aac`, `.wma`, `.opus`, `.aiff`, `.aif`
 
 > **Notes**
 >
@@ -50,6 +50,11 @@ sentinel. If you add a row here but forget to update any of the following,
 >   same trust profile.
 > - `.ogg` is typically Vorbis or Opus; both are supported.
 > - `.wma` is Microsoft Windows Media Audio; treat as best-effort.
+> - `.opus` is the modern low-bitrate codec used by WebRTC / streaming;
+>   ffprobe/ffmpeg decode it natively and it re-encodes cleanly to AAC.
+> - `.aiff` / `.aif` (AIFF) is Apple's lossless uncompressed PCM container;
+>   treat it as the macOS-equivalent of `.wav`. Both spellings are
+>   accepted by the scanner so legacy libraries with mixed casing work.
 
 ---
 

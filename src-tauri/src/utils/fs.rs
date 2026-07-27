@@ -33,6 +33,18 @@ pub async fn safe_delete(file: &Path) -> Result<(), std::io::Error> {
     }
 }
 
+/// Synchronous variant of `safe_delete` for callers that cannot await
+/// (e.g. inside an `async move` closure that is itself `async`).
+/// Used by the audio-pool's at-least-once tmp-file cleanup on ffmpeg
+/// failure paths.
+pub fn safe_delete_sync(file: &Path) -> Result<(), std::io::Error> {
+    match std::fs::remove_file(file) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 /// Hash input bytes to a 64-bit value using SipHash-1-3 (DefaultHasher).
 /// Suitable for bloom filters and quick lookups where collision probability
 /// is acceptable (< 0.0003 % for 10 000 entries).
@@ -223,9 +235,9 @@ pub fn compare_natural(a: &str, b: &str) -> std::cmp::Ordering {
 mod tests {
     use super::*;
 
-    // -----------------------------------------------------------------------
+    // -------------------------------------------------------------------
     // to_absolute
-    // -----------------------------------------------------------------------
+    // -------------------------------------------------------------------
 
     #[test]
     fn test_to_absolute_absolute_path() {
@@ -242,9 +254,9 @@ mod tests {
         assert!(result.to_string_lossy().contains("videos"));
     }
 
-    // -----------------------------------------------------------------------
+    // -------------------------------------------------------------------
     // hash_path
-    // -----------------------------------------------------------------------
+    // -------------------------------------------------------------------
 
     #[test]
     fn test_hash_path_deterministic() {
@@ -268,9 +280,9 @@ mod tests {
         assert_eq!(h, hash_path(b""));
     }
 
-    // -----------------------------------------------------------------------
-    // safe_delete (sync variant — tests the match logic directly)
-    // -----------------------------------------------------------------------
+    // -------------------------------------------------------------------
+    // safe_delete (sync + async)
+    // -------------------------------------------------------------------
 
     #[tokio::test]
     async fn test_safe_delete_non_existent() {
@@ -289,9 +301,24 @@ mod tests {
         assert!(!tmp.exists());
     }
 
-    // -----------------------------------------------------------------------
+    #[test]
+    fn test_safe_delete_sync_non_existent_returns_ok() {
+        let p = Path::new("C:\\this_path_should_not_exist_safe_delete_sync_67890.tmp");
+        assert!(safe_delete_sync(p).is_ok());
+    }
+
+    #[test]
+    fn test_safe_delete_sync_existing() {
+        let tmp = std::env::temp_dir().join("ubet_safe_delete_sync_test.tmp");
+        std::fs::write(&tmp, b"test").unwrap();
+        let result = safe_delete_sync(&tmp);
+        assert!(result.is_ok());
+        assert!(!tmp.exists());
+    }
+
+    // -------------------------------------------------------------------
     // compare_natural (existing)
-    // -----------------------------------------------------------------------
+    // -------------------------------------------------------------------
 
     #[test]
     fn test_compare_natural() {

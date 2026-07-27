@@ -99,6 +99,9 @@ const EXPECTED_AUDIO_EXTENSIONS = [
   '.ogg',
   '.aac',
   '.wma',
+  '.opus',
+  '.aiff',
+  '.aif',
 ];
 
 describe('drift detection: extensions match docs/MEDIA_EXTENSIONS.md', () => {

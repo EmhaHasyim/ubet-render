@@ -12,6 +12,7 @@ pub const VIDEO_EXTENSIONS: &[&str] = &[
 /// IMPORTANT: keep in sync with the TypeScript AUDIO_EXTENSIONS.
 pub const AUDIO_EXTENSIONS: &[&str] = &[
     ".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac", ".wma",
+    ".opus", ".aiff", ".aif",
 ];
 
 /// Rough estimate of the total bytes all jobs will write to disk.
