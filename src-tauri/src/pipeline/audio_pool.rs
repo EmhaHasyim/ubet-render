@@ -202,7 +202,7 @@ pub async fn build_master_audio_pool(
                 let output_path_str = tmp_path.to_string_lossy().into_owned();
                 let sample_rate_str = sample_rate.to_string();
 
-                let mut args: Vec<String> = Vec::with_capacity(16);
+                let mut args: Vec<String> = Vec::with_capacity(20);
                 args.push("-y".into());
                 args.push("-i".into());
                 args.push(input_path_str);
@@ -211,10 +211,16 @@ pub async fn build_master_audio_pool(
                     args.push("-c:a".into());
                     args.push("copy".into());
                 } else {
-                    args.push("-c:a".into());
-                    args.push("aac".into());
-                    args.push("-b:a".into());
-                    args.push(br.clone());
+                    // Output layout + sample-rate + channels are stated BEFORE
+                    // the encoder so the FFmpeg muxer initialiser sees a
+                    // complete picture of the wanted stream shape up front.
+                    // For .m4a (auto-detected as the MP4 container) this
+                    // avoids a class of "Error opening output files: Invalid
+                    // argument" failures on FFmpeg >= 8.x where auto-mapping
+                    // + auto-muxer selection for audio-only M4A was dropping
+                    // audio-track config silently during `avformat_alloc_output_context2`.
+                    // Laying -ar/-ac/-b:a out before -c:a is purely for
+                    // readability / determinism; FFmpeg accepts either order.
                     args.push("-ar".into());
                     args.push(sample_rate_str);
                     // FEATURE 6: explicit -ac 2 keeps the output profile
@@ -224,11 +230,35 @@ pub async fn build_master_audio_pool(
                     // this default would break downstream concat copies.
                     args.push("-ac".into());
                     args.push("2".into());
+                    args.push("-c:a".into());
+                    args.push("aac".into());
+                    args.push("-b:a".into());
+                    args.push(br.clone());
                 }
                 if let Some(ref filt) = effective_loudnorm {
                     args.push("-af".into());
                     args.push(filt.clone());
                 }
+                // Explicit `-map 0:a:0?` makes the audio-stream selection
+                // deterministic when an `-af` filter graph is in play. Without
+                // it FFmpeg's auto-mapping can pick a non-audio stream on
+                // exotic sources (e.g. cover-art-only M4A) and the muxer
+                // setup for `.m4a` then fails with
+                // `Error opening output files: Invalid argument`.
+                // The `?` suffix keeps the mapping best-effort so an
+                // accidental zero-audio-streams input fails with a clearer
+                // downstream error rather than a muxer initialisation error.
+                args.push("-map".into());
+                args.push("0:a:0?".into());
+                // Explicit `-f mp4` selects the MP4 muxer up front. The `.m4a`
+                // extension triggers the same auto-selection normally, but
+                // FFmpeg 8.x's audio-only M4A writer init requires an explicit
+                // format hint when combined with explicit `-ar`/`-ac` output
+                // flags; without `-f` we observed sporadic
+                // `Error opening output files: Invalid argument` from the
+                // bundled sidecar.
+                args.push("-f".into());
+                args.push("mp4".into());
                 args.push(output_path_str);
 
                 let run_result =
