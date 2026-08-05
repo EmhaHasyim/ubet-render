@@ -44,8 +44,18 @@
   --color-warning-content: oklch(15% 0.03 80);
   --color-error: oklch(55% 0.22 28);
   --color-error-content: oklch(15% 0.03 28);
+}
 
+/* color-scheme follows the active theme so native form controls and
+   scrollbars match the UI. Previously hardcoded to dark on :root, which
+   left dark-themed native controls visible in light mode. index.html ships
+   with data-theme="business", so the first paint is covered too. */
+[data-theme='business'] {
   color-scheme: dark;
+}
+
+[data-theme='light'] {
+  color-scheme: light;
 }
 
 /* ── DaisyUI card–backed panel utility ──────────────────────── */

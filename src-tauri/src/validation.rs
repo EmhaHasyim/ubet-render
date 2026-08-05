@@ -56,13 +56,21 @@ pub(crate) fn sanitize_path(path: &str) -> Result<PathBuf, AppError> {
     if path.contains('\0') {
         return Err(AppError::Pipeline("Path contains null byte".into()));
     }
-    // Reject NTFS Alternate Data Streams (e.g. `video.mp4:$DATA`).  The colon
-    // after the drive letter on Windows is position 1, so any colon at
-    // position > 1 is suspicious.
-    if let Some(col_pos) = path.find(':')
-        && col_pos > 1
-    {
-        return Err(AppError::Pipeline("Path contains NTFS alternate data stream marker".into()));
+    // Reject NTFS Alternate Data Streams on Windows (e.g. `video.mp4:$DATA`).
+    // `:` is the drive-letter separator at byte position 1 on Windows; any
+    // colon elsewhere (relative path, or a second colon after the drive
+    // prefix) is an ADS marker and must be rejected.
+    //
+    // macOS and Linux, however, treat `:` as a perfectly legal filename
+    // character (e.g. `My:Song.mp3`), so this check MUST NOT apply there —
+    // doing so would make legitimate files unrenderable.
+    #[cfg(windows)]
+    if let Some(col_pos) = path.find(':') {
+        let is_drive_colon = col_pos == 1;
+        let has_second_colon = path[col_pos + 1..].contains(':');
+        if !is_drive_colon || has_second_colon {
+            return Err(AppError::Pipeline("Path contains NTFS alternate data stream marker".into()));
+        }
     }
     if path.chars().any(|c| c.is_control()) {
         return Err(AppError::Pipeline("Path contains control characters".into()));
@@ -470,6 +478,31 @@ mod tests {
         let result = sanitize_path("C:\\videos\\-output.mp4");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("flag"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_sanitize_path_rejects_ads_on_windows() {
+        // NTFS Alternate Data Stream marker after the drive prefix.
+        let result = sanitize_path("C:\\videos\\video.mp4:$DATA");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("alternate data stream"));
+
+        // A bare drive path (no second colon) stays valid.
+        assert!(sanitize_path("C:\\videos\\video.mp4").is_ok());
+        assert!(sanitize_path("C:").is_ok());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_sanitize_path_allows_colons_on_unix() {
+        // `:` is a legal filename character on macOS/Linux — must NOT be
+        // rejected as an NTFS ADS marker.
+        let result = sanitize_path("music/My:Song.mp3");
+        assert!(result.is_ok(), "colon in unix path should be allowed");
     }
 
     #[test]

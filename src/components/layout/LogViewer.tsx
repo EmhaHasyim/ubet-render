@@ -15,10 +15,51 @@ import {
   type LogLevel,
 } from '../../core/logLevels';
 
-// Estimated height (px) of a single log line in the monospace container.
-// Used by the virtual scroller to calculate the visible window.
-const ROW_HEIGHT = 20;
+// Height (px) of a single visual line in the monospace container at the
+// `text-xs` size with `leading-relaxed` line-height.
+const BASE_LINE_HEIGHT = 20;
 const OVERSCAN = 15;
+// Fallback monospace advance width at 12px (≈ 0.6 × font-size). Measured
+// precisely at runtime; the constant covers test environments (jsdom) and
+// fonts where measurement is unavailable.
+const FALLBACK_CHAR_WIDTH = 7.2;
+// Updated once on mount by {@link measureCharWidth}.
+let charWidthPx = FALLBACK_CHAR_WIDTH;
+
+/**
+ * Measure the actual monospace advance width (px per char) so wrapped-line
+ * height estimates stay accurate. Falls back to {@link FALLBACK_CHAR_WIDTH}
+ * when measurement is unavailable.
+ */
+function measureCharWidth(): void {
+  try {
+    const probe = document.createElement('span');
+    probe.style.cssText =
+      'position:absolute;visibility:hidden;white-space:pre;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;';
+    probe.textContent = '0'.repeat(100);
+    document.body.appendChild(probe);
+    const measured = probe.getBoundingClientRect().width / 100;
+    document.body.removeChild(probe);
+    if (measured > 0) charWidthPx = measured;
+  } catch {
+    /* keep FALLBACK_CHAR_WIDTH */
+  }
+}
+
+/**
+ * Largest row index whose top edge is at or above `offset` px, given the
+ * prefix sums of per-row heights. Returns `0` for an empty list.
+ */
+function findRowIndexAtOffset(sums: number[], offset: number): number {
+  let lo = 0;
+  let hi = sums.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (sums[mid] <= offset) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
 
 const ALL_LEVELS: LogLevel[] = FILTERABLE_LEVELS;
 
@@ -59,6 +100,7 @@ export function LogViewer(props: { logs: string[] }) {
   let containerRef!: HTMLDivElement;
   const [scrollTop, setScrollTop] = createSignal(0);
   const [viewportHeight, setViewportHeight] = createSignal(0);
+  const [contentWidth, setContentWidth] = createSignal(0);
   const [shouldAutoScroll, setShouldAutoScroll] = createSignal(true);
 
   // ---- Filter / search state (local — never persisted) ----
@@ -131,22 +173,68 @@ export function LogViewer(props: { logs: string[] }) {
   });
 
   // ---- Virtual scrolling math (operates on filteredLogs, not raw logs) ----
+  //
+  // Log lines can wrap (long ffmpeg progress lines in a narrow panel), so a
+  // fixed per-entry height would misalign the padding-based scroller. Each
+  // entry's height is instead estimated from its text length and the measured
+  // monospace character width, and the visible window is found by binary
+  // searching the prefix sums of those heights.
+
+  // Approximate number of monospace characters that fit on one visual line.
+  // `contentWidth` is the container's `clientWidth` (padding included), so
+  // 24px (12px per side) is subtracted once to get the usable text width.
+  const charsPerLine = createMemo(() => {
+    const width = contentWidth();
+    if (width <= 0) return 0;
+    return Math.max(1, Math.floor((width - 24) / charWidthPx));
+  });
+
+  // Estimated rendered height of every filtered log entry (index-aligned
+  // with `filteredLogs`). Wrapped entries are taller than one visual line.
+  const rowHeights = createMemo(() => {
+    const cpl = charsPerLine();
+    return filteredLogs().map((line) => {
+      const visualLines =
+        cpl > 0 ? Math.max(1, Math.ceil(line.length / cpl)) : 1;
+      return visualLines * BASE_LINE_HEIGHT;
+    });
+  });
+
+  // Prefix sums of `rowHeights`: `sums[k]` = total height of entries [0, k).
+  const prefixSums = createMemo(() => {
+    const heights = rowHeights();
+    const sums: number[] = Array.from({ length: heights.length + 1 }, () => 0);
+    let acc = 0;
+    sums[0] = 0;
+    for (let i = 0; i < heights.length; i++) {
+      acc += heights[i];
+      sums[i + 1] = acc;
+    }
+    return sums;
+  });
+
   const startIndex = () =>
-    Math.max(0, Math.floor(scrollTop() / ROW_HEIGHT) - OVERSCAN);
+    Math.max(0, findRowIndexAtOffset(prefixSums(), scrollTop()) - OVERSCAN);
 
-  const visibleCount = () =>
-    viewportHeight() > 0
-      ? Math.ceil(viewportHeight() / ROW_HEIGHT) + OVERSCAN * 2
-      : filteredLogs().length; // fallback: render all until viewport measured
-
-  const endIndex = () =>
-    Math.min(filteredLogs().length, startIndex() + visibleCount());
+  const endIndex = () => {
+    // Before the viewport is measured (or in test environments with no
+    // layout), render everything — matches the historical fallback.
+    if (viewportHeight() <= 0) return filteredLogs().length;
+    const sums = prefixSums();
+    return Math.min(
+      filteredLogs().length,
+      findRowIndexAtOffset(sums, scrollTop() + viewportHeight()) + 1 + OVERSCAN,
+    );
+  };
 
   const visibleLogs = createMemo(() =>
     filteredLogs().slice(startIndex(), endIndex()),
   );
-  const topPadding = () => startIndex() * ROW_HEIGHT;
-  const bottomPadding = () => (filteredLogs().length - endIndex()) * ROW_HEIGHT;
+  const topPadding = () => prefixSums()[startIndex()];
+  const bottomPadding = () => {
+    const sums = prefixSums();
+    return sums[filteredLogs().length] - sums[endIndex()];
+  };
 
   const handleScroll = () => {
     if (!containerRef) return;
@@ -156,20 +244,27 @@ export function LogViewer(props: { logs: string[] }) {
     // whether to auto-scroll when new logs arrive.
     const el = containerRef;
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    setShouldAutoScroll(distanceFromBottom < ROW_HEIGHT * 3);
+    setShouldAutoScroll(distanceFromBottom < BASE_LINE_HEIGHT * 3);
   };
 
   // Track rAF ids so we can cancel on cleanup to avoid accessing
   // a stale containerRef after unmount.
   let rAFId = 0;
 
-  // Measure the viewport once on mount and on resize.
+  // Measure the viewport and character width once on mount and on resize.
   onMount(() => {
     if (!containerRef) return;
+    measureCharWidth();
     setViewportHeight(containerRef.clientHeight);
+    setContentWidth(containerRef.clientWidth);
 
-    const observer = new ResizeObserver(([entry]) => {
-      setViewportHeight(entry.contentRect.height);
+    const observer = new ResizeObserver(() => {
+      // Use `clientWidth`/`clientHeight` (padding included) — the same source
+      // as onMount — so the two paths stay consistent. `contentRect` would
+      // exclude padding and break the `- 24` in `charsPerLine`.
+      if (!containerRef) return;
+      setViewportHeight(containerRef.clientHeight);
+      setContentWidth(containerRef.clientWidth);
       // If the user was at the bottom, re-scroll so new content stays visible.
       if (shouldAutoScroll()) {
         rAFId = requestAnimationFrame(() => {

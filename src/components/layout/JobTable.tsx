@@ -28,6 +28,24 @@ export function JobTable(props: {
    */
   onRetry?: () => void;
 }) {
+  // Track thumbnails that failed to load in a stable Set keyed by path.
+  // A per-row `createSignal` inside the `<Index>` callback would be
+  // recreated on every jobs update (each Progress event replaces the array
+  // with fresh item objects), resetting the error state and causing the row
+  // to flicker between the placeholder and a broken image.
+  const [failedThumbs, setFailedThumbs] = createSignal<ReadonlySet<string>>(
+    new Set(),
+  );
+
+  const markThumbFailed = (path: string) => {
+    setFailedThumbs((cur) => {
+      if (cur.has(path)) return cur;
+      const next = new Set(cur);
+      next.add(path);
+      return next;
+    });
+  };
+
   return (
     <Show
       when={props.jobs.length > 0}
@@ -60,15 +78,15 @@ export function JobTable(props: {
           <tbody>
             <Index each={props.jobs}>
               {(job) => {
-                // Track thumbnail load errors per-row so we can show
-                // the placeholder instead of a broken-image hole.
-                const [thumbError, setThumbError] = createSignal(false);
+                const thumbPath = job().thumbnailPath;
+                const thumbFailed = () =>
+                  thumbPath !== undefined && failedThumbs().has(thumbPath);
                 return (
                   <tr class="border-b border-base-300/70 hover:bg-base-content/5 transition-colors">
                     <td class="min-w-64">
                       <div class="flex items-center gap-3">
                         <Show
-                          when={job().thumbnailPath && !thumbError()}
+                          when={thumbPath && !thumbFailed()}
                           fallback={
                             <div class="h-11 w-16 flex items-center justify-center rounded-md bg-base-300 text-base-content/40">
                               <Icon
@@ -80,11 +98,13 @@ export function JobTable(props: {
                           }
                         >
                           <img
-                            src={convertFileSrc(job().thumbnailPath!)}
+                            src={convertFileSrc(thumbPath!)}
                             class="h-11 w-16 rounded-md object-cover"
                             alt=""
                             loading="lazy"
-                            onError={() => setThumbError(true)}
+                            onError={() =>
+                              thumbPath && markThumbFailed(thumbPath)
+                            }
                           />
                         </Show>
                         <div class="min-w-0">

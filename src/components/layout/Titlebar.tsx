@@ -58,17 +58,46 @@ export function Titlebar() {
     });
   });
 
-  const handleMinimize = () => appWindow.minimize();
-  const handleToggleMaximize = () => appWindow.toggleMaximize();
-  const handleClose = () => appWindow.hide();
+  // Window-control actions are fire-and-forget: swallow rejections so a
+  // failed IPC (e.g. the window is already gone) never surfaces as an
+  // unhandled promise rejection.
+  const handleMinimize = async () => {
+    try {
+      await appWindow.minimize();
+    } catch {
+      /* window may already be closing */
+    }
+  };
+  const handleToggleMaximize = async () => {
+    try {
+      await appWindow.toggleMaximize();
+    } catch {
+      /* noop */
+    }
+  };
+  const handleClose = async () => {
+    try {
+      await appWindow.hide();
+    } catch {
+      /* noop */
+    }
+  };
   const handleToggleTheme = () => {
     const next = toggleTheme(theme());
     setTheme(next);
     applyTheme(next);
   };
 
-  // Double-click titlebar → toggle maximize (Windows convention)
-  const handleDoubleClick = () => appWindow.toggleMaximize();
+  // Double-click titlebar → toggle maximize (Windows convention). Scoped to
+  // the left drag region so double-clicking the window-control buttons
+  // (which bubble dblclick events) can't accidentally toggle maximize.
+  const handleDoubleClick = async () => {
+    try {
+      await appWindow.toggleMaximize();
+    } catch {
+      /* noop */
+    }
+  };
 
   // Right-click titlebar → context menu
   const handleContextMenu = (e: MouseEvent) => {
@@ -98,8 +127,13 @@ export function Titlebar() {
         </span>
       </div>
 
-      {/* Right: window controls */}
-      <div class="flex h-full" data-tauri-drag-region={false}>
+      {/* Right: window controls — stop dblclick bubbling so double-clicking
+          a control button can't accidentally toggle maximize. */}
+      <div
+        class="flex h-full"
+        data-tauri-drag-region={false}
+        onDblClick={(e) => e.stopPropagation()}
+      >
         <button
           type="button"
           class="flex h-full w-12 items-center justify-center text-base-content/50 transition-colors hover:bg-base-200 hover:text-base-content"

@@ -182,7 +182,7 @@ export function SettingsCard() {
                   type="number"
                   class="input input-bordered w-full bg-base-100"
                   min="1"
-                  max="50"
+                  max="100"
                   value={pipeline.songsPerPlaylist()}
                   onInput={(e) =>
                     pipeline.setSongsPerPlaylist(
@@ -360,8 +360,10 @@ export function SettingsCard() {
                       type="number"
                       class="grow"
                       min="0.1"
+                      max="24"
                       step="0.1"
                       value={pipeline.minDurationHours()}
+                      title="Between 0.1 and 24 hours"
                       onInput={(e) =>
                         pipeline.setMinDurationHours(
                           Math.max(

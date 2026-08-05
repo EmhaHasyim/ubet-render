@@ -1,4 +1,5 @@
-import { render, screen } from '@solidjs/testing-library';
+import { render, screen, fireEvent } from '@solidjs/testing-library';
+import { createSignal } from 'solid-js';
 import { describe, it, expect, vi } from 'vitest';
 import type { JobProgress } from '../../core/types';
 import { JobTable } from './JobTable';
@@ -96,6 +97,37 @@ describe('JobTable', () => {
     const img = container.querySelector('img') as HTMLImageElement;
     expect(img).toBeTruthy();
     expect(img.src).toContain('asset://localhost/');
+  });
+
+  it('keeps the placeholder after a thumbnail fails to load, even across jobs updates', () => {
+    // Regression for the per-row createSignal bug: each Progress event replaces
+    // the jobs array with fresh item objects, which used to recreate the row's
+    // error signal and flip a failed thumbnail back to the broken <img>.
+    const withThumb: JobProgress[] = [
+      {
+        index: 0,
+        name: 'a.mp4',
+        outputPath: '/out/a.mp4',
+        state: 'processing',
+        progressPercent: 10,
+        currentStep: 'Encoding',
+        thumbnailPath: '/thumbs/a.jpg',
+      },
+    ];
+    const [jobs, setJobs] = createSignal<JobProgress[]>(withThumb);
+    const { container } = render(() => <JobTable jobs={jobs()} />);
+
+    const img = container.querySelector('img') as HTMLImageElement;
+    expect(img).toBeTruthy();
+    fireEvent.error(img);
+
+    // Simulate the next Progress event: a brand-new jobs array (new object
+    // identity) carrying the same thumbnail path.
+    setJobs([{ ...withThumb[0], progressPercent: 20 }]);
+
+    // The broken image must stay replaced by the placeholder icon.
+    expect(container.querySelectorAll('img').length).toBe(0);
+    expect(container.querySelector('.bg-base-300')).toBeTruthy();
   });
 
   it('reveal button is enabled for done jobs and disabled for others', () => {

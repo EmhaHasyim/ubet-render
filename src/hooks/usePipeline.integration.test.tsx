@@ -321,6 +321,231 @@ describe('usePipeline — integration (end-to-end render lifecycle)', () => {
     expect(p.overallEta()).toBe('Render cancelled');
   });
 
+  it('restarts from saved state when resume is acked but no pipeline activity arrives (pause→quick-resume race)', async () => {
+    vi.useFakeTimers();
+    try {
+      mockInvokeImpl = async (cmd: string) => {
+        if (cmd === 'detect_hardware') {
+          return {
+            cpuName: 'CPU',
+            gpuName: 'GPU',
+            ramGb: 16,
+            av1Supported: true,
+          };
+        }
+        if (cmd === 'resume_render') {
+          // Simulates the race: the backend acks `true` while the old pipeline
+          // is already tearing down — it will never emit another event.
+          return true;
+        }
+        return undefined;
+      };
+
+      const p = mountPipeline();
+      await vi.waitFor(() => {
+        expect(p.hardwareInfo()).not.toBeNull();
+      });
+
+      p.setVideoSource({ type: 'files', paths: ['/v/vid.mp4'] });
+      p.setAudioSource({ type: 'files', paths: ['/a/aud.mp3'] });
+      p.setOutputPath('/out');
+
+      await p.startRender();
+      emitEvent({ type: 'Paused' });
+      expect(p.paused()).toBe(true);
+
+      await p.resumeRender();
+      expect(p.running()).toBe(true);
+      expect(p.paused()).toBe(false);
+
+      // No Progress/Stats ever arrives → the watchdog must fire and restart
+      // from the saved state file.
+      await vi.advanceTimersByTimeAsync(6000);
+
+      const { invoke } = await import('@tauri-apps/api/core');
+      const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+      const startCalls = invokeMock.mock.calls.filter(
+        (c: unknown[]) => c[0] === 'start_render',
+      );
+      // Initial start + watchdog restart.
+      expect(startCalls.length).toBe(2);
+      const [, params] = startCalls[1] as [string, unknown];
+      expect((params as { resume?: boolean }).resume).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does NOT restart when the resumed pipeline produces activity (watchdog disarmed)', async () => {
+    vi.useFakeTimers();
+    try {
+      mockInvokeImpl = async (cmd: string) => {
+        if (cmd === 'detect_hardware') {
+          return {
+            cpuName: 'CPU',
+            gpuName: 'GPU',
+            ramGb: 16,
+            av1Supported: true,
+          };
+        }
+        if (cmd === 'resume_render') return true;
+        return undefined;
+      };
+
+      const p = mountPipeline();
+      await vi.waitFor(() => {
+        expect(p.hardwareInfo()).not.toBeNull();
+      });
+
+      p.setVideoSource({ type: 'files', paths: ['/v/vid.mp4'] });
+      p.setAudioSource({ type: 'files', paths: ['/a/aud.mp3'] });
+      p.setOutputPath('/out');
+
+      await p.startRender();
+      emitEvent({ type: 'Paused' });
+
+      await p.resumeRender();
+      expect(p.running()).toBe(true);
+
+      // Real pipeline activity arrives within the watchdog window.
+      emitEvent({
+        type: 'Progress',
+        data: {
+          total: 1,
+          completed: 0,
+          jobs: [
+            {
+              index: 0,
+              name: 'vid.mp4',
+              state: 'processing',
+              progressPercent: 10,
+              currentStep: 'Encoding',
+              outputPath: '/out/vid.mp4',
+            },
+          ],
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(6000);
+
+      const { invoke } = await import('@tauri-apps/api/core');
+      const invokeMock = invoke as unknown as ReturnType<typeof vi.fn>;
+      const startCalls = invokeMock.mock.calls.filter(
+        (c: unknown[]) => c[0] === 'start_render',
+      );
+      // Only the initial start — the watchdog was disarmed by the Progress
+      // event and must not restart the pipeline.
+      expect(startCalls.length).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('re-establishes the ETA baseline from the first post-resume Progress event', async () => {
+    // The backend resumes from the *saved* state file, whose progress can be
+    // ahead of the last value the UI saw before the pause. Sampling the very
+    // first post-resume event against the stale UI baseline would look like a
+    // huge burst of work and produce a bogus near-zero ETA. The hook must
+    // instead use that first event purely as the new baseline.
+    vi.useFakeTimers();
+    try {
+      mockInvokeImpl = async (cmd: string) => {
+        if (cmd === 'detect_hardware') {
+          return {
+            cpuName: 'CPU',
+            gpuName: 'GPU',
+            ramGb: 16,
+            av1Supported: true,
+          };
+        }
+        if (cmd === 'resume_render') return true;
+        return undefined;
+      };
+
+      const p = mountPipeline();
+      await vi.waitFor(() => {
+        expect(p.hardwareInfo()).not.toBeNull();
+      });
+
+      p.setVideoSource({ type: 'files', paths: ['/v/vid.mp4'] });
+      p.setAudioSource({ type: 'files', paths: ['/a/aud.mp3'] });
+      p.setOutputPath('/out');
+
+      await p.startRender();
+
+      // UI last saw 40% before the pause.
+      emitEvent({
+        type: 'Progress',
+        data: {
+          total: 1,
+          completed: 0,
+          jobs: [
+            {
+              index: 0,
+              name: 'vid.mp4',
+              state: 'processing',
+              progressPercent: 40,
+              currentStep: 'Muxing',
+              outputPath: '/out/vid.mp4',
+            },
+          ],
+        },
+      });
+      expect(p.overallProgress()).toBe(40);
+
+      emitEvent({ type: 'Paused' });
+      await p.resumeRender();
+      expect(p.running()).toBe(true);
+      expect(p.overallEta()).toBe('Resuming...');
+
+      // First post-resume event: saved state is ahead (60% not 40%). It must
+      // establish the baseline WITHOUT producing a near-zero ETA spike.
+      emitEvent({
+        type: 'Progress',
+        data: {
+          total: 1,
+          completed: 0,
+          jobs: [
+            {
+              index: 0,
+              name: 'vid.mp4',
+              state: 'processing',
+              progressPercent: 60,
+              currentStep: 'Muxing',
+              outputPath: '/out/vid.mp4',
+            },
+          ],
+        },
+      });
+      expect(p.overallProgress()).toBe(60);
+      expect(p.overallEta()).toBe('Resuming...');
+
+      // 2s later, the next event at 62% produces a sane, real ETA.
+      await vi.advanceTimersByTimeAsync(2000);
+      emitEvent({
+        type: 'Progress',
+        data: {
+          total: 1,
+          completed: 0,
+          jobs: [
+            {
+              index: 0,
+              name: 'vid.mp4',
+              state: 'processing',
+              progressPercent: 62,
+              currentStep: 'Muxing',
+              outputPath: '/out/vid.mp4',
+            },
+          ],
+        },
+      });
+      // 2% over 2s → ~38s remaining: a real duration, not a near-zero spike.
+      expect(p.overallEta()).toContain('left');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('handles pause lifecycle', async () => {
     const p = mountPipeline();
 

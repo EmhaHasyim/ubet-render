@@ -223,6 +223,15 @@ describe('loadPersistedConfig', () => {
     expect(cfg.codec).toBe('av1'); // not in allowed list
   });
 
+  it('clamps a stored minDurationHours above 24h down to 24h', () => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ version: STORAGE_VERSION, minDurationHours: 999 }),
+    );
+    const cfg = loadPersistedConfig();
+    expect(cfg.minDurationHours).toBe(24);
+  });
+
   it('handles missing version field (old schema) by resetting', () => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ outputPath: '/old' }));
     const cfg = loadPersistedConfig();

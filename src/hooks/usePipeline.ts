@@ -87,6 +87,14 @@ export function usePipeline() {
   // would otherwise be stuck in `running=true, paused=true` indefinitely.
   // The handlePaused event handler clears this timer once the ack arrives.
   let pauseReconcileTimer: ReturnType<typeof setTimeout> | null = null;
+  // Reconciliation timer for {@link resumeRender}: a pause is implemented by
+  // the backend as a soft-kill (ffmpeg stopped, state saved, pipeline task
+  // unwinds). If the user resumes while the old task is still tearing down,
+  // the backend can answer `true` even though no pipeline is actually coming
+  // back — leaving the UI stuck in `running=true` forever with no pipeline
+  // activity. This watchdog restarts from the saved state if no real
+  // pipeline activity (Progress/Stats) arrives shortly after a "resumed" ack.
+  let resumeReconcileTimer: ReturnType<typeof setTimeout> | null = null;
 
   const logBuffer = new RingBuffer<string>(MAX_LOGS);
   const etaCalculator = new EtaCalculator(MAX_ETA_SAMPLES);
@@ -111,6 +119,22 @@ export function usePipeline() {
     }
   };
 
+  /**
+   * Fresh ETA baseline for a resumed render. The backend resumes from the
+   * *saved* state file, whose progress can differ from the last value the UI
+   * saw (state is saved every ~2s while progress events are throttled to
+   * 120ms). A stale baseline would make the first post-resume Progress event
+   * look like a huge burst of work (bogus near-zero ETA), and the pause idle
+   * time must not count as render time. Seed a sentinel so the first
+   * post-resume Progress event establishes the real baseline before any
+   * sample is taken.
+   */
+  const seedResumeBaseline = () => {
+    startProgress = -1;
+    startTime = Date.now();
+    etaCalculator.reset();
+  };
+
   const resetRenderState = (resuming: boolean) => {
     setRunning(true);
     setPaused(false);
@@ -125,12 +149,15 @@ export function usePipeline() {
       etaCalculator.reset();
     } else {
       setOverallEta('Resuming...');
-      startProgress = overallProgress();
+      seedResumeBaseline();
     }
     startTime = Date.now();
   };
 
   const handleProgress = (data: PipelineProgress) => {
+    // Real pipeline activity — a resumed pipeline is alive; disarm the
+    // resume watchdog.
+    cancelResumeReconcile();
     setJobs(data.jobs);
     const totalJobs = data.total;
     const jobsProgressSum = data.jobs.reduce(
@@ -143,13 +170,26 @@ export function usePipeline() {
         : 0;
     setOverallProgress(overallPercent);
 
-    const progressGained = overallPercent - startProgress;
-    if (progressGained > 0.001 && overallPercent < 100) {
-      const elapsedMs = Date.now() - startTime;
-      etaCalculator.addSample(elapsedMs, progressGained);
-      setOverallEta(etaCalculator.estimateRemaining(overallPercent));
-    } else if (overallPercent >= 100) {
-      setOverallEta('Done');
+    if (startProgress < 0) {
+      // First Progress event after a resume: use the actual (possibly more
+      // advanced) pipeline state as the ETA baseline instead of the stale
+      // pre-pause UI value, and skip sampling this event.
+      startProgress = overallPercent;
+      if (overallPercent >= 100) {
+        // A first event at 100% means the resumed batch is already done —
+        // report Done here so a lost Done event can't leave the ETA
+        // hanging on "Resuming...".
+        setOverallEta('Done');
+      }
+    } else {
+      const progressGained = overallPercent - startProgress;
+      if (progressGained > 0.001 && overallPercent < 100) {
+        const elapsedMs = Date.now() - startTime;
+        etaCalculator.addSample(elapsedMs, progressGained);
+        setOverallEta(etaCalculator.estimateRemaining(overallPercent));
+      } else if (overallPercent >= 100) {
+        setOverallEta('Done');
+      }
     }
   };
 
@@ -158,6 +198,7 @@ export function usePipeline() {
     total: number;
     failed: number;
   }) => {
+    cancelResumeReconcile();
     setRunning(false);
     setPaused(false);
     setOverallProgress(100);
@@ -187,6 +228,8 @@ export function usePipeline() {
       clearTimeout(pauseReconcileTimer);
       pauseReconcileTimer = null;
     }
+    // We're paused again — any pending resume watchdog is moot.
+    cancelResumeReconcile();
     appendLog('[INFO] Render paused');
     setRunning(false);
     setPaused(true);
@@ -199,6 +242,7 @@ export function usePipeline() {
   };
 
   const handleCancelled = (message: string) => {
+    cancelResumeReconcile();
     appendLog(`[INFO] ${message}`);
     setRunning(false);
     setPaused(false);
@@ -207,6 +251,7 @@ export function usePipeline() {
   };
 
   const handleFatalError = (message: string) => {
+    cancelResumeReconcile();
     appendLog(`FATAL: ${message}`);
     setRunning(false);
     setPaused(false);
@@ -233,6 +278,8 @@ export function usePipeline() {
     }
 
     resetRenderState(resume);
+    // Starting a fresh render invalidates any pending resume watchdog.
+    cancelResumeReconcile();
     // Remove any stale listener from a previous render before
     // creating a new one.  Reset the guard AFTER safeUnlisten so
     // that handleDone/handleCancelled/handleFatalError can also
@@ -253,6 +300,9 @@ export function usePipeline() {
               );
               break;
             case 'Stats':
+              // Live encoder stats are real pipeline activity too — disarm
+              // the resume watchdog just like Progress events do.
+              cancelResumeReconcile();
               setLiveStats(payload.data);
               break;
             case 'Progress':
@@ -319,6 +369,27 @@ export function usePipeline() {
         setPaused(false);
         setRunning(true);
         setOverallEta('Resuming...');
+        // Real resume (backend confirmed a live pipeline): the UI keeps its
+        // pre-pause signals, so seed the ETA baseline here — the same sentinel
+        // `resetRenderState(true)` uses for the restart path.
+        seedResumeBaseline();
+        // Watchdog for the pause→quick-resume race: the backend may answer
+        // `true` while the old pipeline is still tearing down. If no real
+        // activity (Progress/Stats) arrives within the window, assume the
+        // pipeline died and restart from the saved state file instead of
+        // leaving the UI stuck in "Rendering" forever.
+        cancelResumeReconcile();
+        resumeReconcileTimer = setTimeout(async () => {
+          resumeReconcileTimer = null;
+          if (running() && !paused()) {
+            log.warn(
+              'Resume watchdog: no pipeline activity; restarting from saved state',
+            );
+            safeUnlisten();
+            setRunning(false);
+            await startRender(true);
+          }
+        }, 6000);
       } else {
         // Pipeline already terminated; start a fresh one from state file.
         setPaused(false);
@@ -334,6 +405,12 @@ export function usePipeline() {
 
   const cancelRender = async () => {
     cancelPauseReconcile();
+    // Disarm the resume watchdog too: if the user pauses → resumes → cancels
+    // quickly, `safeUnlisten()` in the `finally` below removes the listener,
+    // so the backend's Cancelled event may never reach `handleCancelled`.
+    // Without this, the watchdog would fire 6s later and restart the very
+    // render the user just cancelled.
+    cancelResumeReconcile();
     try {
       await invoke(TAURI_COMMANDS.cancelRender);
     } catch (err) {
@@ -351,6 +428,13 @@ export function usePipeline() {
     if (pauseReconcileTimer !== null) {
       clearTimeout(pauseReconcileTimer);
       pauseReconcileTimer = null;
+    }
+  };
+
+  const cancelResumeReconcile = (): void => {
+    if (resumeReconcileTimer !== null) {
+      clearTimeout(resumeReconcileTimer);
+      resumeReconcileTimer = null;
     }
   };
 
@@ -469,6 +553,7 @@ export function usePipeline() {
   onCleanup(() => {
     safeUnlisten();
     cancelPauseReconcile();
+    cancelResumeReconcile();
   });
 
   return {

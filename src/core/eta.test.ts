@@ -42,11 +42,23 @@ describe('EtaCalculator', () => {
     expect(eta.estimateRemaining(50)).toBe('Calculating...');
   });
 
-  it('returns "Calculating..." when ETA exceeds 24 hours', () => {
+  it('shows a real ETA for renders longer than 24 hours (up to 7 days)', () => {
     const eta = new EtaCalculator(10);
-    // Very slow rate: 0.01% per 100000ms → remaining 99.99% would take ~999M ms (>24h)
-    eta.addSample(100000, 0.01);
+    // Slow rate: 0.04% per 100000ms → remaining 99.99% takes ~2.9 days.
+    // That is beyond the old 24h cap (which hid the ETA for long renders)
+    // but within the new 7-day display window, so it must render a real
+    // duration instead of 'Calculating...'.
+    eta.addSample(100000, 0.04);
     const result = eta.estimateRemaining(0.01);
+    expect(result).toContain('left');
+  });
+
+  it('returns "Calculating..." only when ETA exceeds 7 days', () => {
+    const eta = new EtaCalculator(10);
+    // Extremely slow rate: remaining would take ~313 years — beyond the
+    // 7-day sanity cap, so fall back to 'Calculating...'.
+    eta.addSample(1_000_000_000, 0.01);
+    const result = eta.estimateRemaining(1);
     expect(result).toBe('Calculating...');
   });
 

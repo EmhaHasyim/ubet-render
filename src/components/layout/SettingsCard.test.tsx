@@ -128,6 +128,13 @@ describe('SettingsCard', () => {
     expect(screen.getByText('hours')).toBeTruthy();
   });
 
+  it('caps the duration input at 24 hours', () => {
+    renderCard({ loopMode: () => 'duration' as const });
+    const input = screen.getByDisplayValue('1') as HTMLInputElement;
+    expect(input.getAttribute('min')).toBe('0.1');
+    expect(input.getAttribute('max')).toBe('24');
+  });
+
   it('shows count input when loopMode is count', () => {
     renderCard({ loopMode: () => 'count' as const });
     expect(screen.getByText('Repeat count')).toBeTruthy();

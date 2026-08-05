@@ -66,15 +66,36 @@ describe('notify — extended coverage', () => {
     consoleSpy.mockRestore();
   });
 
-  it('handles ensurePermission throw + notify outer catch', async () => {
-    // First call: isPermissionGranted throws, cache gets false
-    mockIsPermissionGranted.mockRejectedValue(new Error('fail'));
+  it('does NOT cache a transient isPermissionGranted failure (retries next call)', async () => {
+    // First call: isPermissionGranted throws (e.g. plugin not ready during
+    // early startup). The failure must not be cached as a permanent denial.
+    mockIsPermissionGranted.mockRejectedValueOnce(new Error('fail'));
     await notify('First', 'Call');
-    expect(mockIsPermissionGranted).toHaveBeenCalledTimes(1);
+    expect(mockSendNotification).not.toHaveBeenCalled();
 
-    // Second call: cache says false, no sendNotification
+    // Second call: the plugin has recovered — permission is re-checked and
+    // the notification is sent.
     mockIsPermissionGranted.mockResolvedValue(true);
     await notify('Second', 'Call');
+    expect(mockSendNotification).toHaveBeenCalledWith({
+      title: 'Second',
+      body: 'Call',
+    });
+  });
+
+  it('does NOT cache a transient requestPermission failure (retries next call)', async () => {
+    mockIsPermissionGranted.mockResolvedValueOnce(false);
+    mockRequestPermission.mockRejectedValueOnce(new Error('fail'));
+    await notify('First', 'Call');
     expect(mockSendNotification).not.toHaveBeenCalled();
+
+    // Plugin recovered — subsequent call grants and sends.
+    mockIsPermissionGranted.mockResolvedValueOnce(false);
+    mockRequestPermission.mockResolvedValue('granted');
+    await notify('Second', 'Call');
+    expect(mockSendNotification).toHaveBeenCalledWith({
+      title: 'Second',
+      body: 'Call',
+    });
   });
 });

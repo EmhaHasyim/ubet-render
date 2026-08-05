@@ -142,10 +142,16 @@ function coerceConfig(raw: Record<string, unknown>): PersistedConfig {
       DEFAULT_CONFIG.audio.songsPerPlaylist,
       1,
     ),
-    minDurationHours: numberOr(
-      raw.minDurationHours,
-      DEFAULT_CONFIG.target.minDurationSec / 3600,
-      0.1,
+    // Clamp to the same 0.1–24h range the backend validates, so a corrupted
+    // or hand-edited stored value can never produce a render that fails
+    // validation on the Rust side.
+    minDurationHours: Math.min(
+      24,
+      numberOr(
+        raw.minDurationHours,
+        DEFAULT_CONFIG.target.minDurationSec / 3600,
+        0.1,
+      ),
     ),
     loopMode: raw.loopMode === 'count' ? 'count' : 'duration',
     loopCount: numberOr(raw.loopCount, 1, 1),

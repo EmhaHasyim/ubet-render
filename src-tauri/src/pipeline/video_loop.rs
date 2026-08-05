@@ -31,11 +31,7 @@ pub async fn create_ping_pong_video(params: PingPongVideoParams<'_>) -> Result<(
         cancel_control,
         tx_stats,
     } = params;
-    let base_filter = if use_pingpong {
-        "[0:v]scale=1920:1080:flags=lanczos,unsharp=3:3:1.0:3:3:0.0[upscaled];[upscaled]split[s1][s2];[s2]reverse[r];[s1][r]concat=n=2:v=1[v_base]"
-    } else {
-        "[0:v]scale=1920:1080:flags=lanczos,unsharp=3:3:1.0:3:3:0.0[v_base]"
-    };
+    let base_filter = build_base_filter(use_pingpong);
     // Use Vec<&str> — borrow static strings and settings fields, no .into() allocation for static strings
     let mut args: Vec<&str> = vec!["-y", "-i", input];
     let filter_complex = base_filter.replace("[v_base]", "[v]");
@@ -102,6 +98,34 @@ pub async fn create_ping_pong_video(params: PingPongVideoParams<'_>) -> Result<(
     }
     args.extend(["-r", &fps_str, "-vsync", "cfr", &output_str]);
     ffmpeg::run(app, &args, tx_progress, cancel_control, tx_stats).await
+}
+
+/// Builds the ffmpeg `-filter_complex` graph for the intermediate video.
+///
+/// The output frame size is always 1920×1080 (required so the downstream
+/// concat demuxer `-c copy` sees uniform segments), but the source is scaled
+/// with `force_original_aspect_ratio=decrease` and then letterboxed with
+/// `pad`. Without this, non-16:9 sources (portrait / square videos) would be
+/// stretched to 1920×1080 and visibly distorted. The padding color defaults
+/// to black.
+fn build_base_filter(use_pingpong: bool) -> String {
+    // Scale preserving the aspect ratio, then pad the leftover space to the
+    // fixed 1920×1080 canvas. `(ow-iw)/2` / `(oh-ih)/2` centre the scaled
+    // frame both vertically and horizontally. `concat!` keeps the pieces on
+    // separate source lines without relying on a fragile `\` line-continuation
+    // inside the literal (a stray space there would silently break the graph).
+    let scale_pad = concat!(
+        "scale=1920:1080:force_original_aspect_ratio=decrease:flags=lanczos,",
+        "pad=1920:1080:(ow-iw)/2:(oh-ih)/2:color=black"
+    );
+    if use_pingpong {
+        format!(
+            "[0:v]{},unsharp=3:3:1.0:3:3:0.0[upscaled];[upscaled]split[s1][s2];[s2]reverse[r];[s1][r]concat=n=2:v=1[v_base]",
+            scale_pad
+        )
+    } else {
+        format!("[0:v]{},unsharp=3:3:1.0:3:3:0.0[v_base]", scale_pad)
+    }
 }
 
 fn format_timestamp(seconds: f64, force_hours: bool) -> String {
@@ -318,6 +342,34 @@ pub async fn generate_loop_playlists(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -----------------------------------------------------------------------
+    // build_base_filter
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_build_base_filter_preserves_aspect_ratio() {
+        let f = build_base_filter(false);
+        assert!(f.contains("force_original_aspect_ratio=decrease"));
+        assert!(f.contains("pad=1920:1080"));
+        // Non-ping-pong variant must not contain the reverse/concat graph.
+        assert!(!f.contains("reverse"));
+    }
+
+    #[test]
+    fn test_build_base_filter_pingpong_graph() {
+        let f = build_base_filter(true);
+        assert!(f.contains("force_original_aspect_ratio=decrease"));
+        assert!(f.contains("pad=1920:1080"));
+        assert!(f.contains("reverse"));
+        assert!(f.contains("concat=n=2:v=1"));
+    }
+
+    #[test]
+    fn test_build_base_filter_ends_with_v_base_label() {
+        assert!(build_base_filter(false).ends_with("[v_base]"));
+        assert!(build_base_filter(true).ends_with("[v_base]"));
+    }
 
     // -----------------------------------------------------------------------
     // format_timestamp

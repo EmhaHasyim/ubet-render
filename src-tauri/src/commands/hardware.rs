@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::process::Command;
+use std::sync::OnceLock;
 use sysinfo::System;
 use tauri_plugin_shell::ShellExt;
 
@@ -148,35 +149,73 @@ fn parse_gpu_names(stdout: &str) -> Vec<String> {
         .collect()
 }
 
+/// Cached verdict so the (potentially slow) AV1 probe runs at most once per
+/// app session. Without a cache, every remount (e.g. ErrorBoundary "Try
+/// Again") would re-run up to four ffmpeg subprocesses and could stall
+/// rendering startup for tens of seconds.
+static AV1_SUPPORT_CACHE: OnceLock<bool> = OnceLock::new();
+
 async fn check_av1_support(app: &tauri::AppHandle) -> bool {
-    let hw_encoders = ["av1_nvenc", "av1_amf", "av1_qsv"];
+    if let Some(v) = AV1_SUPPORT_CACHE.get() {
+        return *v;
+    }
     let probe_timeout = std::time::Duration::from_secs(8);
 
-    for encoder in hw_encoders {
-        let Ok(sidecar_command) = app.shell().sidecar("ffmpeg") else {
-            continue;
-        };
-        let sidecar_command = sidecar_command.args([
-                "-v", "error",
-                "-f", "lavfi",
-                "-i", "color=c=black:s=256x256",
-                "-vframes", "1",
-                "-c:v", encoder,
-                "-f", "null",
-                "-"
-            ]);
+    // Probe the three vendor hardware encoders CONCURRENTLY and run the
+    // software (libsvtav1) scan in parallel too. The previous sequential
+    // loop could stall app startup for up to 3× the probe timeout (24 s)
+    // plus the fallback scan (8 s) on a machine where an encoder exists
+    // but initialises slowly. Parallelising bounds the worst case to a
+    // single probe timeout while keeping the accuracy of actually testing
+    // each encoder.
+    let hw_fut = futures::future::join_all(
+        ["av1_nvenc", "av1_amf", "av1_qsv"]
+            .iter()
+            .map(|&encoder| probe_hw_encoder(app, encoder, probe_timeout)),
+    );
+    let svt_fut = scan_encoders_for_svt_av1(app, probe_timeout);
+    let (hw_results, has_svt) = tokio::join!(hw_fut, svt_fut);
 
-        match tokio::time::timeout(probe_timeout, sidecar_command.output()).await {
-            Ok(Ok(output)) if output.status.success() => return true,
-            _ => {}
-        }
-    }
+    let supported = hw_results.into_iter().any(|r| r) || has_svt;
+    let _ = AV1_SUPPORT_CACHE.set(supported);
+    supported
+}
 
+/// Run one ffmpeg hardware-encode probe. Returns `true` when the encoder
+/// produced a frame successfully within `probe_timeout`.
+async fn probe_hw_encoder(
+    app: &tauri::AppHandle,
+    encoder: &str,
+    probe_timeout: std::time::Duration,
+) -> bool {
+    let Ok(sidecar_command) = app.shell().sidecar("ffmpeg") else {
+        return false;
+    };
+    let sidecar_command = sidecar_command.args([
+        "-v", "error",
+        "-f", "lavfi",
+        "-i", "color=c=black:s=256x256",
+        "-vframes", "1",
+        "-c:v", encoder,
+        "-f", "null",
+        "-",
+    ]);
+    matches!(
+        tokio::time::timeout(probe_timeout, sidecar_command.output()).await,
+        Ok(Ok(output)) if output.status.success()
+    )
+}
+
+/// Cheap fallback: check whether the bundled ffmpeg lists `libsvtav1`
+/// among its compiled encoders.
+async fn scan_encoders_for_svt_av1(
+    app: &tauri::AppHandle,
+    probe_timeout: std::time::Duration,
+) -> bool {
     let Ok(sidecar_command) = app.shell().sidecar("ffmpeg") else {
         return false;
     };
     let sidecar_command = sidecar_command.args(["-hide_banner", "-encoders"]);
-
     match tokio::time::timeout(probe_timeout, sidecar_command.output()).await {
         Ok(Ok(out)) => {
             let stdout = String::from_utf8_lossy(&out.stdout);

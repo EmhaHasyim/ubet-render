@@ -339,7 +339,7 @@ function Dashboard(props: { pipeline: Pipeline }) {
                   <div class="min-h-0 flex-1 overflow-auto p-3 custom-scrollbar">
                     <JobTable
                       jobs={pipeline.jobs()}
-                      onRetry={pipeline.retryJob ?? undefined}
+                      onRetry={pipeline.retryJob}
                     />
                   </div>
                 </section>

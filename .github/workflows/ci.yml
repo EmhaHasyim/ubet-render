@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, dev]
   pull_request:
-    branches: [main, dev]  # run CI on PRs opened against either protected branch
+    branches: [main, dev] # run CI on PRs opened against either protected branch
 
 env:
   CI: true

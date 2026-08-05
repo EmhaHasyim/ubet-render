@@ -25,6 +25,10 @@ struct ControlGuard {
 impl Drop for ControlGuard {
     fn drop(&mut self) {
         use tauri::Manager;
+        // Mark the control terminated first so a racing `resume_render` (which
+        // may already hold a clone of the Arc) reports "no live pipeline"
+        // instead of falsely returning `true` for a pipeline that is exiting.
+        self.control.mark_terminated();
         if let Ok(mut lock) = self.app.state::<crate::RenderState>().control.lock()
             && lock
                 .as_ref()
@@ -105,7 +109,16 @@ pub async fn start_render(
             control: control_clone.clone(),
         };
 
-        let result = pipeline.execute(overrides, resume_flag, control_clone).await;
+        let result = pipeline.execute(overrides, resume_flag, control_clone.clone()).await;
+
+        // The pipeline has finished — success, fatal error, cancelled, or
+        // paused. From this instant a racing `resume_render` must NOT
+        // resurrect it: mark the control terminated so the command returns
+        // `false` and the frontend restarts from the saved state file.
+        // Without this, a resume issued in the teardown window would return
+        // `true` while the pipeline never emits another event, leaving the
+        // UI stuck in "Rendering" forever.
+        control_clone.mark_terminated();
 
         match result {
             Ok(()) => {}
@@ -199,6 +212,15 @@ pub fn resume_render(
         }
     };
     if let Some(control) = control {
+        // The pipeline may still be in the process of tearing down after a
+        // pause (ffmpeg killed, state saved, task about to exit). A control
+        // that has already committed to terminating cannot be resumed —
+        // report `false` so the frontend starts a fresh pipeline from the
+        // on-disk state file instead of waiting forever for events that
+        // will never arrive.
+        if control.is_terminated() {
+            return false;
+        }
         let resumed = control.resume();
         if resumed {
             event::emit(&app, crate::models::job::PipelineEvent::Log {

@@ -38,7 +38,11 @@ export class EtaCalculator {
     if (this.emaRate <= 0) return 'Calculating...';
 
     const remainingMs = (100 - currentPercent) / this.emaRate;
-    if (remainingMs > 0 && remainingMs < 86400000) {
+    // The 7-day upper bound only guards against absurd extrapolations from a
+    // single early sample. The previous 24 h cap was too aggressive: renders
+    // can legitimately run up to 24 h (minDurationHours max), so the ETA
+    // would show "Calculating..." for almost the entire render.
+    if (remainingMs > 0 && remainingMs < 604800000) {
       return formatDuration(remainingMs);
     }
     return 'Calculating...';

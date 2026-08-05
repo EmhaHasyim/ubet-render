@@ -12,6 +12,10 @@ const log = createLogger('notify');
 let permissionCached: boolean | null = null;
 
 async function ensurePermission(): Promise<boolean> {
+  // Cache the outcome for the session: a granted permission is stable, and a
+  // denied/not-granted decision is remembered by the OS, so re-querying (or
+  // worse, re-prompting) on every notification would be both noisy and
+  // useless.
   if (permissionCached !== null) return permissionCached;
   try {
     let granted = await isPermissionGranted();
@@ -22,7 +26,10 @@ async function ensurePermission(): Promise<boolean> {
     permissionCached = granted;
     return granted;
   } catch {
-    permissionCached = false;
+    // Transient IPC failure (plugin not ready during early startup, IPC
+    // hiccup): do NOT cache. Caching `false` here would silently disable
+    // notifications for the rest of the session even though the failure was
+    // one-off; the next notify() call re-checks instead.
     return false;
   }
 }

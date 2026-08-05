@@ -19,6 +19,7 @@ use commands::{
 use std::sync::{
     Arc, Mutex,
 };
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     scope::fs::Scope as FsScope,
@@ -32,13 +33,38 @@ pub struct RenderControl {
     cancel_rx: watch::Receiver<bool>,
     pause_tx: watch::Sender<bool>,
     pause_rx: watch::Receiver<bool>,
+    /// Set once the pipeline task has finished (or is committed to exiting).
+    /// Guards the pause→resume race: after this flag flips, `resume_render`
+    /// must report "no live pipeline" so the frontend restarts from the
+    /// saved state file instead of believing a dead pipeline resumed.
+    terminated: AtomicBool,
 }
 
 impl RenderControl {
     pub fn new() -> Self {
         let (cancel_tx, cancel_rx) = watch::channel(false);
         let (pause_tx, pause_rx) = watch::channel(false);
-        Self { cancel_tx, cancel_rx, pause_tx, pause_rx }
+        Self {
+            cancel_tx,
+            cancel_rx,
+            pause_tx,
+            pause_rx,
+            terminated: AtomicBool::new(false),
+        }
+    }
+
+    /// Marks this pipeline as terminated. Called when the pipeline task is
+    /// committed to exiting (after `execute` returns) and again when the
+    /// control guard drops.
+    pub fn mark_terminated(&self) {
+        self.terminated.store(true, Ordering::SeqCst);
+    }
+
+    /// Returns `true` once the pipeline has committed to (or already)
+    /// terminated — a paused pipeline that is already exiting can no longer
+    /// be resumed and must be restarted from the saved state instead.
+    pub fn is_terminated(&self) -> bool {
+        self.terminated.load(Ordering::SeqCst)
     }
 
     /// Returns a clone of the cancel receiver so external code can wait for
@@ -181,6 +207,24 @@ mod tests {
         let rc = RenderControl::default();
         assert!(!rc.is_cancelled());
         assert!(!rc.is_paused());
+    }
+
+    #[test]
+    fn test_render_control_new_is_not_terminated() {
+        let rc = RenderControl::new();
+        assert!(!rc.is_terminated());
+    }
+
+    #[test]
+    fn test_render_control_mark_terminated() {
+        let rc = RenderControl::new();
+        rc.pause();
+        rc.mark_terminated();
+        assert!(rc.is_terminated());
+        // A terminated (committed-to-exit) pipeline that happens to still be
+        // paused must not report itself as resumable.
+        assert!(rc.is_paused());
+        assert!(rc.is_terminated());
     }
 }
 

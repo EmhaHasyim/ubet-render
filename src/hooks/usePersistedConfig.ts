@@ -26,6 +26,18 @@ interface PersistedState {
   skipIntermediateOnCodecMatch: boolean;
 }
 
+/**
+ * Persist a snapshot to localStorage, swallowing quota/storage errors.
+ * Module-level so the debounced writer isn't recreated on every render.
+ */
+function writeSnapshot(snapshot: PersistedConfig): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+  } catch {
+    /* localStorage quota exceeded or disabled */
+  }
+}
+
 export function usePersistedConfig() {
   const initial = loadPersistedConfig();
 
@@ -55,6 +67,11 @@ export function usePersistedConfig() {
   // access so this effect only re-runs when a field actually used below
   // has changed (not when ANY field changes).
   let persistTimer: ReturnType<typeof setTimeout> | null = null;
+  // Latest snapshot, kept so the pending debounced write can be flushed
+  // synchronously if the hook unmounts before the timer fires (otherwise
+  // the most recent field change would be silently lost).
+  let latestSnapshot: PersistedConfig | null = null;
+
   createEffect(() => {
     const snapshot: PersistedConfig = {
       version: STORAGE_VERSION,
@@ -74,23 +91,26 @@ export function usePersistedConfig() {
       codec: state.codec,
       skipIntermediateOnCodecMatch: state.skipIntermediateOnCodecMatch,
     };
+    latestSnapshot = snapshot;
     // Clear any pending timer before setting a new one — avoids creating
     // N timers when the user changes N fields rapidly.
     if (persistTimer !== null) clearTimeout(persistTimer);
     persistTimer = setTimeout(() => {
       persistTimer = null;
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
-      } catch {
-        /* localStorage quota exceeded or disabled */
-      }
+      writeSnapshot(snapshot);
     }, 300);
-    onCleanup(() => {
-      if (persistTimer !== null) {
-        clearTimeout(persistTimer);
-        persistTimer = null;
-      }
-    });
+  });
+
+  // Flush any pending debounced write on unmount so the last field change
+  // isn't lost (e.g. when the ErrorBoundary remounts the pipeline).
+  onCleanup(() => {
+    if (persistTimer !== null) {
+      clearTimeout(persistTimer);
+      persistTimer = null;
+    }
+    if (latestSnapshot !== null) {
+      writeSnapshot(latestSnapshot);
+    }
   });
 
   return {
@@ -123,8 +143,11 @@ export function usePersistedConfig() {
         'songsPerPlaylist',
         Math.max(1, Math.min(100, Math.round(v)) || 1),
       ),
+    // Clamped to 0.1–24h to match the backend's validation range
+    // (MIN_DURATION_HOURS..=MAX_DURATION_HOURS in validation.rs). Without the
+    // upper bound a value like 30 would pass the UI but hard-fail start_render.
     setMinDurationHours: (v: number) =>
-      setState('minDurationHours', Math.max(0.1, v || 0.1)),
+      setState('minDurationHours', Math.min(24, Math.max(0.1, v || 0.1))),
     setLoopMode: (v: 'duration' | 'count') => setState('loopMode', v),
     setLoopCount: (v: number) =>
       setState('loopCount', Math.max(1, Math.min(100, Math.round(v)) || 1)),

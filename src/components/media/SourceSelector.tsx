@@ -25,12 +25,13 @@ const colorClass = {
   info: 'border-info/35 bg-info/5 text-info hover:border-info',
 };
 
+/** Last path segment for display — module-level so it isn't recreated per render. */
+const fileName = (path: string) =>
+  path.replace(/\\/g, '/').split('/').pop() || path;
+
 export function SourceSelector(props: SourceSelectorProps) {
   const [lastDir, setLastDir] = createSignal<string>();
   const [showClearConfirm, setShowClearConfirm] = createSignal(false);
-
-  const fileName = (path: string) =>
-    path.replace(/\\/g, '/').split('/').pop() || path;
 
   const browseFiles = async () => {
     let currentDefault = lastDir();

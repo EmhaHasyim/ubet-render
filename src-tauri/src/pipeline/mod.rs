@@ -18,7 +18,6 @@ use estimator::{
     available_space_for, estimate_total_output_bytes, human_bytes, parse_bitrate_to_kbps,
     sanitize_filename_component,
 };
-use futures::StreamExt;
 use rand::prelude::SliceRandom;
 use rand::rngs::{StdRng, SysRng};
 use rand::SeedableRng;
@@ -411,97 +410,130 @@ impl Pipeline {
             );
         }
 
-        let indices: Vec<usize> = (0..total_jobs).collect();
-        let stream = futures::stream::iter(indices);
         let stats_tx_for_stream = stats_tx.clone();
 
-        stream.for_each(|i| {
-            let p_arc = Arc::clone(&pipeline_arc);
-            let j_arc = Arc::clone(&jobs_arc);
-            let cache_clone = cache_dir.clone();
-            let c_clone = control.clone();
-            let vcfg_clone = video_cfg.clone();
-            let e_arc = encoder_arc.clone();
-            let m_pool = master_pool.clone();
-            let s_path = state_path.clone();
-            let stats_tx_clone = stats_tx_for_stream.clone();
-
-            async move {
-                if c_clone.is_cancelled() {
-                    return;
-                }
-                if c_clone.is_paused() {
-                    // Don't wait for resume here - return early so the pipeline
-                    // terminates, runs cleanup, and saves state.
-                    // On resume, a fresh pipeline will be created from the state file.
-                    let _ = p_arc.state_manager.save_state_from_arc(&s_path, &j_arc).await;
-                    return;
-                }
-
-                let skip = {
-                    let lock = j_arc.lock().await;
-                    Path::new(&lock[i].video.output_path).exists() && lock[i].state == JobState::Done
-                };
-
-                if skip {
-                    p_arc.state_manager.emit_progress_from_arc(&p_arc.app, &j_arc).await;
-                    let _ = p_arc.state_manager.save_state_from_arc(&s_path, &j_arc).await;
-                    return;
-                }
-
-                let ctx = JobContext {
-                    index: i,
-                    jobs_arc: &j_arc,
-                    cache_dir: &cache_clone,
-                    render_timestamp,
-                    control: c_clone.clone(),
-                    stats_tx: Some(stats_tx_clone),
-                };
-                let params = JobParams {
-                    use_pingpong,
-                    skip_intermediate_on_codec_match,
-                    video_cfg: vcfg_clone.clone(),
-                    encoder_selected: e_arc.as_deref().map(|s| s.to_string()),
-                    master_pool: m_pool.clone(),
-                    songs_per_playlist,
-                    min_duration_sec,
-                    loop_count,
-                    embed_chapters,
-                };
-
-                let result = p_arc.process_single_job(ctx, params).await;
-
-                match result {
-                    Ok(()) => {
-                        event::emit(
-                            &p_arc.app,
-                            PipelineEvent::Log { level: "success".into(), message: format!("Job {} finished", i) },
-                        );
-                    }
-                    Err(AppError::Cancelled(_)) => {}
-                    Err(AppError::Paused(_)) => {
-                        // State is saved by the call at the bottom of this closure
-                    }
-                    Err(e) => {
-                        {
-                            let mut lock = j_arc.lock().await;
-                            lock[i].state = JobState::Error;
-                            lock[i].error = Some(e.to_string());
-                        }
-                        p_arc.state_manager.emit_progress_from_arc(&p_arc.app, &j_arc).await;
-                    }
-                }
-
-                let _ = p_arc.state_manager.save_state_from_arc(&s_path, &j_arc).await;
+        // Process jobs sequentially in an explicit loop. A plain loop (instead
+        // of `futures::stream::iter().for_each()`) lets us *retry the current
+        // job in place*: if a pause is acknowledged mid-job but the user has
+        // already resumed, the pipeline is still alive and we re-run the
+        // interrupted job instead of leaving it as a zombie `processing` row
+        // (or terminating the whole batch). If the pipeline is still paused
+        // we persist state and terminate — a later resume starts a fresh
+        // pipeline from the state file.
+        let mut idx = 0usize;
+        while idx < total_jobs {
+            if control.is_cancelled() {
+                break;
             }
-        }).await;
+            if control.is_paused() {
+                // Persist and terminate — resume restarts from the state file.
+                let _ = pipeline_arc
+                    .state_manager
+                    .save_state_from_arc(&state_path, &jobs_arc)
+                    .await;
+                break;
+            }
+
+            let skip = {
+                let lock = jobs_arc.lock().await;
+                Path::new(&lock[idx].video.output_path).exists() && lock[idx].state == JobState::Done
+            };
+
+            if skip {
+                pipeline_arc
+                    .state_manager
+                    .emit_progress_from_arc(&pipeline_arc.app, &jobs_arc)
+                    .await;
+                let _ = pipeline_arc
+                    .state_manager
+                    .save_state_from_arc(&state_path, &jobs_arc)
+                    .await;
+                idx += 1;
+                continue;
+            }
+
+            let ctx = JobContext {
+                index: idx,
+                jobs_arc: &jobs_arc,
+                cache_dir: &cache_dir,
+                render_timestamp,
+                control: control.clone(),
+                stats_tx: Some(stats_tx_for_stream.clone()),
+            };
+            let params = JobParams {
+                use_pingpong,
+                skip_intermediate_on_codec_match,
+                video_cfg: video_cfg.clone(),
+                encoder_selected: encoder_arc.as_deref().map(|s| s.to_string()),
+                master_pool: master_pool.clone(),
+                songs_per_playlist,
+                min_duration_sec,
+                loop_count,
+                embed_chapters,
+            };
+
+            let result = pipeline_arc.process_single_job(ctx, params).await;
+
+            match result {
+                Ok(()) => {
+                    event::emit(
+                        &pipeline_arc.app,
+                        PipelineEvent::Log {
+                            level: "success".into(),
+                            message: format!("Job {} finished", idx),
+                        },
+                    );
+                    idx += 1;
+                }
+                Err(AppError::Cancelled(_)) => {
+                    // Cancelled mid-job: persist what we have and terminate.
+                    let _ = pipeline_arc
+                        .state_manager
+                        .save_state_from_arc(&state_path, &jobs_arc)
+                        .await;
+                    break;
+                }
+                Err(AppError::Paused(_)) => {
+                    if control.is_paused() {
+                        // Still paused: persist and terminate; resume restarts
+                        // from the state file.
+                        let _ = pipeline_arc
+                            .state_manager
+                            .save_state_from_arc(&state_path, &jobs_arc)
+                            .await;
+                        break;
+                    }
+                    // Resumed while the pipeline was tearing down (the
+                    // pause→quick-resume race): retry this job immediately so
+                    // the batch continues cleanly. Intermediate files were
+                    // already cleaned up by `process_single_job`.
+                    continue;
+                }
+                Err(e) => {
+                    {
+                        let mut lock = jobs_arc.lock().await;
+                        lock[idx].state = JobState::Error;
+                        lock[idx].error = Some(e.to_string());
+                    }
+                    pipeline_arc
+                        .state_manager
+                        .emit_progress_from_arc(&pipeline_arc.app, &jobs_arc)
+                        .await;
+                    let _ = pipeline_arc
+                        .state_manager
+                        .save_state_from_arc(&state_path, &jobs_arc)
+                        .await;
+                    idx += 1;
+                }
+            }
+        }
 
         // All jobs finished: drop the last stats senders so the forwarder task
         // drains and exits, then wait for it to finish.
-        // `stats_tx_for_stream` is still alive after `for_each` (the closure only
-        // borrows it by reference), so we must drop it explicitly here.  If we
-        // skip this, the channel stays open and `stats_handle.await` hangs
-        // forever, preventing the `Done` event from ever reaching the frontend.
+        // `stats_tx_for_stream` is still alive after the loop (each job only
+        // cloned it), so we must drop it explicitly here.  If we skip this,
+        // the channel stays open and `stats_handle.await` hangs forever,
+        // preventing the `Done` event from ever reaching the frontend.
         drop(stats_tx_for_stream);
         drop(stats_tx);
         let _ = stats_handle.await;
