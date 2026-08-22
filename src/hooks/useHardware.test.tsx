@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render } from '@solidjs/testing-library';
-import { createRoot } from 'solid-js';
+import { createRoot, createSignal } from 'solid-js';
 
 // Must be at top level — vitest hoists it before imports
 vi.mock('@tauri-apps/api/core', () => ({
@@ -10,6 +10,9 @@ vi.mock('@tauri-apps/api/core', () => ({
 import type { Mock } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 import { useHardware } from './useHardware';
+
+const av1Codec = () => 'av1';
+const h264Codec = () => 'h264';
 
 /** Mount a hook inside a SolidJS reactive root and return its value. */
 function mountHook<T>(fn: () => T): T {
@@ -40,14 +43,12 @@ describe('useHardware', () => {
   });
 
   it('returns null hardwareInfo initially', () => {
-    const codec = () => 'av1';
     const setCodec = vi.fn();
-    const hw = mountHook(() => useHardware(codec, setCodec));
+    const hw = mountHook(() => useHardware(av1Codec, setCodec));
     expect(hw.hardwareInfo()).toBeNull();
   });
 
   it('invokes detect_hardware on mount', () => {
-    const codec = () => 'av1';
     const setCodec = vi.fn();
     (invoke as unknown as Mock).mockResolvedValue({
       cpuName: 'AMD Ryzen 9',
@@ -56,7 +57,7 @@ describe('useHardware', () => {
       av1Supported: true,
     });
 
-    const { ref } = mountMountedHook(() => useHardware(codec, setCodec));
+    const { ref } = mountMountedHook(() => useHardware(av1Codec, setCodec));
     expect(invoke).toHaveBeenCalledWith('detect_hardware');
 
     return vi.waitFor(() => {
@@ -69,11 +70,10 @@ describe('useHardware', () => {
   });
 
   it('falls back to Unknown hardware on invoke failure', () => {
-    const codec = () => 'av1';
     const setCodec = vi.fn();
     (invoke as unknown as Mock).mockRejectedValue(new Error('IPC error'));
 
-    const { ref } = mountMountedHook(() => useHardware(codec, setCodec));
+    const { ref } = mountMountedHook(() => useHardware(av1Codec, setCodec));
 
     return vi.waitFor(() => {
       expect(ref.hardwareInfo()).not.toBeNull();
@@ -85,7 +85,6 @@ describe('useHardware', () => {
   });
 
   it('falls back from AV1 to h265 when AV1 is unsupported', () => {
-    const codec = () => 'av1';
     const setCodec = vi.fn();
     (invoke as unknown as Mock).mockResolvedValue({
       cpuName: 'Intel i7',
@@ -94,15 +93,45 @@ describe('useHardware', () => {
       av1Supported: false,
     });
 
-    mountMountedHook(() => useHardware(codec, setCodec));
+    mountMountedHook(() => useHardware(av1Codec, setCodec));
 
     return vi.waitFor(() => {
       expect(setCodec).toHaveBeenCalledWith('h265');
     });
   });
 
+  it('does not overwrite a newer codec selection after async detection', async () => {
+    let resolveProbe!: (value: {
+      cpuName: string;
+      gpuName: string;
+      ramGb: number;
+      av1Supported: boolean;
+    }) => void;
+    (invoke as unknown as Mock).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveProbe = resolve;
+        }),
+    );
+
+    const [codec, setCodecState] = createSignal('av1');
+    const setCodec = (value: string) => setCodecState(value);
+    mountMountedHook(() => useHardware(codec, setCodec));
+    setCodecState('h264');
+
+    resolveProbe({
+      cpuName: 'Intel i7',
+      gpuName: 'Intel UHD',
+      ramGb: 32,
+      av1Supported: false,
+    });
+
+    await vi.waitFor(() => {
+      expect(codec()).toBe('h264');
+    });
+  });
+
   it('does NOT change codec when AV1 is unsupported but codec is not AV1', () => {
-    const codec = () => 'h264';
     const setCodec = vi.fn();
     (invoke as unknown as Mock).mockResolvedValue({
       cpuName: 'Intel i7',
@@ -111,7 +140,7 @@ describe('useHardware', () => {
       av1Supported: false,
     });
 
-    mountMountedHook(() => useHardware(codec, setCodec));
+    mountMountedHook(() => useHardware(h264Codec, setCodec));
 
     return vi.waitFor(() => {
       expect(setCodec).not.toHaveBeenCalled();
@@ -120,7 +149,6 @@ describe('useHardware', () => {
 
   describe('resolveEncoder', () => {
     it('resolves NVIDIA encoder for NVIDIA GPU', () => {
-      const codec = () => 'av1';
       const setCodec = vi.fn();
       (invoke as unknown as Mock).mockResolvedValue({
         cpuName: 'AMD Ryzen',
@@ -129,7 +157,7 @@ describe('useHardware', () => {
         av1Supported: true,
       });
 
-      const { ref } = mountMountedHook(() => useHardware(codec, setCodec));
+      const { ref } = mountMountedHook(() => useHardware(av1Codec, setCodec));
 
       return vi.waitFor(() => {
         expect(ref.resolveEncoder('h264')).toBe('h264_nvenc');
@@ -139,7 +167,6 @@ describe('useHardware', () => {
     });
 
     it('resolves software encoder for unknown GPU', () => {
-      const codec = () => 'av1';
       const setCodec = vi.fn();
       (invoke as unknown as Mock).mockResolvedValue({
         cpuName: 'Unknown',
@@ -148,7 +175,7 @@ describe('useHardware', () => {
         av1Supported: true,
       });
 
-      const { ref } = mountMountedHook(() => useHardware(codec, setCodec));
+      const { ref } = mountMountedHook(() => useHardware(av1Codec, setCodec));
 
       return vi.waitFor(() => {
         expect(ref.resolveEncoder('h264')).toBe('libx264');
@@ -158,7 +185,6 @@ describe('useHardware', () => {
     });
 
     it('resolves AMD encoder for AMD GPU', () => {
-      const codec = () => 'av1';
       const setCodec = vi.fn();
       (invoke as unknown as Mock).mockResolvedValue({
         cpuName: 'AMD Ryzen',
@@ -167,7 +193,7 @@ describe('useHardware', () => {
         av1Supported: true,
       });
 
-      const { ref } = mountMountedHook(() => useHardware(codec, setCodec));
+      const { ref } = mountMountedHook(() => useHardware(av1Codec, setCodec));
 
       return vi.waitFor(() => {
         expect(ref.resolveEncoder('h264')).toBe('h264_amf');

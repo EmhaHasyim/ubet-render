@@ -46,7 +46,9 @@ pub async fn generate_thumbnails(
                         "scale=320:-1",
                         &thumb_path_str,
                     ];
-                    if let Err(e) = ffmpeg::run(&self_app, &args, None, Some(control_clone), None).await {
+                    if let Err(e) =
+                        ffmpeg::run(&self_app, &args, None, Some(control_clone), None).await
+                    {
                         event::emit(
                             &self_app,
                             crate::models::job::PipelineEvent::Log {

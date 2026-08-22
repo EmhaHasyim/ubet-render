@@ -7,6 +7,25 @@ use crate::utils::event;
 use std::path::Path;
 use tauri::AppHandle;
 
+/// Escape a value for FFmpeg's FFMETADATA1 key/value format.
+/// Metadata values are not shell arguments here; FFmpeg parses reserved
+/// separators after receiving the argument, so they must be escaped in-band.
+fn escape_ffmetadata_value(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '=' => escaped.push_str("\\\\="),
+            ';' => escaped.push_str("\\\\;"),
+            '#' => escaped.push_str("\\\\#"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            other => escaped.push(other),
+        }
+    }
+    escaped
+}
+
 pub struct PingPongVideoParams<'a> {
     pub app: &'a tauri::AppHandle,
     pub input: &'a str,
@@ -62,8 +81,8 @@ pub async fn create_ping_pong_video(params: PingPongVideoParams<'_>) -> Result<(
         // For H.264 (h264_nvenc), preset values differ (p1-p7 vs p1-p7) and
         // `-rc vbr` with `-b:v` is the correct pattern; omitting `-preset`
         // lets the encoder use its default (p4 = medium), which is acceptable.
-        let is_hevc_or_av1 = video_settings.encoder.contains("hevc")
-            || video_settings.encoder.contains("av1");
+        let is_hevc_or_av1 =
+            video_settings.encoder.contains("hevc") || video_settings.encoder.contains("av1");
         if is_hevc_or_av1 {
             args.extend(["-preset", &video_settings.preset]);
         }
@@ -186,19 +205,22 @@ pub async fn generate_loop_playlists(
         }
         result
     }
-    // Cap repeats at 10 000 to prevent runaway string allocations for the concat
-    // playlist files when `single_loop_duration` is extremely short (e.g. 0.1 s)
-    // and the target duration is long (e.g. 24 h → 864 000 repeats without a cap).
+    // Bound total playlist/chapter entries, not only repeat iterations. With
+    // 100 selected songs, a 10 000-repeat cap would still create one million
+    // lines and chapter records. The effective cap keeps generated work below
+    // a practical ceiling while preserving the explicit loop-count contract.
     const MAX_REPEAT_COUNT: usize = 10_000;
+    const MAX_REPEATED_ENTRIES: usize = 100_000;
+    let max_repeat_count = MAX_REPEAT_COUNT.min((MAX_REPEATED_ENTRIES / songs.len().max(1)).max(1));
     let (repeat_count, was_capped) = match loop_count {
         Some(n) => {
-            let capped = n.min(MAX_REPEAT_COUNT);
+            let capped = n.min(max_repeat_count);
             (capped, capped < n)
         }
         None => {
             let raw = (target.min_duration_sec as f64 / single_loop_duration).ceil();
-            let capped = raw.min(MAX_REPEAT_COUNT as f64) as usize;
-            (capped, (raw as usize) > MAX_REPEAT_COUNT)
+            let capped = raw.min(max_repeat_count as f64) as usize;
+            (capped, raw > max_repeat_count as f64)
         }
     };
     let repeat_count = repeat_count.max(1);
@@ -209,8 +231,8 @@ pub async fn generate_loop_playlists(
             PipelineEvent::Log {
                 level: "warn".into(),
                 message: format!(
-                    "Loop repeat count capped at {} (maximum). Output duration may be shorter than requested.",
-                    MAX_REPEAT_COUNT
+                    "Loop repeat count capped at {} to bound playlist and chapter work. Output duration may be shorter than requested.",
+                    max_repeat_count
                 ),
             },
         );
@@ -258,7 +280,11 @@ pub async fn generate_loop_playlists(
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or(&song.original_name);
-        timestamps.push(format!("{} - {}", format_timestamp(current_time, force_hours), song_name));
+        timestamps.push(format!(
+            "{} - {}",
+            format_timestamp(current_time, force_hours),
+            song_name
+        ));
         current_time += song.duration;
     }
     // `repeat_count > 1` (rather than the floating-point comparison
@@ -269,7 +295,11 @@ pub async fn generate_loop_playlists(
     // boolean guard is unambiguous for every input.
     if repeat_count > 1 {
         let looping_label = "Looping".to_string();
-        timestamps.push(format!("{} - {}", format_timestamp(current_time, force_hours), looping_label));
+        timestamps.push(format!(
+            "{} - {}",
+            format_timestamp(current_time, force_hours),
+            looping_label
+        ));
     }
 
     // Build native chapters spanning the ENTIRE timeline (all loop repeats),
@@ -288,19 +318,14 @@ pub async fn generate_loop_playlists(
             } else {
                 song_name.to_string()
             };
-            chapter_entries.push(((chap_time * 1000.0) as i64, title));
+            chapter_entries.push(((chap_time * 1000.0) as i64, escape_ffmetadata_value(&title)));
             chap_time += song.duration;
         }
     }
-    // Same FP-safe `repeat_count > 1` guard as the timestamp branch above.
-    // After the per-iteration loop, `chap_time` accumulates to exactly
-    // `repeat_count × single_loop_duration`, so the original `<` comparison
-    // basically never fired in practice. The explicit boolean is unambiguous
-    // and places the "Looping" chapter at the END of the timeline, marking
-    // the loop wrap-around point in the chapter navigation.
-    if repeat_count > 1 {
-        chapter_entries.push(((chap_time * 1000.0) as i64, "Looping".to_string()));
-    }
+    // Do not add the textual "Looping" marker to native chapters: it would
+    // start exactly at the end of the media and therefore produce a zero-length
+    // terminal chapter (`START == END`). The marker remains in the human-readable
+    // timestamp list above, where it has no container-level duration semantics.
 
     if ping_pong_duration <= 0.0 {
         return Err(AppError::Pipeline("Ping-pong video duration zero".into()));
@@ -439,8 +464,19 @@ mod tests {
     }
 
     #[test]
+    fn test_escape_ffmetadata_reserved_characters() {
+        assert_eq!(
+            escape_ffmetadata_value("A=B;C#D\\\\E\\nF"),
+            "A\\\\=B\\\\;C\\\\#D\\\\\\\\E\\\\nF"
+        );
+    }
+
+    #[test]
     fn test_escape_concat_path_normal() {
-        assert_eq!(escape_concat_path("C:/videos/video.mp4"), "C:/videos/video.mp4");
+        assert_eq!(
+            escape_concat_path("C:/videos/video.mp4"),
+            "C:/videos/video.mp4"
+        );
     }
 
     #[test]
@@ -479,12 +515,28 @@ mod tests {
         let input = "C:\\My Videos\\it's\\video\n.mp4";
         let result = escape_concat_path(input);
         // Backslash directory separators → forward slashes
-        assert!(result.starts_with("C:/"), "Path should start with C:/, got: {}", result);
-        assert!(result.contains("/My Videos/"), "Directory slashes should be forward: {}", result);
+        assert!(
+            result.starts_with("C:/"),
+            "Path should start with C:/, got: {}",
+            result
+        );
+        assert!(
+            result.contains("/My Videos/"),
+            "Directory slashes should be forward: {}",
+            result
+        );
         // Single quote is escaped as `'\''` (contains backslash)
-        assert!(result.contains("it'"), "Single quote escape should preserve 'it': {}", result);
+        assert!(
+            result.contains("it'"),
+            "Single quote escape should preserve 'it': {}",
+            result
+        );
         // Newline replaced by space before `.mp4`
-        assert!(result.contains(" .mp4"), "Newline should be replaced by space: {}", result);
+        assert!(
+            result.contains(" .mp4"),
+            "Newline should be replaced by space: {}",
+            result
+        );
     }
 
     #[test]

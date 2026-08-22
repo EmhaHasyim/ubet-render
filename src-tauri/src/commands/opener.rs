@@ -42,12 +42,12 @@ pub fn reveal_in_explorer(path: String) -> Result<(), String> {
     // fall back to validating the path with sanitize_path first,
     // then use the absolute form so symlink traversal through the
     // unresolved path is still caught by resolve_and_validate_path.
-    let output_root = output_dir.canonicalize().unwrap_or_else(|_| {
-        crate::utils::fs::to_absolute(&output_dir)
-    });
-    let thumb_root = thumb_dir.canonicalize().unwrap_or_else(|_| {
-        crate::utils::fs::to_absolute(&thumb_dir)
-    });
+    let output_root = output_dir
+        .canonicalize()
+        .unwrap_or_else(|_| crate::utils::fs::to_absolute(&output_dir));
+    let thumb_root = thumb_dir
+        .canonicalize()
+        .unwrap_or_else(|_| crate::utils::fs::to_absolute(&thumb_dir));
     let allowed_roots: Vec<PathBuf> = vec![output_root, thumb_root];
 
     let _ = crate::validation::resolve_and_validate_path(p, &allowed_roots)

@@ -14,6 +14,8 @@
  * the CSS variables automatically.
  */
 
+import { safeSetStorageItem } from './storage';
+
 export type Theme = 'business' | 'light';
 
 /**
@@ -52,11 +54,7 @@ export function loadTheme(): Theme {
 /** Apply the theme to the DOM and persist the selection. */
 export function applyTheme(theme: Theme): void {
   document.documentElement.setAttribute('data-theme', theme);
-  try {
-    localStorage.setItem(THEME_STORAGE_KEY, theme);
-  } catch {
-    /* quota exceeded / storage disabled */
-  }
+  safeSetStorageItem(THEME_STORAGE_KEY, theme);
 }
 
 /** Cycle to the next theme. With `['business', 'light']` this just toggles. */

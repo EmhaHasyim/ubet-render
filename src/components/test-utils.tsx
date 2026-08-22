@@ -40,7 +40,7 @@ export function createMockPipeline(overrides?: Partial<Pipeline>): Pipeline {
     audioMode: () => 'original' as const,
     embedChapters: () => true,
     outputFormat: () => 'mp4' as const,
-    skipIntermediateOnCodecMatch: () => true,
+    skipIntermediateOnCodecMatch: () => false,
     setVideoSource: () => {},
     setAudioSource: () => {},
     setOutputPath: () => {},

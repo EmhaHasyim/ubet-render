@@ -25,14 +25,14 @@
             <div class='fl pad1y space-right2'>
                 <span class="strong">100% </span>
                 <span class="quiet">Statements</span>
-                <span class='fraction'>17/17</span>
+                <span class='fraction'>12/12</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
                 <span class="strong">100% </span>
                 <span class="quiet">Branches</span>
-                <span class='fraction'>11/11</span>
+                <span class='fraction'>2/2</span>
             </div>
         
             
@@ -46,7 +46,7 @@
             <div class='fl pad1y space-right2'>
                 <span class="strong">100% </span>
                 <span class="quiet">Lines</span>
-                <span class='fraction'>11/11</span>
+                <span class='fraction'>8/8</span>
             </div>
         
             
@@ -88,23 +88,29 @@
 <a name='L23'></a><a href='#L23'>23</a>
 <a name='L24'></a><a href='#L24'>24</a>
 <a name='L25'></a><a href='#L25'>25</a>
-<a name='L26'></a><a href='#L26'>26</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">24x</span>
-<span class="cline-any cline-yes">24x</span>
+<a name='L26'></a><a href='#L26'>26</a>
+<a name='L27'></a><a href='#L27'>27</a>
+<a name='L28'></a><a href='#L28'>28</a>
+<a name='L29'></a><a href='#L29'>29</a></td><td class="line-coverage quiet"><span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">24x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-yes">6x</span>
-<span class="cline-any cline-yes">18x</span>
-<span class="cline-any cline-yes">17x</span>
-<span class="cline-any cline-yes">15x</span>
-<span class="cline-any cline-yes">13x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-yes">24x</span>
+<span class="cline-any cline-yes">11x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-yes">24x</span>
@@ -113,23 +119,26 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">export function LogLine(props: { text: string }) {
-  const colorClass = () =&gt; {
-    const t = props.text;
-    // Match bracketed log-level prefixes [ERROR] / [FATAL] (the common
-    // pipeline Log event format) OR a bare "FATAL:" / "ERROR:" prefix
-    // emitted by the fatal-error handler.  Brackets-only matching prevents
-    // miscolouring e.g. "non-fatal" in regular log text.
-    if (
-      t.includes('[ERROR]') ||
-      t.includes('[FATAL]') ||
-      /^(?:FATAL|ERROR):/i.test(t)
-    )
-      return 'text-error';
-    if (t.includes('[WARN]')) return 'text-warning';
-    if (t.includes('[SUCCESS]')) return 'text-success';
-    if (t.includes('[INFO]')) return 'text-info/80';
-    return '';
+<span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">import { parseLevel, type LogLevel } from '../../core/logLevels';
+&nbsp;
+// Map a recognised level to its DaisyUI text colour. Unrecognised lines
+// (parseLevel returns null) are deliberately styled neutrally — the
+// historical behaviour is "&lt;pre&gt; stays default colour" for tag-free
+// strings so operator notes don't get mis-coloured as info.
+const LEVEL_COLOR: Record&lt;LogLevel, string&gt; = {
+  INFO: 'text-info/80',
+  WARN: 'text-warning',
+  ERROR: 'text-error',
+  SUCCESS: 'text-success',
+};
+&nbsp;
+export function LogLine(props: { text: string }) {
+  const colorClass = (): string =&gt; {
+    const level = parseLevel(props.text);
+    // Early return for unrecognised text: no colour class, matches
+    // pre-0.2.4 behaviour.
+    if (level === null) return '';
+    return LEVEL_COLOR[level];
   };
 &nbsp;
   return (
@@ -145,7 +154,7 @@
             <div class='footer quiet pad2 space-top1 center small'>
                 Code coverage generated by
                 <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
-                at 2026-07-21T01:20:30.123Z
+                at 2026-07-27T12:21:12.970Z
             </div>
         <script src="../../../prettify.js"></script>
         <script>

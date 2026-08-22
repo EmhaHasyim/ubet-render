@@ -5,8 +5,11 @@ use crate::pipeline::Pipeline;
 use crate::utils::event;
 use crate::utils::logger;
 use crate::validation::validate_override_config;
+use futures::FutureExt;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::time::Duration;
 use tauri::AppHandle;
 
 /// Caches the one-time FFmpeg/FFprobe sidecar version verification.
@@ -25,17 +28,29 @@ struct ControlGuard {
 impl Drop for ControlGuard {
     fn drop(&mut self) {
         use tauri::Manager;
-        // Mark the control terminated first so a racing `resume_render` (which
-        // may already hold a clone of the Arc) reports "no live pipeline"
-        // instead of falsely returning `true` for a pipeline that is exiting.
-        self.control.mark_terminated();
-        if let Ok(mut lock) = self.app.state::<crate::RenderState>().control.lock()
-            && lock
-                .as_ref()
-                .is_some_and(|active| Arc::ptr_eq(active, &self.control))
-            {
-                *lock = None;
+        // Clear application state before publishing termination. This makes
+        // the termination acknowledgement a stronger lifecycle boundary:
+        // callers observing it cannot race a stale "already running" handle.
+        let state = self.app.state::<crate::RenderState>();
+        let mut lock = match state.control.lock() {
+            Ok(lock) => lock,
+            Err(poisoned) => {
+                crate::utils::logger::log_line(&format!(
+                    "RenderState mutex poisoned during cleanup: {}",
+                    poisoned
+                ));
+                poisoned.into_inner()
             }
+        };
+        if lock
+            .as_ref()
+            .is_some_and(|active| Arc::ptr_eq(active, &self.control))
+        {
+            *lock = None;
+        }
+        drop(lock);
+        self.control.mark_terminated();
+        self.control.mark_cleaned();
     }
 }
 
@@ -77,7 +92,10 @@ pub async fn start_render(
         let mut lock = match state.control.lock() {
             Ok(guard) => guard,
             Err(poisoned) => {
-                crate::utils::logger::log_line(&format!("RenderState mutex poisoned: {}", poisoned));
+                crate::utils::logger::log_line(&format!(
+                    "RenderState mutex poisoned: {}",
+                    poisoned
+                ));
                 poisoned.into_inner()
             }
         };
@@ -109,41 +127,54 @@ pub async fn start_render(
             control: control_clone.clone(),
         };
 
-        let result = pipeline.execute(overrides, resume_flag, control_clone.clone()).await;
+        let result =
+            AssertUnwindSafe(pipeline.execute(overrides, resume_flag, control_clone.clone()))
+                .catch_unwind()
+                .await;
 
-        // The pipeline has finished — success, fatal error, cancelled, or
-        // paused. From this instant a racing `resume_render` must NOT
-        // resurrect it: mark the control terminated so the command returns
-        // `false` and the frontend restarts from the saved state file.
-        // Without this, a resume issued in the teardown window would return
-        // `true` while the pipeline never emits another event, leaving the
-        // UI stuck in "Rendering" forever.
-        control_clone.mark_terminated();
-
+        // The pipeline has finished — success, fatal error, cancelled, paused,
+        // or (in debug/unwind builds) panicked. Emit the terminal event before
+        // signalling termination so an async cancel command cannot complete and
+        // close the frontend listener before the terminal event is dispatched.
         match result {
-            Ok(()) => {}
-            Err(e) => {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
                 let event = match e {
                     AppError::Cancelled(message) => {
                         crate::models::job::PipelineEvent::Cancelled(message)
                     }
                     AppError::Paused(_) => {
-                        // `pause_render` already emitted `Paused`; emitting it again
-                        // here would trigger a duplicate frontend notification.
+                        // Pause is a graceful stop-and-resume-from-state
+                        // operation. Emit the acknowledgement only after the
+                        // pipeline has persisted its state and committed to
+                        // exiting. `resume_render` waits for guard cleanup
+                        // before asking the frontend to start a fresh run.
+                        control_clone.mark_terminated();
+                        event::emit(&app_handle, crate::models::job::PipelineEvent::Paused);
                         return;
                     }
                     other => crate::models::job::PipelineEvent::FatalError(other.to_string()),
                 };
                 event::emit(&app_handle, event);
             }
+            Err(_) => {
+                crate::utils::logger::log_line("Render pipeline task panicked unexpectedly");
+                event::emit(
+                    &app_handle,
+                    crate::models::job::PipelineEvent::FatalError(
+                        "Render pipeline terminated unexpectedly".into(),
+                    ),
+                );
+            }
         }
+        control_clone.mark_terminated();
     });
 
     Ok(())
 }
 
 #[tauri::command]
-pub fn cancel_render(state: tauri::State<'_, crate::RenderState>) {
+pub async fn cancel_render(state: tauri::State<'_, crate::RenderState>) -> Result<bool, String> {
     let control = match state.control.lock() {
         Ok(guard) => guard.clone(),
         Err(poisoned) => {
@@ -152,12 +183,28 @@ pub fn cancel_render(state: tauri::State<'_, crate::RenderState>) {
         }
     };
     if let Some(control) = control {
+        if control.is_terminated() {
+            return Ok(false);
+        }
         control.cancel();
+        // Cancellation is a completion acknowledgement, not merely an
+        // acceptance acknowledgement. The frontend may safely close its
+        // listener once this returns because the pipeline guard marks the
+        // control terminated even if execute() exits through an error or
+        // panic.
+        match tokio::time::timeout(Duration::from_secs(30), control.wait_for_cleanup()).await {
+            Ok(()) => Ok(true),
+            Err(_) => Err(
+                "Cancellation requested, but the render did not terminate within 30 seconds".into(),
+            ),
+        }
+    } else {
+        Ok(false)
     }
 }
 
 #[tauri::command]
-pub fn pause_render(app: tauri::AppHandle, state: tauri::State<'_, crate::RenderState>) {
+pub fn pause_render(state: tauri::State<'_, crate::RenderState>) {
     let control = match state.control.lock() {
         Ok(guard) => guard.clone(),
         Err(poisoned) => {
@@ -166,8 +213,10 @@ pub fn pause_render(app: tauri::AppHandle, state: tauri::State<'_, crate::Render
         }
     };
     if let Some(control) = control {
+        // The pipeline emits `Paused` after durable state has been saved and
+        // execute() has returned. Emitting here acknowledged only the request
+        // and created a pause→resume teardown race.
         control.pause();
-        event::emit(&app, crate::models::job::PipelineEvent::Paused);
     }
 }
 
@@ -185,7 +234,9 @@ pub fn save_config(config: AppConfig) -> Result<(), String> {
     // Warn if encoder contains "av1" — AV1 hardware support is not guaranteed
     // on all systems and will only be verified at render time.
     if config.video.encoder.to_ascii_lowercase().contains("av1") {
-        logger::log_line("WARNING: AV1 encoder configured — verify hardware support before rendering.");
+        logger::log_line(
+            "WARNING: AV1 encoder configured — verify hardware support before rendering.",
+        );
     }
 
     config.save().map_err(|e| e.to_string())?;
@@ -200,10 +251,10 @@ pub fn save_config(config: AppConfig) -> Result<(), String> {
 /// fall back to starting a fresh pipeline from the saved state file when the
 /// previous run already terminated.
 #[tauri::command]
-pub fn resume_render(
+pub async fn resume_render(
     app: tauri::AppHandle,
     state: tauri::State<'_, crate::RenderState>,
-) -> bool {
+) -> Result<bool, String> {
     let control = match state.control.lock() {
         Ok(guard) => guard.clone(),
         Err(poisoned) => {
@@ -219,18 +270,23 @@ pub fn resume_render(
         // on-disk state file instead of waiting forever for events that
         // will never arrive.
         if control.is_terminated() {
-            return false;
+            tokio::time::timeout(Duration::from_secs(30), control.wait_for_cleanup())
+                .await
+                .map_err(|_| "Paused render cleanup timed out".to_string())?;
+            return Ok(false);
         }
         let resumed = control.resume();
         if resumed {
-            event::emit(&app, crate::models::job::PipelineEvent::Log {
-                level: "info".into(),
-                message: "Render resumed".into(),
-            });
+            event::emit(
+                &app,
+                crate::models::job::PipelineEvent::Log {
+                    level: "info".into(),
+                    message: "Render resumed".into(),
+                },
+            );
         }
-        resumed
+        Ok(resumed)
     } else {
-        false
+        Ok(false)
     }
 }
-

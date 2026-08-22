@@ -18,6 +18,7 @@ const sampleJobs: JobProgress[] = [
     state: 'done',
     progressPercent: 100,
     currentStep: 'Muxing',
+    thumbnailPath: null,
   },
   {
     index: 1,
@@ -35,6 +36,7 @@ const sampleJobs: JobProgress[] = [
     state: 'pending',
     progressPercent: 0,
     currentStep: 'Queued',
+    thumbnailPath: null,
   },
   {
     index: 3,
@@ -43,6 +45,7 @@ const sampleJobs: JobProgress[] = [
     state: 'error',
     progressPercent: 12,
     currentStep: 'FFmpeg crash',
+    thumbnailPath: null,
   },
 ];
 
@@ -85,9 +88,9 @@ describe('JobTable', () => {
     expect((bar as HTMLProgressElement).max).toBe(100);
   });
 
-  it('shows file-video placeholder when thumbnailPath is undefined', () => {
+  it('shows file-video placeholder when thumbnailPath is null', () => {
     const { container } = render(() => <JobTable jobs={[sampleJobs[0]]} />);
-    // sampleJobs[0] has no thumbnailPath → shows placeholder
+    // sampleJobs[0] has a null thumbnailPath → shows placeholder
     const imgs = container.querySelectorAll('img');
     expect(imgs.length).toBe(0);
   });

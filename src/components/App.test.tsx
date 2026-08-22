@@ -3,7 +3,7 @@
  * Menggunakan mock Tauri API.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@solidjs/testing-library';
+import { fireEvent, render, screen } from '@solidjs/testing-library';
 
 // ---------------------------------------------------------------------------
 // Mocks — must be at top level
@@ -121,5 +121,24 @@ describe('App', () => {
     // Go back
     screen.getByText('Back to setup').click();
     expect(screen.getByText('Render setup')).toBeTruthy();
+  });
+
+  it('switches to Activity with the Ctrl+2 global shortcut', () => {
+    render(() => <App />);
+
+    fireEvent.keyDown(window, { key: '2', ctrlKey: true });
+
+    expect(screen.getByText('Jobs and logs.')).toBeTruthy();
+  });
+
+  it('opens the shortcuts dialog with the F1 global shortcut', async () => {
+    render(() => <App />);
+
+    fireEvent.keyDown(window, { key: 'F1' });
+    await Promise.resolve();
+
+    expect(
+      screen.getByRole('dialog', { name: /Keyboard shortcuts/i }),
+    ).toBeTruthy();
   });
 });

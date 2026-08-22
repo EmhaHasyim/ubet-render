@@ -12,6 +12,7 @@ const sampleJobs: JobProgress[] = [
     state: 'done',
     progressPercent: 100,
     currentStep: 'Muxing',
+    thumbnailPath: null,
   },
   {
     index: 1,
@@ -20,6 +21,7 @@ const sampleJobs: JobProgress[] = [
     state: 'processing',
     progressPercent: 55,
     currentStep: 'Encoding',
+    thumbnailPath: null,
   },
   {
     index: 2,
@@ -28,6 +30,7 @@ const sampleJobs: JobProgress[] = [
     state: 'pending',
     progressPercent: 0,
     currentStep: 'Queued',
+    thumbnailPath: null,
   },
   {
     index: 3,
@@ -36,6 +39,7 @@ const sampleJobs: JobProgress[] = [
     state: 'error',
     progressPercent: 12,
     currentStep: 'Error',
+    thumbnailPath: null,
   },
 ];
 

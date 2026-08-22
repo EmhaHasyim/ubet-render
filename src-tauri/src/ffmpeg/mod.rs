@@ -1,22 +1,77 @@
+mod parsing;
+
+pub(crate) use parsing::{
+    MIN_FFMPEG_VERSION, extract_time, parse_audio_probe_value, parse_ffmpeg_version,
+    parse_ffprobe_frame_rate, parse_loudnorm_measurement, parse_stats, version_meets_minimum,
+};
+
+/// Combined video metadata probe — returns duration, codec, and frame rate
+/// from a single ffprobe invocation instead of three separate subprocess calls.
+pub struct VideoInfo {
+    pub duration: f64,
+    pub codec: Option<String>,
+    pub frame_rate: f64,
+}
+
 use std::ffi::OsStr;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::AppHandle;
+use tauri::async_runtime::Receiver;
 use tauri_plugin_shell::ShellExt;
-use tauri_plugin_shell::process::CommandEvent;
+use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 
 use crate::error::AppError;
 use crate::models::job::RenderStats;
 use crate::models::media::{AudioInfo, LoudnormMeasurement};
 
-struct ChildGuard(Option<tauri_plugin_shell::process::CommandChild>);
+const DEFAULT_PROCESS_TIMEOUT_SEC: u64 = 86_400;
+const PROBE_TIMEOUT_SEC: u64 = 60;
+const LOUDNORM_IDLE_TIMEOUT_SEC: u64 = 300;
+
+struct ChildGuard(Option<CommandChild>);
+
+impl ChildGuard {
+    fn terminate(&mut self) {
+        if let Some(child) = self.0.take() {
+            terminate_child(child);
+        }
+    }
+}
 
 impl Drop for ChildGuard {
     fn drop(&mut self) {
-        if let Some(child) = self.0.take() {
+        self.terminate();
+    }
+}
+
+/// Terminate FFmpeg and, on Windows, its descendant process tree.
+///
+/// `CommandChild::kill()` only targets the direct process. FFmpeg normally
+/// remains a single process, but a bundled/helper invocation can create
+/// descendants; `taskkill /T /F` gives cancellation and timeout a stronger
+/// Windows guarantee. The direct kill remains the fallback if the system tool
+/// is unavailable or reports failure.
+fn terminate_child(child: CommandChild) {
+    #[cfg(windows)]
+    {
+        let pid = child.pid().to_string();
+        let taskkill = std::env::var_os("SystemRoot")
+            .map(std::path::PathBuf::from)
+            .map(|root| root.join("System32").join("taskkill.exe"))
+            .unwrap_or_else(|| std::path::PathBuf::from("taskkill.exe"));
+        let tree_killed = std::process::Command::new(taskkill)
+            .args(["/PID", &pid, "/T", "/F"])
+            .status()
+            .is_ok_and(|status| status.success());
+        if !tree_killed {
             let _ = child.kill();
         }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = child.kill();
     }
 }
 
@@ -27,7 +82,15 @@ pub async fn run<S: AsRef<OsStr>>(
     cancel_control: Option<Arc<crate::RenderControl>>,
     tx_stats: Option<tokio::sync::mpsc::Sender<RenderStats>>,
 ) -> Result<(), AppError> {
-    run_with_timeout(app, args, tx_progress, cancel_control, tx_stats, 86400).await
+    run_with_timeout(
+        app,
+        args,
+        tx_progress,
+        cancel_control,
+        tx_stats,
+        DEFAULT_PROCESS_TIMEOUT_SEC,
+    )
+    .await
 }
 
 pub async fn run_with_timeout<S: AsRef<OsStr>>(
@@ -58,31 +121,41 @@ pub async fn run_with_timeout<S: AsRef<OsStr>>(
         .map_err(|e| AppError::Ffmpeg(e.to_string()))?
         .args(args);
 
-    let (mut rx, child) = sidecar_command.spawn().map_err(|e| AppError::Ffmpeg(e.to_string()))?;
+    let (mut rx, child) = sidecar_command
+        .spawn()
+        .map_err(|e| AppError::Ffmpeg(e.to_string()))?;
     // This guard kills the child process on drop (including on panic / early
     // return). The variable IS used — its Drop impl is the intended side-effect.
     let mut child_guard = ChildGuard(Some(child));
-    
+
     let mut last_stderr = "Unknown ffmpeg error".to_string();
-    let timeout_dur = std::time::Duration::from_secs(max_timeout_sec.max(300));
-    let mut deadline = tokio::time::Instant::now() + timeout_dur;
+    let timeout_dur = std::time::Duration::from_secs(max_timeout_sec.max(1));
+    let idle_timeout = std::time::Duration::from_secs(LOUDNORM_IDLE_TIMEOUT_SEC);
+    // Keep a fixed absolute deadline. Activity may reset the idle deadline,
+    // but must never extend the total lifetime of a render indefinitely.
+    let absolute_deadline = tokio::time::Instant::now() + timeout_dur;
+    let mut idle_deadline = tokio::time::Instant::now() + idle_timeout;
     loop {
         if let Some(ref control) = cancel_control {
             if control.is_cancelled() {
-                let _ = child_guard.0.take().map(|c| c.kill());
+                child_guard.terminate();
                 return Err(cancelled_error());
             }
             if control.is_paused() {
-                let _ = child_guard.0.take().map(|c| c.kill());
+                child_guard.terminate();
                 let msg = "FFmpeg paused by user".into();
                 return Err(AppError::Paused(msg));
             }
         }
 
         tokio::select! {
-            _ = tokio::time::sleep_until(deadline) => {
-                let _ = child_guard.0.take().map(|c| c.kill());
+            _ = tokio::time::sleep_until(absolute_deadline) => {
+                child_guard.terminate();
                 return Err(AppError::Ffmpeg(format!("FFmpeg process timed out ({}s limit)", max_timeout_sec)));
+            }
+            _ = tokio::time::sleep_until(idle_deadline) => {
+                child_guard.terminate();
+                return Err(AppError::Ffmpeg(format!("FFmpeg process idle timeout ({}s limit)", LOUDNORM_IDLE_TIMEOUT_SEC)));
             }
             event_res = rx.recv() => {
                 match event_res {
@@ -95,9 +168,12 @@ pub async fn run_with_timeout<S: AsRef<OsStr>>(
                         // progress or metadata. This prevents a false timeout when
                         // ffmpeg outputs frame-type-specific log lines that don't
                         // contain `time=` or `speed=` tokens.
-                        deadline = tokio::time::Instant::now() + timeout_dur;
+                        idle_deadline = tokio::time::Instant::now() + idle_timeout;
                         if let (Some(tx), Some(time_sec)) = (&tx_progress, extract_time(&line_cow)) {
-                            let _ = tx.send(time_sec).await;
+                            // Progress is advisory; never block stderr monitoring
+                            // behind a slow UI consumer and thereby defeat the
+                            // absolute/idle process deadlines.
+                            let _ = tx.try_send(time_sec);
                         }
                         // Parse ffmpeg's live encoder stats (speed=/bitrate=/fps=)
                         // and forward them to the pipeline's stats channel so the
@@ -122,8 +198,11 @@ pub async fn run_with_timeout<S: AsRef<OsStr>>(
                             last_stderr = trimmed.to_string();
                         }
                     }
-                    Some(CommandEvent::Stdout(_)) => {}
+                    Some(CommandEvent::Stdout(_)) => {
+                        idle_deadline = tokio::time::Instant::now() + idle_timeout;
+                    }
                     Some(CommandEvent::Error(err)) => {
+                        idle_deadline = tokio::time::Instant::now() + idle_timeout;
                         last_stderr = err;
                     }
                     Some(CommandEvent::Terminated(payload)) => {
@@ -173,80 +252,104 @@ fn cancelled_error() -> AppError {
     AppError::Cancelled("Render cancelled by user".into())
 }
 
-fn extract_time(line: &str) -> Option<f64> {
-    let time_marker = "time=";
-    if let Some(start) = line.find(time_marker) {
-        let after_time = &line[start + time_marker.len()..];
-        let time_val = after_time.split_whitespace().next()?;
-        let parts: Vec<&str> = time_val.split(':').collect();
-        if parts.len() == 3 {
-            let h: f64 = parts[0].parse().ok()?;
-            let m: f64 = parts[1].parse().ok()?;
-            let s: f64 = parts[2].parse().ok()?;
-            return Some(h * 3600.0 + m * 60.0 + s);
+struct CapturedOutput {
+    code: Option<i32>,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+/// Collects a sidecar's output with both an absolute deadline and an idle
+/// deadline. The child is explicitly killed on every failure path so a timed
+/// out probe cannot leave a background FFmpeg process behind.
+async fn collect_output_with_timeout(
+    mut rx: Receiver<CommandEvent>,
+    child: CommandChild,
+    timeout: std::time::Duration,
+) -> Result<CapturedOutput, AppError> {
+    let mut child_guard = ChildGuard(Some(child));
+    let absolute_deadline = tokio::time::Instant::now() + timeout;
+    let idle_timeout = std::time::Duration::from_secs(LOUDNORM_IDLE_TIMEOUT_SEC);
+    let mut idle_deadline = tokio::time::Instant::now() + idle_timeout;
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut last_error = String::from("sidecar ended without a completion signal");
+
+    let code = loop {
+        tokio::select! {
+            _ = tokio::time::sleep_until(absolute_deadline) => {
+                child_guard.terminate();
+                return Err(AppError::Ffmpeg(format!(
+                    "Sidecar process timed out ({}s limit)",
+                    timeout.as_secs(),
+                )));
+            }
+            _ = tokio::time::sleep_until(idle_deadline) => {
+                child_guard.terminate();
+                return Err(AppError::Ffmpeg(format!(
+                    "Sidecar process idle timeout ({}s limit)",
+                    LOUDNORM_IDLE_TIMEOUT_SEC,
+                )));
+            }
+            event_res = rx.recv() => {
+                match event_res {
+                    Some(CommandEvent::Stdout(bytes)) => {
+                        idle_deadline = tokio::time::Instant::now() + idle_timeout;
+                        stdout.extend(bytes);
+                        stdout.push(b'\n');
+                    }
+                    Some(CommandEvent::Stderr(bytes)) => {
+                        idle_deadline = tokio::time::Instant::now() + idle_timeout;
+                        stderr.extend(bytes);
+                        stderr.push(b'\n');
+                    }
+                    Some(CommandEvent::Error(error)) => {
+                        idle_deadline = tokio::time::Instant::now() + idle_timeout;
+                        last_error = error;
+                    }
+                    Some(CommandEvent::Terminated(payload)) => {
+                        break payload.code;
+                    }
+                    Some(_) => {
+                        idle_deadline = tokio::time::Instant::now() + idle_timeout;
+                    }
+                    None => {
+                        child_guard.terminate();
+                        return Err(AppError::Ffmpeg(last_error));
+                    }
+                }
+            }
         }
-    }
-    None
+    };
+
+    let _ = child_guard.0.take();
+    Ok(CapturedOutput {
+        code,
+        stdout,
+        stderr,
+    })
 }
 
-/// Strip a trailing unit suffix (e.g. the `kbits/s` in `bitrate=4123.4kbits/s`,
-/// or the `x` in `speed=12.3x`) so the bare numeric value can be parsed.
-///
-/// Only strips ASCII alphabetic suffixes — Unicode alphabetic chars are
-/// preserved so edge-case output is not incorrectly truncated.
-fn strip_units(tok: &str) -> &str {
-    tok.trim_end_matches(|c: char| c.is_ascii_alphabetic() || c == '/' || c == ':')
-}
-
-/// Parses ffmpeg's periodic status line (the `speed=`, `bitrate=` and `fps=`
-/// tokens it prints on every progress update) into a [`RenderStats`].
-///
-/// Returns `None` when none of the three tokens are present, so the caller can
-/// cheaply skip non-status lines. Token values are of the form `12.3x`,
-/// `4123.4kbits/s` or a plain `29.97`; the trailing unit suffix is stripped
-/// before parsing. `N/A` is intentionally unparseable and therefore ignored.
-fn parse_stats(line: &str) -> Option<RenderStats> {
-    let mut speed = 0.0f64;
-    let mut bitrate_kbps = 0.0f64;
-    let mut fps = 0.0f64;
-    let mut any = false;
-
-    if let Some(idx) = line.find("speed=")
-        && let Some(tok) = line[idx + 6..].split_whitespace().next()
-            && let Ok(v) = strip_units(tok).parse::<f64>() {
-                speed = v;
-                any = true;
-            }
-    if let Some(idx) = line.find("bitrate=")
-        && let Some(tok) = line[idx + 8..].split_whitespace().next()
-            && let Ok(v) = strip_units(tok).parse::<f64>() {
-                bitrate_kbps = v;
-                any = true;
-            }
-    if let Some(idx) = line.find("fps=")
-        && let Some(tok) = line[idx + 4..].split_whitespace().next()
-            && let Ok(v) = strip_units(tok).parse::<f64>() {
-                fps = v;
-                any = true;
-            }
-
-    if any {
-        Some(RenderStats { speed, bitrate_kbps, fps })
+fn ensure_success(output: CapturedOutput, name: &str) -> Result<CapturedOutput, AppError> {
+    if output.code == Some(0) {
+        Ok(output)
     } else {
-        None
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(AppError::Ffmpeg(format!(
+            "{} exited with code {:?}: {}",
+            name,
+            output.code,
+            if detail.is_empty() {
+                "unknown error"
+            } else {
+                &detail
+            },
+        )))
     }
-}
-
-/// Combined video metadata probe — returns duration, codec, and frame rate
-/// from a single ffprobe invocation instead of three separate subprocess calls.
-pub struct VideoInfo {
-    pub duration: f64,
-    pub codec: Option<String>,
-    pub frame_rate: f64,
 }
 
 pub async fn get_video_info(app: &AppHandle, file_path: &Path) -> Result<VideoInfo, AppError> {
-    let sidecar_command = app
+    let path = file_path.to_string_lossy().into_owned();
+    let sidecar = app
         .shell()
         .sidecar("ffprobe")
         .map_err(|e| AppError::Ffmpeg(e.to_string()))?
@@ -259,41 +362,37 @@ pub async fn get_video_info(app: &AppHandle, file_path: &Path) -> Result<VideoIn
             "stream=codec_name,r_frame_rate:format=duration",
             "-of",
             "default=noprint_wrappers=1:nokey=1",
-            &file_path.to_string_lossy(),
+            &path,
         ]);
-
-    let output = sidecar_command
-        .output()
-        .await
+    let (rx, child) = sidecar
+        .spawn()
         .map_err(|e| AppError::Ffmpeg(e.to_string()))?;
+    let output = ensure_success(
+        collect_output_with_timeout(rx, child, std::time::Duration::from_secs(PROBE_TIMEOUT_SEC))
+            .await?,
+        "ffprobe",
+    )?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut lines = stdout.lines();
 
-    // Line 1: codec_name (empty if no video stream)
     let codec = lines
         .next()
         .map(|l| l.trim().to_string())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_lowercase());
-
-    // Line 2: r_frame_rate (fraction like "30000/1001" or "30")
     let frame_rate = lines
         .next()
         .and_then(|v| parse_ffprobe_frame_rate(v.trim()))
         .unwrap_or(30.0);
-
-    // Line 3: duration (float)
-    let trimmed = lines
-        .next()
-        .map(|l| l.trim())
-        .unwrap_or("");
+    let trimmed = lines.next().map(|l| l.trim()).unwrap_or("");
     let duration: f64 = trimmed.parse().map_err(|_| {
-        AppError::Ffmpeg(format!("Failed to parse duration from ffprobe: '{}'", trimmed))
+        AppError::Ffmpeg(format!(
+            "Failed to parse duration from ffprobe: '{}'",
+            trimmed
+        ))
     })?;
     if duration <= 0.0 {
-        return Err(AppError::InvalidDuration(
-            file_path.to_string_lossy().to_string(),
-        ));
+        return Err(AppError::InvalidDuration(path));
     }
 
     Ok(VideoInfo {
@@ -303,26 +402,10 @@ pub async fn get_video_info(app: &AppHandle, file_path: &Path) -> Result<VideoIn
     })
 }
 
-/// Parse an ffprobe r_frame_rate value (fraction "30000/1001" or float "29.97").
-fn parse_ffprobe_frame_rate(value: &str) -> Option<f64> {
-    if let Some((num, den)) = value.split_once('/') {
-        let n: f64 = num.trim().parse().ok()?;
-        let d: f64 = den.trim().parse().ok()?;
-        if d == 0.0 {
-            return None;
-        }
-        Some((n / d).clamp(1.0, 240.0))
-    } else {
-        value.parse::<f64>().ok().map(|f| f.clamp(1.0, 240.0))
-    }
-}
-
 pub async fn get_duration(app: &AppHandle, file_path: &Path) -> Result<f64, AppError> {
-    // Standalone probe for duration only — does NOT use `-select_streams v:0`
-    // like `get_video_info` does, so it works on audio-only files (M4A, MP3,
-    // etc.) that have no video stream.  Uses `format=duration` which is always
-    // available regardless of stream type.
-    let sidecar_command = app
+    // Standalone probe for duration only — works for audio-only files too.
+    let path = file_path.to_string_lossy().into_owned();
+    let sidecar = app
         .shell()
         .sidecar("ffprobe")
         .map_err(|e| AppError::Ffmpeg(e.to_string()))?
@@ -333,15 +416,17 @@ pub async fn get_duration(app: &AppHandle, file_path: &Path) -> Result<f64, AppE
             "format=duration",
             "-of",
             "default=noprint_wrappers=1:nokey=1",
-            &file_path.to_string_lossy(),
+            &path,
         ]);
-
-    let output = sidecar_command
-        .output()
-        .await
+    let (rx, child) = sidecar
+        .spawn()
         .map_err(|e| AppError::Ffmpeg(e.to_string()))?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let trimmed = stdout.trim();
+    let output = ensure_success(
+        collect_output_with_timeout(rx, child, std::time::Duration::from_secs(PROBE_TIMEOUT_SEC))
+            .await?,
+        "ffprobe",
+    )?;
+    let trimmed = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let duration: f64 = trimmed.parse().map_err(|_| {
         AppError::Ffmpeg(format!(
             "Failed to parse duration from ffprobe: '{}'",
@@ -349,15 +434,10 @@ pub async fn get_duration(app: &AppHandle, file_path: &Path) -> Result<f64, AppE
         ))
     })?;
     if duration <= 0.0 {
-        return Err(AppError::InvalidDuration(
-            file_path.to_string_lossy().to_string(),
-        ));
+        return Err(AppError::InvalidDuration(path));
     }
     Ok(duration)
 }
-
-
-const MIN_FFMPEG_VERSION: (u32, u32) = (8, 1);
 
 /// Combined probe of audio-only metadata for the audio pool.
 ///
@@ -390,95 +470,18 @@ pub async fn get_audio_info(app: &AppHandle, file_path: &Path) -> Result<AudioIn
         .sidecar("ffprobe")
         .map_err(|e| AppError::Ffmpeg(e.to_string()))?
         .args(args);
-    let output = sidecar
-        .output()
-        .await
+    let (rx, child) = sidecar
+        .spawn()
         .map_err(|e| AppError::Ffmpeg(e.to_string()))?;
-
-    if !output.status.success() {
-        return Err(AppError::Ffmpeg(format!(
-            "ffprobe exited with code {:?} for '{}'",
-            output.status.code(),
-            path_str
-        )));
-    }
+    let output = ensure_success(
+        collect_output_with_timeout(rx, child, std::time::Duration::from_secs(PROBE_TIMEOUT_SEC))
+            .await?,
+        "ffprobe",
+    )?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     parse_audio_probe_value(&stdout, &path_str)
 }
 
-/// Pure JSON→AudioInfo parser extracted from `get_audio_info` so it can be
-/// unit-tested without spinning up Tauri + ffprobe. `source_label` is used
-/// only to make error messages reference a meaningful path.
-fn parse_audio_probe_value(
-    stdout: &str,
-    source_label: &str,
-) -> Result<AudioInfo, AppError> {
-    let json: serde_json::Value = serde_json::from_str(stdout)
-        .map_err(|e| AppError::Ffmpeg(format!("ffprobe JSON parse failed for '{}': {}", source_label, e)))?;
-
-    let stream = json
-        .get("streams")
-        .and_then(|s| s.as_array())
-        .and_then(|arr| arr.first())
-        .ok_or_else(|| {
-            AppError::Ffmpeg(format!("No audio stream found in '{}'", source_label))
-        })?;
-
-    let codec = stream
-        .get("codec_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_lowercase();
-
-    let sample_rate = stream
-        .get("sample_rate")
-        .and_then(|v| v.as_str())
-        .and_then(|s| s.parse::<u32>().ok())
-        .ok_or_else(|| AppError::Ffmpeg(format!("Missing sample_rate in '{}'", source_label)))?;
-
-    let channels = stream
-        .get("channels")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| {
-            AppError::Ffmpeg(format!("Missing channels in '{}'", source_label))
-        })? as u32;
-
-    let bit_rate = stream
-        .get("bit_rate")
-        .and_then(|v| v.as_str())
-        .and_then(|s| s.parse::<u32>().ok());
-
-    let duration = json
-        .get("format")
-        .and_then(|f| f.get("duration"))
-        .and_then(|v| v.as_str())
-        .and_then(|s| s.parse::<f64>().ok())
-        .ok_or_else(|| AppError::Ffmpeg(format!("Missing duration in '{}'", source_label)))?;
-
-    if duration <= 0.0 {
-        return Err(AppError::InvalidDuration(source_label.to_string()));
-    }
-
-    Ok(AudioInfo {
-        codec,
-        sample_rate,
-        channels,
-        bit_rate,
-    })
-}
-
-/// Pass 1 of EBU R128 two-pass loudnorm.
-///
-/// Runs `ffmpeg` with the loudnorm analysis filter and `print_format=json`,
-/// which causes ffmpeg to emit a JSON block on stderr containing the
-/// measured integrated loudness, true peak, LRA, threshold, and target
-/// offset for the source audio. The audio pool's two-pass mode feeds these
-/// values back to pass 2 for a much more accurate normalization than the
-/// single-pass `loudnorm=I=...:LRA=...:TP=...` allowed for.
-///
-/// Unlike `get_audio_info`, pass 1 streams stderr live (via `spawn()`) so
-/// that the cooperative cancel / pause control can interrupt long files.
 pub async fn run_loudnorm_pass1(
     app: &AppHandle,
     input: &Path,
@@ -502,7 +505,14 @@ pub async fn run_loudnorm_pass1(
     // instead of applying the target blindly.
     let filter = format!("loudnorm={}:print_format=json", target);
     let args: Vec<&str> = vec![
-        "-hide_banner", "-i", &input_str, "-af", &filter, "-f", "null", "-",
+        "-hide_banner",
+        "-i",
+        &input_str,
+        "-af",
+        &filter,
+        "-f",
+        "null",
+        "-",
     ];
 
     let sidecar = app
@@ -521,37 +531,57 @@ pub async fn run_loudnorm_pass1(
     let mut stderr_buf = String::new();
     let mut collecting = false;
     let mut last_problem = String::new();
+    let absolute_deadline =
+        tokio::time::Instant::now() + std::time::Duration::from_secs(DEFAULT_PROCESS_TIMEOUT_SEC);
+    let idle_timeout = std::time::Duration::from_secs(LOUDNORM_IDLE_TIMEOUT_SEC);
+    let mut idle_deadline = tokio::time::Instant::now() + idle_timeout;
 
     loop {
         if let Some(ref c) = cancel {
             if c.is_cancelled() {
-                let _ = child_guard.0.take().map(|x| x.kill());
+                child_guard.terminate();
                 return Err(cancelled_error());
             }
             if c.is_paused() {
-                let _ = child_guard.0.take().map(|x| x.kill());
+                child_guard.terminate();
                 return Err(AppError::Paused("FFmpeg paused by user".into()));
             }
         }
 
-        match rx.recv().await {
+        tokio::select! {
+            _ = tokio::time::sleep_until(absolute_deadline) => {
+                child_guard.terminate();
+                return Err(AppError::Ffmpeg(format!(
+                    "loudnorm pass1 timed out ({}s limit)",
+                    DEFAULT_PROCESS_TIMEOUT_SEC,
+                )));
+            }
+            _ = tokio::time::sleep_until(idle_deadline) => {
+                child_guard.terminate();
+                return Err(AppError::Ffmpeg(format!(
+                    "loudnorm pass1 idle timeout ({}s limit)",
+                    LOUDNORM_IDLE_TIMEOUT_SEC,
+                )));
+            }
+            event_res = rx.recv() => match event_res {
             Some(CommandEvent::Stderr(line_bytes)) => {
+                idle_deadline = tokio::time::Instant::now() + idle_timeout;
                 let line = String::from_utf8_lossy(&line_bytes);
                 let trimmed = line.trim();
                 if !collecting && trimmed.starts_with('{') {
                     collecting = true;
                     stderr_buf.push_str(trimmed);
-                    if trimmed.contains('}') {
-                        if let Some(m) = parse_loudnorm_measurement(&stderr_buf) {
-                            return Ok(m);
-                        }
+                    if trimmed.contains('}')
+                        && let Some(m) = parse_loudnorm_measurement(&stderr_buf)
+                    {
+                        return Ok(m);
                     }
                 } else if collecting {
                     stderr_buf.push_str(&line);
-                    if line.contains('}') {
-                        if let Some(m) = parse_loudnorm_measurement(&stderr_buf) {
-                            return Ok(m);
-                        }
+                    if line.contains('}')
+                        && let Some(m) = parse_loudnorm_measurement(&stderr_buf)
+                    {
+                        return Ok(m);
                     }
                 } else if !trimmed.is_empty() {
                     last_problem = trimmed.to_string();
@@ -573,15 +603,19 @@ pub async fn run_loudnorm_pass1(
                 )));
             }
             Some(CommandEvent::Error(e)) => {
+                idle_deadline = tokio::time::Instant::now() + idle_timeout;
                 last_problem = e;
             }
-            Some(_) => {}
+            Some(_) => {
+                idle_deadline = tokio::time::Instant::now() + idle_timeout;
+            }
             None => {
                 return Err(AppError::Ffmpeg(format!(
                     "FFmpeg closed mid loudnorm pass1: {}",
                     last_problem
                 )));
             }
+        }
         }
     }
 }
@@ -595,56 +629,6 @@ pub async fn run_loudnorm_pass1(
 /// the first one written). Scanning for the literal is robust against any
 /// pre-amble noise in ffmpeg's stderr (warning text, decoder info, etc.) that
 /// might contain unrelated `{…}` characters. Returns `None` if no complete
-/// block is found.
-///
-/// Required fields (matching `LoudnormMeasurement`): `input_i`,
-/// `input_tp`, `input_lra`, `input_thresh`, `target_offset`. Any missing
-/// required field causes `None` so the caller can fall back to single-pass.
-fn parse_loudnorm_measurement(text: &str) -> Option<LoudnormMeasurement> {
-    let anchor = "\"input_i\"";
-    let anchor_idx = text.find(anchor)?;
-    let bytes = text.as_bytes();
-    // Walk backward from the anchor to find the opening `{` that begins this
-    // JSON object. Stop if we walk more than a few thousand characters back,
-    // which would indicate the anchor landed in unrelated content.
-    let mut start = anchor_idx;
-    let max_back = 4096;
-    while start > 0 && bytes[start - 1] != b'{' {
-        start -= 1;
-        if anchor_idx - start > max_back {
-            return None;
-        }
-    }
-    if start == 0 && bytes[start] != b'{' {
-        return None;
-    }
-    // The loudnorm JSON has no nested objects / arrays of objects, so the
-    // first `}` after the anchor closes the measurement block.
-    let rest = &text[anchor_idx..];
-    let end_rel = rest.find('}')?;
-    let end = anchor_idx + end_rel + 1;
-    let slice = &text[start..end];
-    let parsed: serde_json::Value = serde_json::from_str(slice).ok()?;
-    let obj = parsed.as_object()?;
-
-    let parse_f = |k: &str| -> Option<f64> {
-        obj.get(k)
-            .and_then(|v| v.as_str())
-            .and_then(|s| s.parse::<f64>().ok())
-    };
-
-    Some(LoudnormMeasurement {
-        input_i: parse_f("input_i")?,
-        input_tp: parse_f("input_tp")?,
-        input_lra: parse_f("input_lra")?,
-        input_thresh: parse_f("input_thresh")?,
-        target_offset: parse_f("target_offset")?,
-    })
-}
-
-/// Verifies the bundled `ffmpeg` and `ffprobe` sidecars report a supported
-/// version (at least [`MIN_FFMPEG_VERSION`]). Call this once before starting
-/// a render.
 pub async fn verify_sidecar_binaries(app: &AppHandle) -> Result<(), AppError> {
     verify_version(app, "ffmpeg", "ffmpeg version ").await?;
     verify_version(app, "ffprobe", "ffprobe version ").await?;
@@ -654,34 +638,20 @@ pub async fn verify_sidecar_binaries(app: &AppHandle) -> Result<(), AppError> {
 /// Parses the `major.minor` from an ffmpeg/ffprobe version banner line such as
 /// `ffmpeg version 8.1.1-essentials_build-...` or `ffprobe version n8.2.0`.
 ///
-/// Some static builds prefix the version with `n` (e.g. `n8.1.1`); that prefix
-/// is stripped before parsing. Returns `None` if the version can't be parsed.
-fn parse_ffmpeg_version(line: &str, prefix: &str) -> Option<(u32, u32)> {
-    let rest = line.split(prefix).nth(1)?;
-    let token = rest.split_whitespace().next()?;
-    // Static builds commonly prefix the version with 'n' (e.g. `n8.1.1`).
-    let token = token.strip_prefix('n').unwrap_or(token);
-    let mut parts = token.split('.');
-    let major: u32 = parts.next()?.parse().ok()?;
-    let minor: u32 = parts.next()?.parse().ok()?;
-    Some((major, minor))
-}
-
-fn version_meets_minimum(version: (u32, u32)) -> bool {
-    let (min_major, min_minor) = MIN_FFMPEG_VERSION;
-    version.0 > min_major || (version.0 == min_major && version.1 >= min_minor)
-}
-
 async fn verify_version(app: &AppHandle, name: &str, prefix: &str) -> Result<(), AppError> {
     let sidecar_command = app
         .shell()
         .sidecar(name)
         .map_err(|e| AppError::Ffmpeg(e.to_string()))?
         .args(["-version"]);
-    let output = sidecar_command
-        .output()
-        .await
+    let (rx, child) = sidecar_command
+        .spawn()
         .map_err(|e| AppError::Ffmpeg(e.to_string()))?;
+    let output = ensure_success(
+        collect_output_with_timeout(rx, child, std::time::Duration::from_secs(PROBE_TIMEOUT_SEC))
+            .await?,
+        name,
+    )?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let first_line = stdout.lines().next().unwrap_or("");
     match parse_ffmpeg_version(first_line, prefix) {
@@ -698,198 +668,5 @@ async fn verify_version(app: &AppHandle, name: &str, prefix: &str) -> Result<(),
             "Could not parse {} version from output: '{}'",
             name, first_line
         ))),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // -----------------------------------------------------------------------
-    // strip_units
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_strip_units_removes_kbits_suffix() {
-        assert_eq!(strip_units("4123.4kbits/s"), "4123.4");
-    }
-
-    #[test]
-    fn test_strip_units_removes_x_suffix() {
-        assert_eq!(strip_units("12.3x"), "12.3");
-    }
-
-    #[test]
-    fn test_strip_units_removes_k_suffix() {
-        assert_eq!(strip_units("5000k"), "5000");
-    }
-
-    #[test]
-    fn test_strip_units_preserves_bare_number() {
-        assert_eq!(strip_units("29.97"), "29.97");
-    }
-
-    #[test]
-    fn test_strip_units_does_not_strip_unicode() {
-        assert_eq!(strip_units("123abc"), "123");
-    }
-
-    #[test]
-    fn test_strip_units_empty() {
-        assert_eq!(strip_units(""), "");
-    }
-
-    // -----------------------------------------------------------------------
-    // extract_time
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_extract_time_standard_format() {
-        let result = extract_time("time=01:23:45.67");
-        assert!(result.is_some());
-        let expected = 1.0 * 3600.0 + 23.0 * 60.0 + 45.67;
-        assert!((result.unwrap() - expected).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_extract_time_no_match() {
-        assert!(extract_time("frame=  120 fps=30").is_none());
-    }
-
-    #[test]
-    fn test_extract_time_with_surrounding_text() {
-        let result = extract_time("frame=  120 fps=30.0 time=00:05:30.00 bitrate=1234.5kbits/s");
-        assert!(result.is_some());
-        assert!((result.unwrap() - 330.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_extract_time_invalid_parts() {
-        assert!(extract_time("time=ab:cd:ef").is_none());
-    }
-
-    // -----------------------------------------------------------------------
-    // parse_stats
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_parse_stats_all_fields() {
-        let line = "frame=  120 fps=30.0 speed=12.5x bitrate=4123.4kbits/s";
-        let stats = parse_stats(line);
-        assert!(stats.is_some());
-        let s = stats.unwrap();
-        assert!((s.speed - 12.5).abs() < 0.01);
-        assert!((s.bitrate_kbps - 4123.4).abs() < 0.01);
-        assert!((s.fps - 30.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_parse_stats_partial_speed_only() {
-        let line = "speed=2.0x";
-        let stats = parse_stats(line);
-        assert!(stats.is_some());
-        let s = stats.unwrap();
-        assert!((s.speed - 2.0).abs() < 0.01);
-        assert!((s.bitrate_kbps - 0.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_parse_stats_no_match() {
-        let line = "frame=  120 duration=00:01:00";
-        assert!(parse_stats(line).is_none());
-    }
-
-    #[test]
-    fn test_parse_stats_empty() {
-        assert!(parse_stats("").is_none());
-    }
-
-    // -----------------------------------------------------------------------
-    // parse_ffprobe_frame_rate
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_parse_ffprobe_frame_rate_fraction() {
-        let result = parse_ffprobe_frame_rate("30000/1001");
-        assert!(result.is_some());
-        assert!((result.unwrap() - 29.97).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_parse_ffprobe_frame_rate_float() {
-        let result = parse_ffprobe_frame_rate("29.97");
-        assert!(result.is_some());
-        assert!((result.unwrap() - 29.97).abs() < 0.01);
-    }
-
-    #[test]
-    fn test_parse_ffprobe_frame_rate_invalid() {
-        assert!(parse_ffprobe_frame_rate("invalid").is_none());
-    }
-
-    #[test]
-    fn test_parse_ffprobe_frame_rate_zero_denominator() {
-        assert!(parse_ffprobe_frame_rate("1/0").is_none());
-    }
-
-    #[test]
-    fn test_parse_ffprobe_frame_rate_clamped() {
-        let result = parse_ffprobe_frame_rate("1000");
-        assert!(result.is_some());
-        assert!((result.unwrap() - 240.0).abs() < 0.01);
-    }
-
-    // -----------------------------------------------------------------------
-    // parse_ffmpeg_version
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_parse_ffmpeg_version_standard() {
-        let result = parse_ffmpeg_version("ffmpeg version 8.1.1-essentials_build", "ffmpeg version ");
-        assert_eq!(result, Some((8, 1)));
-    }
-
-    #[test]
-    fn test_parse_ffmpeg_version_n_prefix() {
-        let result = parse_ffmpeg_version("ffprobe version n8.2.0", "ffprobe version ");
-        assert_eq!(result, Some((8, 2)));
-    }
-
-    #[test]
-    fn test_parse_ffmpeg_version_no_match() {
-        let result = parse_ffmpeg_version("unexpected output", "ffmpeg version ");
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_parse_ffmpeg_version_minor_only() {
-        let result = parse_ffmpeg_version("ffmpeg version 7.0", "ffmpeg version ");
-        assert_eq!(result, Some((7, 0)));
-    }
-
-    // -----------------------------------------------------------------------
-    // version_meets_minimum
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_version_meets_minimum_exact_match() {
-        assert!(version_meets_minimum((8, 1)));
-    }
-
-    #[test]
-    fn test_version_meets_minimum_above() {
-        assert!(version_meets_minimum((8, 2)));
-        assert!(version_meets_minimum((9, 0)));
-    }
-
-    #[test]
-    fn test_version_meets_minimum_below() {
-        assert!(!version_meets_minimum((8, 0)));
-        assert!(!version_meets_minimum((7, 5)));
-    }
-
-    #[test]
-    fn test_version_meets_minimum_major_above() {
-        assert!(version_meets_minimum((10, 0)));
     }
 }

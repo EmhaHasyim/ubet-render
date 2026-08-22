@@ -1,12 +1,8 @@
 import { createSignal, onMount } from 'solid-js';
 import { invoke } from '@tauri-apps/api/core';
+import type { HardwareInfo } from '../core/types';
 
-export interface HardwareInfo {
-  cpuModel: string;
-  gpuModel: string;
-  totalRamGB: number;
-  av1Supported: boolean;
-}
+export type { HardwareInfo } from '../core/types';
 
 export function useHardware(
   currentCodec: () => string,
@@ -17,10 +13,9 @@ export function useHardware(
   );
 
   onMount(() => {
-    // Capture the codec value *before* the async invoke so the
-    // downstream check is deterministic — the user may change the
-    // codec during the ~10ms IPC round-trip.
-    const codecOnCall = currentCodec();
+    // Read the codec again when the async probe resolves. The user may
+    // change it while the IPC call is in flight; a stale captured value must
+    // never overwrite a newer selection.
 
     invoke<{
       cpuName: string;
@@ -36,12 +31,12 @@ export function useHardware(
           av1Supported: info.av1Supported,
         });
 
-        if (!info.av1Supported && codecOnCall === 'av1') {
+        if (!info.av1Supported && currentCodec() === 'av1') {
           setCodec('h265');
         }
       })
       .catch(() => {
-        if (codecOnCall === 'av1') {
+        if (currentCodec() === 'av1') {
           setCodec('h265');
         }
         setHardwareInfo({

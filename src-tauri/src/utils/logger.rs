@@ -58,8 +58,7 @@ pub fn init_logger() {
     if LOG_WRITER.get().is_some() {
         return;
     }
-    let log_dir = crate::utils::fs::ubet_temp_dir()
-        .join("logs");
+    let log_dir = crate::utils::fs::ubet_temp_dir().join("logs");
     let _ = std::fs::create_dir_all(&log_dir);
     // Keep the log directory from growing forever across sessions.
     prune_old_logs(&log_dir, LOG_RETENTION_DAYS);
@@ -106,7 +105,6 @@ pub fn log_line(message: &str) {
         let _ = guard.flush();
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -172,6 +170,4 @@ mod tests {
         let _ = std::fs::remove_file(&malformed);
         let _ = std::fs::remove_dir_all(&dir);
     }
-
-
 }

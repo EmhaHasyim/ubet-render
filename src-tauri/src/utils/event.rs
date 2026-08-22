@@ -30,7 +30,9 @@ fn format_pipeline_event(event: &PipelineEvent) -> String {
         PipelineEvent::Log { level, message } => {
             format!("[{}] {}", level.to_uppercase(), message)
         }
-        PipelineEvent::Progress { total, completed, .. } => {
+        PipelineEvent::Progress {
+            total, completed, ..
+        } => {
             format!("PROGRESS {}/{}", completed, total)
         }
         PipelineEvent::Done {

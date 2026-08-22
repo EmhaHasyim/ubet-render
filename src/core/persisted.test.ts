@@ -138,6 +138,7 @@ describe('getDefaultInitial', () => {
     expect(cfg.maxrate).toBe('4000k');
     expect(cfg.outputFormat).toBe('mp4');
     expect(cfg.embedChapters).toBe(true);
+    expect(cfg.skipIntermediateOnCodecMatch).toBe(false);
   });
 });
 
@@ -283,12 +284,9 @@ describe('loadPersistedConfig', () => {
     expect(stored.embedChapters).toBe(true);
   });
 
-  // v1 → v2 migration: honors the README's "Zero-Reencode Muxing" promise.
-  // Pre-migration users had `usePingpong: true` and no awareness of the new
-  // toggle. After upgrading to v2 they must (a) keep their existing
-  // `usePingpong` flag, and (b) get the new `skipIntermediateOnCodecMatch`
-  // defaulted to `true` so AV1→AV1 renders do not regress into a re-encode.
-  it('migrates v1 -> v2 by injecting skipIntermediateOnCodecMatch=true and persisting', () => {
+  // v1 → v2 migration: introduce the opt-in stream-copy toggle without
+  // changing the pre-migration processing behavior.
+  it('migrates v1 -> v2 by injecting skipIntermediateOnCodecMatch=false and persisting', () => {
     const oldData = {
       version: 1,
       outputPath: '/pre-migration',
@@ -299,18 +297,18 @@ describe('loadPersistedConfig', () => {
 
     const cfg = loadPersistedConfig();
 
-    // Migration result: preserved user data + new field defaulted to true.
+    // Migration result: preserved user data + new field defaulted to false.
     // `loadPersistedConfig` returns a plain PersistedConfig object (no getter
     // accessors), so each field is a property, not a function call.
     expect(cfg.version).toBe(STORAGE_VERSION); // 2
     expect(cfg.outputPath).toBe('/pre-migration'); // preserved
     expect(cfg.usePingpong).toBe(true); // preserved (plain property)
-    expect(cfg.skipIntermediateOnCodecMatch).toBe(true); // new default
+    expect(cfg.skipIntermediateOnCodecMatch).toBe(false); // safe default
     // Persisted store should now have the new schema so subsequent loads
     // skip the migration work.
     const stored = JSON.parse(localStorage.getItem(STORAGE_KEY)!);
     expect(stored.version).toBe(STORAGE_VERSION);
-    expect(stored.skipIntermediateOnCodecMatch).toBe(true);
+    expect(stored.skipIntermediateOnCodecMatch).toBe(false);
   });
 
   it('round-trips skipIntermediateOnCodecMatch=false across localStorage', () => {

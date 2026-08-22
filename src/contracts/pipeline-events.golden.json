@@ -1,0 +1,63 @@
+[
+  {
+    "type": "Progress",
+    "data": {
+      "total": 2,
+      "completed": 1,
+      "jobs": [
+        {
+          "index": 0,
+          "state": "done",
+          "progressPercent": 100,
+          "currentStep": "Done",
+          "name": "clip.mp4",
+          "outputPath": "out/clip.mp4",
+          "thumbnailPath": "thumb.jpg"
+        },
+        {
+          "index": 1,
+          "state": "processing",
+          "progressPercent": 42,
+          "currentStep": "Encoding",
+          "name": "clip-2.mp4",
+          "outputPath": "out/clip-2.mp4",
+          "thumbnailPath": null
+        }
+      ]
+    }
+  },
+  {
+    "type": "Log",
+    "data": {
+      "level": "info",
+      "message": "Building master audio pool..."
+    }
+  },
+  {
+    "type": "Done",
+    "data": {
+      "completed": 2,
+      "total": 2,
+      "failed": 0
+    }
+  },
+  {
+    "type": "Cancelled",
+    "data": "Render cancelled by user"
+  },
+  {
+    "type": "Paused"
+  },
+  {
+    "type": "FatalError",
+    "data": "No audio files selected or found"
+  },
+  {
+    "type": "Stats",
+    "data": {
+      "speed": 1.25,
+      "bitrateKbps": 4123.4,
+      "fps": 29.97
+    }
+  }
+]

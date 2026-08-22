@@ -1,31 +1,28 @@
-import { createSignal, createMemo, createEffect, onCleanup } from 'solid-js';
+import { createSignal, createMemo, onCleanup } from 'solid-js';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type {
-  JobProgress,
-  PipelineEvent,
-  PipelineProgress,
-} from '../core/types';
+import type { JobProgress, PipelineEvent } from '../core/types';
+import type { PipelineApi } from '../context/pipeline';
 import { isMaxrateValid } from '../core/estimate';
 import { usePersistedConfig } from './usePersistedConfig';
 import { useHardware } from './useHardware';
 import { useDragDrop } from './useDragDrop';
-import { notify } from '../core/notify';
+import { usePipelinePersistence } from './usePipelinePersistence';
+import { createPipelineEventHandler } from './pipelineEvents';
 import { showToast } from '../core/toast';
 import { RingBuffer } from '../core/ringBuffer';
-import { EtaCalculator } from '../core/eta';
+import { useProgressTracker } from './useProgressTracker';
 import { buildAppConfig } from '../core/buildAppConfig';
 import { TAURI_COMMANDS, TAURI_EVENTS } from '../core/constants';
 import { createLogger } from '../core/logger';
 
 const MAX_LOGS = 2000;
-const MAX_ETA_SAMPLES = 10;
 
 // Single namespaced logger for this hook.  Replaces 5 ad-hoc console.error
 // calls — see `src/core/logger.ts`.
 const log = createLogger('usePipeline');
 
-export function usePipeline() {
+export function usePipeline(): PipelineApi {
   const config = usePersistedConfig();
 
   let hardwareInfo: () => import('../hooks/useHardware').HardwareInfo | null;
@@ -66,38 +63,23 @@ export function usePipeline() {
     dragHover = () => null;
   }
 
+  const persistence = usePipelinePersistence(config, resolveEncoder);
+
   const [running, setRunning] = createSignal(false);
   const [paused, setPaused] = createSignal(false);
   const [jobs, setJobs] = createSignal<JobProgress[]>([]);
-  const [overallProgress, setOverallProgress] = createSignal(0);
-  const [overallEta, setOverallEta] = createSignal<string>('');
   const [logs, setLogs] = createSignal<string[]>([]);
-  const [liveStats, setLiveStats] = createSignal<{
-    speed: number;
-    bitrateKbps: number;
-    fps: number;
-  } | null>(null);
+
+  const progress = useProgressTracker();
 
   let unlisten: UnlistenFn | null = null;
   let unlistenGuard = false;
-  let startProgress = 0;
-  let startTime = 0;
   // Reconciliation timer for {@link pauseRender}: if the backend never
   // acknowledges the pause (IPC delay / drop / webview suspend), the UI
   // would otherwise be stuck in `running=true, paused=true` indefinitely.
   // The handlePaused event handler clears this timer once the ack arrives.
   let pauseReconcileTimer: ReturnType<typeof setTimeout> | null = null;
-  // Reconciliation timer for {@link resumeRender}: a pause is implemented by
-  // the backend as a soft-kill (ffmpeg stopped, state saved, pipeline task
-  // unwinds). If the user resumes while the old task is still tearing down,
-  // the backend can answer `true` even though no pipeline is actually coming
-  // back — leaving the UI stuck in `running=true` forever with no pipeline
-  // activity. This watchdog restarts from the saved state if no real
-  // pipeline activity (Progress/Stats) arrives shortly after a "resumed" ack.
-  let resumeReconcileTimer: ReturnType<typeof setTimeout> | null = null;
-
   const logBuffer = new RingBuffer<string>(MAX_LOGS);
-  const etaCalculator = new EtaCalculator(MAX_ETA_SAMPLES);
 
   const flushLogs = () => setLogs(logBuffer.toArray());
 
@@ -119,148 +101,38 @@ export function usePipeline() {
     }
   };
 
-  /**
-   * Fresh ETA baseline for a resumed render. The backend resumes from the
-   * *saved* state file, whose progress can differ from the last value the UI
-   * saw (state is saved every ~2s while progress events are throttled to
-   * 120ms). A stale baseline would make the first post-resume Progress event
-   * look like a huge burst of work (bogus near-zero ETA), and the pause idle
-   * time must not count as render time. Seed a sentinel so the first
-   * post-resume Progress event establishes the real baseline before any
-   * sample is taken.
-   */
-  const seedResumeBaseline = () => {
-    startProgress = -1;
-    startTime = Date.now();
-    etaCalculator.reset();
-  };
-
-  const resetRenderState = (resuming: boolean) => {
-    setRunning(true);
-    setPaused(false);
-    setLiveStats(null);
-    if (!resuming) {
-      setJobs([]);
-      logBuffer.reset();
-      setLogs([]);
-      setOverallProgress(0);
-      setOverallEta('Calculating...');
-      startProgress = 0;
-      etaCalculator.reset();
-    } else {
-      setOverallEta('Resuming...');
-      seedResumeBaseline();
-    }
-    startTime = Date.now();
-  };
-
-  const handleProgress = (data: PipelineProgress) => {
-    // Real pipeline activity — a resumed pipeline is alive; disarm the
-    // resume watchdog.
-    cancelResumeReconcile();
-    setJobs(data.jobs);
-    const totalJobs = data.total;
-    const jobsProgressSum = data.jobs.reduce(
-      (sum, j) => sum + j.progressPercent,
-      0,
-    );
-    const overallPercent =
-      totalJobs > 0
-        ? Math.min(100, Math.max(0, jobsProgressSum / totalJobs))
-        : 0;
-    setOverallProgress(overallPercent);
-
-    if (startProgress < 0) {
-      // First Progress event after a resume: use the actual (possibly more
-      // advanced) pipeline state as the ETA baseline instead of the stale
-      // pre-pause UI value, and skip sampling this event.
-      startProgress = overallPercent;
-      if (overallPercent >= 100) {
-        // A first event at 100% means the resumed batch is already done —
-        // report Done here so a lost Done event can't leave the ETA
-        // hanging on "Resuming...".
-        setOverallEta('Done');
-      }
-    } else {
-      const progressGained = overallPercent - startProgress;
-      if (progressGained > 0.001 && overallPercent < 100) {
-        const elapsedMs = Date.now() - startTime;
-        etaCalculator.addSample(elapsedMs, progressGained);
-        setOverallEta(etaCalculator.estimateRemaining(overallPercent));
-      } else if (overallPercent >= 100) {
-        setOverallEta('Done');
-      }
-    }
-  };
-
-  const handleDone = (data: {
-    completed: number;
-    total: number;
-    failed: number;
-  }) => {
-    cancelResumeReconcile();
-    setRunning(false);
-    setPaused(false);
-    setOverallProgress(100);
-    setOverallEta(data.failed > 0 ? 'Finished with errors' : 'Done');
-    safeUnlisten();
-    notify(
-      data.failed > 0 ? 'Render finished with errors' : 'Render finished',
-      `${data.completed}/${data.total} done, ${data.failed} failed.`,
-    );
-    // Companion in-app toast: this fires for both minimised-to-tray and
-    // window-visible scenarios, complementing the OS-level notification.
-    // Distinct variant picks (success vs. warning) reinforce the result.
-    showToast(
-      data.failed > 0
-        ? `Render finished with ${data.failed} error${data.failed === 1 ? '' : 's'}`
-        : 'Render finished',
-      {
-        variant: data.failed > 0 ? 'warning' : 'success',
-        ttl: 4500,
-      },
-    );
-  };
-
-  const handlePaused = () => {
-    // Backend acknowledged the pause \u2014 cancel the reconciliation timer.
+  const cancelPauseReconcile = (): void => {
     if (pauseReconcileTimer !== null) {
       clearTimeout(pauseReconcileTimer);
       pauseReconcileTimer = null;
     }
-    // We're paused again — any pending resume watchdog is moot.
-    cancelResumeReconcile();
-    appendLog('[INFO] Render paused');
-    setRunning(false);
-    setPaused(true);
-    setOverallEta('Paused');
-    // Use the in-app toast only; the OS notification was removed in
-    // v0.2.3 because we don't know whether the user has the window
-    // visible or minimised to the tray when pause is acked, and a
-    // double-notify is noisy.
-    showToast('Render paused', { variant: 'info', ttl: 2500 });
   };
 
-  const handleCancelled = (message: string) => {
-    cancelResumeReconcile();
-    appendLog(`[INFO] ${message}`);
-    setRunning(false);
-    setPaused(false);
-    setOverallEta('Render cancelled');
-    safeUnlisten();
-  };
+  const handlePipelineEvent = createPipelineEventHandler({
+    cancelPauseReconcile,
+    appendLog,
+    safeUnlisten,
+    setRunning,
+    setPaused,
+    setJobs,
+    setOverallProgress: progress.setOverallProgress,
+    setOverallEta: progress.setOverallEta,
+    setLiveStats: progress.setLiveStats,
+    getStartProgress: progress.getStartProgress,
+    setStartProgress: progress.setStartProgress,
+    getStartTime: progress.getStartTime,
+    etaCalculator: progress.etaCalculator,
+  });
 
-  const handleFatalError = (message: string) => {
-    cancelResumeReconcile();
-    appendLog(`FATAL: ${message}`);
-    setRunning(false);
+  const resetRenderState = (resuming: boolean) => {
+    setRunning(true);
     setPaused(false);
-    setOverallEta('Failed');
-    safeUnlisten();
-    notify('Render failed', `Error: ${message}`);
-    // In-app toast mirrors the OS notification with a sticky error that
-    // requires explicit dismissal — fatal errors deserve user's attention.
-    showToast(`Render failed: ${message}`, { variant: 'error', ttl: 0 });
+    progress.resetProgress(resuming);
+    if (!resuming) {
+      setJobs([]);
+      logBuffer.reset();
+      setLogs([]);
+    }
   };
 
   const startRender = async (resume: boolean = false) => {
@@ -277,9 +149,15 @@ export function usePipeline() {
       return;
     }
 
+    // Do not start a render against a stale backend snapshot. Persistence is
+    // retried internally, and a failed final flush leaves the UI untouched so
+    // the user can retry instead of silently rendering with old settings.
+    if (!(await persistence.flush())) {
+      appendLog('Error: Settings could not be saved; render was not started.');
+      return;
+    }
+
     resetRenderState(resume);
-    // Starting a fresh render invalidates any pending resume watchdog.
-    cancelResumeReconcile();
     // Remove any stale listener from a previous render before
     // creating a new one.  Reset the guard AFTER safeUnlisten so
     // that handleDone/handleCancelled/handleFatalError can also
@@ -291,37 +169,7 @@ export function usePipeline() {
     try {
       unlisten = await listen<PipelineEvent>(
         TAURI_EVENTS.pipelineEvent,
-        (event) => {
-          const payload = event.payload;
-          switch (payload.type) {
-            case 'Log':
-              appendLog(
-                `[${payload.data.level.toUpperCase()}] ${payload.data.message}`,
-              );
-              break;
-            case 'Stats':
-              // Live encoder stats are real pipeline activity too — disarm
-              // the resume watchdog just like Progress events do.
-              cancelResumeReconcile();
-              setLiveStats(payload.data);
-              break;
-            case 'Progress':
-              handleProgress(payload.data);
-              break;
-            case 'Done':
-              handleDone(payload.data);
-              break;
-            case 'Paused':
-              handlePaused();
-              break;
-            case 'Cancelled':
-              handleCancelled(payload.data);
-              break;
-            case 'FatalError':
-              handleFatalError(payload.data);
-              break;
-          }
-        },
+        (event) => handlePipelineEvent(event.payload),
       );
 
       const encoder = resolveEncoder(config.codec());
@@ -356,7 +204,7 @@ export function usePipeline() {
       appendLog(`Error: ${String(err)}`);
       setRunning(false);
       setPaused(false);
-      setOverallEta('Failed');
+      progress.setOverallEta('Failed');
       showToast('Render failed to start', { variant: 'error', ttl: 0 });
     }
   };
@@ -368,28 +216,11 @@ export function usePipeline() {
       if (resumed) {
         setPaused(false);
         setRunning(true);
-        setOverallEta('Resuming...');
+        progress.setOverallEta('Resuming...');
         // Real resume (backend confirmed a live pipeline): the UI keeps its
         // pre-pause signals, so seed the ETA baseline here — the same sentinel
         // `resetRenderState(true)` uses for the restart path.
-        seedResumeBaseline();
-        // Watchdog for the pause→quick-resume race: the backend may answer
-        // `true` while the old pipeline is still tearing down. If no real
-        // activity (Progress/Stats) arrives within the window, assume the
-        // pipeline died and restart from the saved state file instead of
-        // leaving the UI stuck in "Rendering" forever.
-        cancelResumeReconcile();
-        resumeReconcileTimer = setTimeout(async () => {
-          resumeReconcileTimer = null;
-          if (running() && !paused()) {
-            log.warn(
-              'Resume watchdog: no pipeline activity; restarting from saved state',
-            );
-            safeUnlisten();
-            setRunning(false);
-            await startRender(true);
-          }
-        }, 6000);
+        progress.seedResumeBaseline();
       } else {
         // Pipeline already terminated; start a fresh one from state file.
         setPaused(false);
@@ -405,36 +236,37 @@ export function usePipeline() {
 
   const cancelRender = async () => {
     cancelPauseReconcile();
-    // Disarm the resume watchdog too: if the user pauses → resumes → cancels
-    // quickly, `safeUnlisten()` in the `finally` below removes the listener,
-    // so the backend's Cancelled event may never reach `handleCancelled`.
-    // Without this, the watchdog would fire 6s later and restart the very
-    // render the user just cancelled.
-    cancelResumeReconcile();
+    progress.setOverallEta('Cancelling...');
     try {
-      await invoke(TAURI_COMMANDS.cancelRender);
+      const accepted = await invoke<boolean>(TAURI_COMMANDS.cancelRender);
+      if (accepted) {
+        // The backend command waits for the render task and its guard to
+        // terminate before returning true. This is a completion acknowledgement
+        // rather than a request acknowledgement, so the local lifecycle can
+        // finish safely even if the terminal event is delayed or lost.
+        setRunning(false);
+        setPaused(false);
+        progress.setOverallEta('Render cancelled');
+        safeUnlisten();
+      } else {
+        // No backend pipeline exists anymore, so there will be no terminal
+        // event to wait for. Finish the local lifecycle immediately.
+        setRunning(false);
+        setPaused(false);
+        progress.setOverallEta('Render cancelled');
+        safeUnlisten();
+      }
     } catch (err) {
+      // A failed command did not prove that the backend stopped. Keep the
+      // listener and the running state so a late terminal event remains
+      // observable; the user can retry cancellation.
       log.error('Cancel render failed:', err);
       appendLog(`Error: Failed to cancel render - ${String(err)}`);
-    } finally {
-      // Always release the Tauri event listener so it doesn't linger
-      // when the backend's Cancelled event never reaches the frontend
-      // (e.g. IPC channel dropped, Tauri webview suspended, etc.).
-      safeUnlisten();
-    }
-  };
-
-  const cancelPauseReconcile = (): void => {
-    if (pauseReconcileTimer !== null) {
-      clearTimeout(pauseReconcileTimer);
-      pauseReconcileTimer = null;
-    }
-  };
-
-  const cancelResumeReconcile = (): void => {
-    if (resumeReconcileTimer !== null) {
-      clearTimeout(resumeReconcileTimer);
-      resumeReconcileTimer = null;
+      progress.setOverallEta('Cancel failed');
+      showToast('Cancel request failed — render may still be running', {
+        variant: 'warning',
+        ttl: 5000,
+      });
     }
   };
 
@@ -442,7 +274,7 @@ export function usePipeline() {
     cancelPauseReconcile();
     try {
       setPaused(true);
-      setOverallEta('Pausing...');
+      progress.setOverallEta('Pausing...');
       // If the backend never acknowledges the pause (e.g. webview suspended,
       // IPC dropped), auto-reconcile the UI back to "running" after 5s so the
       // user is not stranded in a half-paused state. handlePaused cancels
@@ -452,7 +284,7 @@ export function usePipeline() {
         if (running() && paused()) {
           log.warn('Pause ack timeout; reverting paused state');
           setPaused(false);
-          setOverallEta('Pause timeout');
+          progress.setOverallEta('Pause timeout');
           showToast('Pause timed out', { variant: 'warning', ttl: 5000 });
         }
       }, 5000);
@@ -462,7 +294,7 @@ export function usePipeline() {
       log.error('Pause render failed:', err);
       appendLog(`Error: Failed to pause render - ${String(err)}`);
       setPaused(false);
-      setOverallEta('Failed');
+      progress.setOverallEta('Failed');
       showToast('Pause failed', { variant: 'error', ttl: 4000 });
     }
   };
@@ -511,59 +343,19 @@ export function usePipeline() {
     return '';
   });
 
-  // Debounced save — persist config to backend whenever the user changes any
-  // setting, so the backend's validation can surface errors early and the
-  // persisted config file stays in sync with the front-end.
-  //
-  // The `void [...]` expression intentionally throws away the values; its
-  // sole purpose is to register each of the eight config fields as a
-  // SolidJS reactive dependency inside this effect's scope, so the
-  // effect re-runs whenever any of them changes.
-  createEffect(() => {
-    void [
-      config.codec(),
-      config.maxrate(),
-      config.songsPerPlaylist(),
-      config.minDurationHours(),
-      config.outputPrefix(),
-      config.outputPath(),
-      config.embedChapters(),
-      config.audioMode(),
-    ];
-
-    const timer = setTimeout(async () => {
-      try {
-        await invoke(TAURI_COMMANDS.saveConfig, {
-          config: buildAppConfig(config, resolveEncoder),
-        });
-      } catch (err) {
-        log.error('Failed to save backend config:', err);
-        // Best-effort info-level toast — debounced failures can stack up
-        // during normal use so the variant is muted (info) and ttl short.
-        showToast('Settings could not be saved to disk', {
-          variant: 'info',
-          ttl: 3500,
-        });
-      }
-    }, 500);
-
-    onCleanup(() => clearTimeout(timer));
-  });
-
   onCleanup(() => {
     safeUnlisten();
     cancelPauseReconcile();
-    cancelResumeReconcile();
   });
 
   return {
     running,
     paused,
     jobs,
-    overallProgress,
-    overallEta,
+    overallProgress: progress.overallProgress,
+    overallEta: progress.overallEta,
     logs,
-    liveStats,
+    liveStats: progress.liveStats,
     hardwareInfo,
     av1Supported: () => hardwareInfo()?.av1Supported ?? false,
     canStart,

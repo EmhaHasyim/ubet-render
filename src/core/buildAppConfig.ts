@@ -1,7 +1,17 @@
 import type { AppConfig } from './types';
 import { DEFAULT_CONFIG } from './config';
 
-export interface PersistedConfigState {
+/**
+ * Subset of user-adjustable settings that map 1:1 to fields in the Rust
+ * `AppConfig` struct (see `src-tauri/src/config.rs`).  Every field here has
+ * a corresponding line in {@link buildAppConfig}; remaining `AppConfig`
+ * fields come from {@link DEFAULT_CONFIG}.
+ *
+ * Previously named `PersistedConfigState` — renamed to clarify that this
+ * is the frontend→backend bridge shape, not the localStorage schema (which
+ * lives in {@link PersistedConfig} in `core/persisted.ts`).
+ */
+export interface BackendConfigSnapshot {
   outputPath: () => string;
   outputPrefix: () => string;
   minDurationHours: () => number;
@@ -13,7 +23,7 @@ export interface PersistedConfigState {
 }
 
 export function buildAppConfig(
-  config: PersistedConfigState,
+  config: BackendConfigSnapshot,
   resolveEncoder: (codec: string) => string,
 ): AppConfig {
   return {

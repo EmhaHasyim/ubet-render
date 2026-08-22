@@ -20,11 +20,9 @@ pub struct OverrideConfig {
     pub audio_mode: Option<String>,
     pub embed_chapters: Option<bool>,
     pub output_format: Option<String>,
-    /// When true (default), a codec-matched source is concatenated via the
-    /// concat demuxer with `-c copy` and the intermediate re-encode step is
-    /// bypassed. Set to false to always run the intermediate step (even on
-    /// matched codecs, e.g. when the user explicitly wants the visual filter
-    /// chain applied for the ping-pong mirror effect).
+    /// When true and the source codec matches, the intermediate encode is
+    /// bypassed. Mismatched codecs always use the normal encode path. This is
+    /// an explicit opt-in and false preserves visual filters such as ping-pong.
     pub skip_intermediate_on_codec_match: Option<bool>,
 }
 

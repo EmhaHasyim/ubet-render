@@ -1,4 +1,3 @@
-
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
@@ -13,20 +12,18 @@ mod validation;
 use commands::{
     hardware,
     logger::log_to_file,
-    opener::{reveal_in_explorer},
+    opener::reveal_in_explorer,
     pipeline::{cancel_render, pause_render, resume_render, save_config, start_render},
 };
-use std::sync::{
-    Arc, Mutex,
-};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use tauri::{
+    Manager, WindowEvent,
     menu::{MenuBuilder, MenuItemBuilder},
     scope::fs::Scope as FsScope,
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, WindowEvent,
 };
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 
 pub struct RenderControl {
     cancel_tx: watch::Sender<bool>,
@@ -38,6 +35,9 @@ pub struct RenderControl {
     /// must report "no live pipeline" so the frontend restarts from the
     /// saved state file instead of believing a dead pipeline resumed.
     terminated: AtomicBool,
+    terminated_notify: Notify,
+    cleaned: AtomicBool,
+    cleanup_notify: Notify,
 }
 
 impl RenderControl {
@@ -50,6 +50,9 @@ impl RenderControl {
             pause_tx,
             pause_rx,
             terminated: AtomicBool::new(false),
+            terminated_notify: Notify::new(),
+            cleaned: AtomicBool::new(false),
+            cleanup_notify: Notify::new(),
         }
     }
 
@@ -58,6 +61,45 @@ impl RenderControl {
     /// control guard drops.
     pub fn mark_terminated(&self) {
         self.terminated.store(true, Ordering::SeqCst);
+        self.terminated_notify.notify_waiters();
+    }
+
+    /// Wait until the pipeline task has committed to exiting.
+    /// The atomic check plus a notification future avoids the check/subscribe
+    /// race: a termination that happens between the two is still observed.
+    pub async fn wait_for_terminated(&self) {
+        loop {
+            let notified = self.terminated_notify.notified();
+            if self.is_terminated() {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    /// Marks the control as fully cleaned up after `RenderState.control` has
+    /// been cleared by `ControlGuard`. This is deliberately separate from
+    /// `terminated`: callers that need to start a new render must wait for
+    /// cleanup, not merely for the worker task to begin returning.
+    pub fn mark_cleaned(&self) {
+        self.cleaned.store(true, Ordering::SeqCst);
+        self.cleanup_notify.notify_waiters();
+    }
+
+    pub fn is_cleaned(&self) -> bool {
+        self.cleaned.load(Ordering::SeqCst)
+    }
+
+    /// Wait until the old render control has been removed from application
+    /// state. The atomic check after subscribing closes the notification race.
+    pub async fn wait_for_cleanup(&self) {
+        loop {
+            let notified = self.cleanup_notify.notified();
+            if self.is_cleaned() {
+                return;
+            }
+            notified.await;
+        }
     }
 
     /// Returns `true` once the pipeline has committed to (or already)
@@ -213,6 +255,42 @@ mod tests {
     fn test_render_control_new_is_not_terminated() {
         let rc = RenderControl::new();
         assert!(!rc.is_terminated());
+        assert!(!rc.is_cleaned());
+    }
+
+    #[tokio::test]
+    async fn test_render_control_waits_for_termination() {
+        let rc = Arc::new(RenderControl::new());
+        let waiter = {
+            let rc = Arc::clone(&rc);
+            tokio::spawn(async move {
+                rc.wait_for_terminated().await;
+                true
+            })
+        };
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished());
+        rc.mark_terminated();
+        assert!(waiter.await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_render_control_cleanup_is_distinct_from_termination() {
+        let rc = Arc::new(RenderControl::new());
+        rc.mark_terminated();
+
+        let waiter = {
+            let rc = Arc::clone(&rc);
+            tokio::spawn(async move {
+                rc.wait_for_cleanup().await;
+                true
+            })
+        };
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished());
+
+        rc.mark_cleaned();
+        assert!(waiter.await.unwrap());
     }
 
     #[test]
@@ -282,11 +360,31 @@ fn main() {
             utils::logger::init_logger();
             utils::logger::log_line("=== Application started ===");
 
-            let config = config::AppConfig::load();
-            std::fs::create_dir_all(&config.directories.cache).ok();
-            std::fs::create_dir_all(&config.directories.output).ok();
-            std::fs::create_dir_all(&config.directories.video).ok();
-            std::fs::create_dir_all(&config.directories.audio).ok();
+            let loaded_config = config::AppConfig::load();
+            let config = match validation::validate_app_config(&loaded_config) {
+                Ok(()) => loaded_config,
+                Err(error) => {
+                    utils::logger::log_line(&format!(
+                        "Persisted config failed validation: {}. Using safe defaults.",
+                        error
+                    ));
+                    config::AppConfig::default()
+                }
+            };
+
+            for (name, path) in [
+                ("cache", &config.directories.cache),
+                ("output", &config.directories.output),
+                ("video", &config.directories.video),
+                ("audio", &config.directories.audio),
+            ] {
+                if let Err(error) = std::fs::create_dir_all(path) {
+                    utils::logger::log_line(&format!(
+                        "Failed to create {} directory '{}': {}",
+                        name, path, error
+                    ));
+                }
+            }
 
             {
                 let scope: FsScope = app.asset_protocol_scope();
@@ -300,9 +398,11 @@ fn main() {
 
             Ok(())
         })
-        .on_window_event(|window, event| if let WindowEvent::CloseRequested { api, .. } = event {
-            let _ = window.hide();
-            api.prevent_close();
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let _ = window.hide();
+                api.prevent_close();
+            }
         })
         .invoke_handler(tauri::generate_handler![
             hardware::detect_hardware,

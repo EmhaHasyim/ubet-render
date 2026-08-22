@@ -18,7 +18,7 @@ Making long-form looped videos (1-hour lo-fi mixes, stream screens, ambient soun
 ### Key Features
 
 - **Ping-Pong Mirroring**: Seamlessly mirrors short clips (A → B → A) with Lanczos upscaling and subtle unsharp masking.
-- **Zero-Reencode Muxing**: Once the base video loop is encoded, the final compilation stream-copies both audio and video tracks. Seconds, not hours.
+- **Zero-Reencode Muxing (opt-in)**: When the source codec matches the target, you can stream-copy the final compilation for fast output. It is disabled by default so codec conversion and ping-pong processing remain predictable.
 - **Smart Playlists**: Shuffles audio tracks up to your target duration (1h, 10h, etc.) and handles the math.
 - **Auto-Generated Timestamps**: Produces a compact `all_timestamps.txt` with YouTube-compliant timestamps (`00:00` or `00:00:00`) for copy-paste into video descriptions. Each song is listed once, plus an optional `"Looping"` end-marker.
 - **Hardware-Aware**: Auto-selects NVENC, AMF, or QSV acceleration at startup; falls back to software (SVT-AV1, x264, x265) when no GPU is detected.
@@ -275,7 +275,7 @@ bun run test src/core/persisted.test.ts  # Single file
 
 ## Project Status
 
-**Version:** 0.2.5 • **License:** MIT
+**Version:** 0.2.6 • **License:** MIT
 
 See [CHANGELOG.md](./CHANGELOG.md) for what's new in this release.
 

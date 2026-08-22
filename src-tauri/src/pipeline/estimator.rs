@@ -3,16 +3,13 @@ use std::path::Path;
 /// Supported video file extensions — shared with source_scanner and the
 /// frontend config (`src/core/config.ts`) for consistent file filtering.
 /// IMPORTANT: keep in sync with the TypeScript VIDEO_EXTENSIONS.
-pub const VIDEO_EXTENSIONS: &[&str] = &[
-    ".mp4", ".mkv", ".mov", ".webm", ".avi", ".flv", ".wmv",
-];
+pub const VIDEO_EXTENSIONS: &[&str] = &[".mp4", ".mkv", ".mov", ".webm", ".avi", ".flv", ".wmv"];
 
 /// Supported audio file extensions — shared with source_scanner and the
 /// frontend config (`src/core/config.ts`) for consistent file filtering.
 /// IMPORTANT: keep in sync with the TypeScript AUDIO_EXTENSIONS.
 pub const AUDIO_EXTENSIONS: &[&str] = &[
-    ".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac", ".wma",
-    ".opus", ".aiff", ".aif",
+    ".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac", ".wma", ".opus", ".aiff", ".aif",
 ];
 
 /// Rough estimate of the total bytes all jobs will write to disk.
@@ -83,8 +80,8 @@ pub fn sanitize_filename_component(value: &str) -> String {
         return "unnamed".to_string();
     }
     let reserved = [
-        "CON", "NUL", "PRN", "AUX", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
-        "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        "CON", "NUL", "PRN", "AUX", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
     ];
     if reserved.contains(&stem.to_ascii_uppercase().as_str()) {
         format!("_{}", sanitized)
@@ -213,7 +210,10 @@ mod tests {
 
     #[test]
     fn test_sanitize_filename_special_chars() {
-        assert_eq!(sanitize_filename_component("My:Channel/Name"), "My_Channel_Name");
+        assert_eq!(
+            sanitize_filename_component("My:Channel/Name"),
+            "My_Channel_Name"
+        );
     }
 
     #[test]

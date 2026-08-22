@@ -11,7 +11,9 @@ export class EtaCalculator {
   private readonly alpha = 0.35;
 
   constructor(_capacity: number) {
-    /* _capacity reserved for future use */
+    // Keep the historical constructor parameter for API compatibility. The
+    // current EMA does not need a sample buffer, so intentionally consume it.
+    void _capacity;
   }
 
   reset() {

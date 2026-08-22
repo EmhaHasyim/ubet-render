@@ -13,6 +13,22 @@ vi.mock('@iconify-icon/solid', () => ({
   Icon: () => null,
 }));
 
+function ShortcutsDialogTestWrapper() {
+  const [open, setOpen] = createSignal(false);
+  return (
+    <>
+      <button
+        type="button"
+        data-testid="open-dialog"
+        onClick={() => setOpen(true)}
+      >
+        open
+      </button>
+      <ShortcutsDialog isOpen={open()} onClose={() => setOpen(false)} />
+    </>
+  );
+}
+
 describe('ShortcutsDialog', () => {
   it('renders nothing when isOpen is false (Show unmounts the dialog)', () => {
     const { container } = render(() => (
@@ -25,22 +41,7 @@ describe('ShortcutsDialog', () => {
     // Wrapper so isOpen can flip synchronously; await lets the createEffect
     // that calls dialogRef.showModal() commit before we assert the 'open'
     // attribute.
-    const Wrapper = () => {
-      const [open, setOpen] = createSignal(false);
-      return (
-        <>
-          <button
-            type="button"
-            data-testid="open-dialog"
-            onClick={() => setOpen(true)}
-          >
-            open
-          </button>
-          <ShortcutsDialog isOpen={open()} onClose={() => setOpen(false)} />
-        </>
-      );
-    };
-    render(() => <Wrapper />);
+    render(() => <ShortcutsDialogTestWrapper />);
     expect(screen.queryByRole('dialog')).toBeNull();
 
     fireEvent.click(screen.getByTestId('open-dialog'));

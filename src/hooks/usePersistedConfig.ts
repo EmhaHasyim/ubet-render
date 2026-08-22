@@ -7,6 +7,30 @@ import {
   loadPersistedConfig,
   type PersistedConfig,
 } from '../core/persisted';
+import { safeSetStorageItem } from '../core/storage';
+
+// ── Field registry ─────────────────────────────────────────────────────
+// Adding a new config field requires updating only this list, the
+// PersistedState interface, and the PipelineApi context contract.
+const CONFIG_FIELDS = [
+  'videoSource',
+  'audioSource',
+  'outputPath',
+  'outputPrefix',
+  'maxrate',
+  'usePingpong',
+  'audioMode',
+  'embedChapters',
+  'outputFormat',
+  'songsPerPlaylist',
+  'minDurationHours',
+  'loopMode',
+  'loopCount',
+  'codec',
+  'skipIntermediateOnCodecMatch',
+] as const;
+
+// ── State interface ────────────────────────────────────────────────────
 
 interface PersistedState {
   videoSource: MediaSource | null;
@@ -26,17 +50,32 @@ interface PersistedState {
   skipIntermediateOnCodecMatch: boolean;
 }
 
+// ── Derived helpers ────────────────────────────────────────────────────
+
+/** Build a PersistedConfig snapshot from the current store state.
+ *  Adding a field to CONFIG_FIELDS automatically includes it here. */
+function buildSnapshot(
+  state: PersistedState,
+  version: number,
+): Record<string, unknown> {
+  const base: Record<string, unknown> = { version };
+  for (const field of CONFIG_FIELDS) {
+    base[field] = state[field];
+  }
+  return base;
+}
+
+// ── Persistence helpers ────────────────────────────────────────────────
+
 /**
  * Persist a snapshot to localStorage, swallowing quota/storage errors.
  * Module-level so the debounced writer isn't recreated on every render.
  */
 function writeSnapshot(snapshot: PersistedConfig): void {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
-  } catch {
-    /* localStorage quota exceeded or disabled */
-  }
+  safeSetStorageItem(STORAGE_KEY, JSON.stringify(snapshot));
 }
+
+// ── Hook ───────────────────────────────────────────────────────────────
 
 export function usePersistedConfig() {
   const initial = loadPersistedConfig();
@@ -73,24 +112,10 @@ export function usePersistedConfig() {
   let latestSnapshot: PersistedConfig | null = null;
 
   createEffect(() => {
-    const snapshot: PersistedConfig = {
-      version: STORAGE_VERSION,
-      videoSource: state.videoSource,
-      audioSource: state.audioSource,
-      outputPath: state.outputPath,
-      outputPrefix: state.outputPrefix,
-      maxrate: state.maxrate,
-      usePingpong: state.usePingpong,
-      songsPerPlaylist: state.songsPerPlaylist,
-      minDurationHours: state.minDurationHours,
-      loopMode: state.loopMode,
-      loopCount: state.loopCount,
-      audioMode: state.audioMode,
-      embedChapters: state.embedChapters,
-      outputFormat: state.outputFormat,
-      codec: state.codec,
-      skipIntermediateOnCodecMatch: state.skipIntermediateOnCodecMatch,
-    };
+    const snapshot = buildSnapshot(
+      state,
+      STORAGE_VERSION,
+    ) as unknown as PersistedConfig;
     latestSnapshot = snapshot;
     // Clear any pending timer before setting a new one — avoids creating
     // N timers when the user changes N fields rapidly.
@@ -114,7 +139,7 @@ export function usePersistedConfig() {
   });
 
   return {
-    // ---- Getters (accessor functions, matching the previous createSignal API) ----
+    // ---- Getters ----
     videoSource: () => state.videoSource,
     audioSource: () => state.audioSource,
     outputPath: () => state.outputPath,
@@ -131,7 +156,7 @@ export function usePersistedConfig() {
     outputFormat: () => state.outputFormat,
     skipIntermediateOnCodecMatch: () => state.skipIntermediateOnCodecMatch,
 
-    // ---- Setters ----
+    // ---- Setters (explicit — several have clamping logic) ----
     setVideoSource: (v: MediaSource | null) => setState('videoSource', v),
     setAudioSource: (v: MediaSource | null) => setState('audioSource', v),
     setOutputPath: (v: string) => setState('outputPath', v),

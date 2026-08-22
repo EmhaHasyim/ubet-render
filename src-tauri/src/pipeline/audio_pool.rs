@@ -133,11 +133,9 @@ pub async fn build_master_audio_pool(
             // the user's `-14 LUFS` target.
             let use_smart_skip = can_smart_skip && !normalize;
 
-            // Cache key includes a mode tag so the three branches never
-            // collide with each other in the cache directory — the same
-            // song may legitimately produce two cache files (one as
-            // `-c copy`, one as normalized re-encode) under different
-            // settings.
+            // Cache key includes a schema version, source file signature, and
+            // mode tag. Replacing a file at the same path must never reuse an
+            // older encoded result, even when the output settings are equal.
             let mode_tag = if use_smart_skip {
                 "skip"
             } else if normalize {
@@ -145,9 +143,19 @@ pub async fn build_master_audio_pool(
             } else {
                 "enc"
             };
+            // Hashing the full source is intentionally content-aware, but it
+            // is synchronous file I/O. Keep it off the Tokio worker so a large
+            // audio file cannot stall unrelated pipeline tasks.
+            let signature_path = original_path.clone();
+            let source_signature = tokio::task::spawn_blocking(move || {
+                fs::file_signature(&signature_path)
+            })
+            .await
+            .map_err(|error| AppError::Pipeline(format!("Audio signature task failed: {}", error)))?
+            .map_err(AppError::Io)?;
             let cache_key = format!(
-                "{}|{}|{}|{}|{}",
-                song, br, sample_rate, lp, mode_tag
+                "audio-cache-v2|{}|{}|{}|{}|{}|{}",
+                song, source_signature, br, sample_rate, lp, mode_tag
             );
             let file_hash = fs::hash_path128(cache_key.as_bytes());
             let cache_path = cache_dir.join(format!("master_audio_{:032x}.m4a", file_hash));
@@ -264,12 +272,12 @@ pub async fn build_master_audio_pool(
                 let run_result =
                     ffmpeg::run(&app_clone, &args, None, cancel_control.clone(), None).await;
                 if run_result.is_err() {
-                    let _ = fs::safe_delete_sync(&tmp_path);
+                    cleanup_temp_file_sync(&tmp_path);
                 }
                 run_result?;
 
-                if let Err(e) = std::fs::rename(&tmp_path, &cache_path) {
-                    let _ = fs::safe_delete_sync(&tmp_path);
+                if let Err(e) = fs::atomic_replace(&tmp_path, &cache_path) {
+                    cleanup_temp_file_sync(&tmp_path);
                     return Err(AppError::Io(e));
                 }
             }
@@ -348,6 +356,16 @@ pub async fn build_master_audio_pool(
     Ok(Arc::new(pool))
 }
 
+fn cleanup_temp_file_sync(path: &Path) {
+    if let Err(error) = fs::safe_delete_sync(path) {
+        crate::utils::logger::log_line(&format!(
+            "Temporary file cleanup failed for '{}': {}",
+            path.display(),
+            error
+        ));
+    }
+}
+
 /// Deduplicate a slice of file paths preserving first-seen order.
 fn dedupe_paths(paths: &[String]) -> Vec<String> {
     let mut seen: HashSet<&str> = HashSet::with_capacity(paths.len());
@@ -388,14 +406,16 @@ fn can_skip_reencode(info: &AudioInfo, target_sr: u32, target_br_s: &str) -> boo
     if info.channels != 2 {
         return false;
     }
-    if let (Some(source_br), Some(target_kbps)) =
-        (info.bit_rate, parse_bitrate_to_kbps(target_br_s))
-    {
-        if source_br > target_kbps.saturating_mul(1000) {
-            return false;
-        }
-    }
-    true
+    let Some(source_br) = info.bit_rate else {
+        // Unknown bitrate cannot prove that stream-copy satisfies the target
+        // profile. Prefer a deterministic re-encode over silently violating
+        // the requested bitrate.
+        return false;
+    };
+    let Some(target_kbps) = parse_bitrate_to_kbps(target_br_s) else {
+        return false;
+    };
+    source_br <= target_kbps.saturating_mul(1000)
 }
 
 /// Get the cached loudnorm measurement for `input`, or run pass 1 and
@@ -409,24 +429,29 @@ async fn get_or_compute_loudnorm_measurement(
     target: &str,
     cancel: Option<&Arc<crate::RenderControl>>,
 ) -> Result<LoudnormMeasurement, AppError> {
-    let meta = std::fs::metadata(input).ok();
-    let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
-    let mtime = meta
-        .and_then(|m| m.modified().ok())
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let key = format!("{}|{}|{}", input.to_string_lossy(), size, mtime);
+    // Include the target filter parameters as well as a content-aware source
+    // signature. A changed loudnorm target must not reuse a measurement made
+    // for a previous target, and a same-size/same-mtime source replacement
+    // must invalidate the measurement too.
+    let signature_path = input.to_path_buf();
+    let source_signature = tokio::task::spawn_blocking(move || fs::file_signature(&signature_path))
+        .await
+        .map_err(|error| AppError::Pipeline(format!("Loudnorm signature task failed: {}", error)))?
+        .map_err(AppError::Io)?;
+    let key = format!(
+        "loudnorm-cache-v2|{}|{}|{}",
+        input.to_string_lossy(),
+        source_signature,
+        target
+    );
     let hash = fs::hash_path128(key.as_bytes());
     let meas_path = cache_dir.join(format!("loudnorm_p1_{:032x}.json", hash));
     let meas_tmp = cache_dir.join(format!("loudnorm_p1_{:032x}.json.tmp", hash));
 
-    match std::fs::read_to_string(&meas_path) {
-        Ok(text) => match serde_json::from_str::<LoudnormMeasurement>(&text) {
-            Ok(m) => return Ok(m),
-            Err(_) => {} // fall through: corrupt cache, recompute
-        },
-        Err(_) => {} // fall through: missing cache, recompute
+    if let Ok(text) = std::fs::read_to_string(&meas_path)
+        && let Ok(m) = serde_json::from_str::<LoudnormMeasurement>(&text)
+    {
+        return Ok(m);
     }
 
     let m = ffmpeg::run_loudnorm_pass1(app, input, target, cancel.cloned()).await?;
@@ -438,11 +463,11 @@ async fn get_or_compute_loudnorm_measurement(
         ))
     })?;
     if let Err(e) = std::fs::write(&meas_tmp, json.as_bytes()) {
-        let _ = fs::safe_delete_sync(&meas_tmp);
+        cleanup_temp_file_sync(&meas_tmp);
         return Err(AppError::Io(e));
     }
-    if let Err(e) = std::fs::rename(&meas_tmp, &meas_path) {
-        let _ = fs::safe_delete_sync(&meas_tmp);
+    if let Err(e) = fs::atomic_replace(&meas_tmp, &meas_path) {
+        cleanup_temp_file_sync(&meas_tmp);
         return Err(AppError::Io(e));
     }
 
@@ -546,9 +571,9 @@ mod tests {
     }
 
     #[test]
-    fn test_can_skip_reencode_unknown_bps_passes() {
+    fn test_can_skip_reencode_unknown_bps_rejected() {
         let i = info("aac", 44100, 2, None);
-        assert!(can_skip_reencode(&i, 44100, "192k"));
+        assert!(!can_skip_reencode(&i, 44100, "192k"));
     }
 
     #[test]

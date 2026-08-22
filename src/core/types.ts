@@ -47,6 +47,13 @@ export type MediaSource =
   | { type: 'folder'; path: string }
   | { type: 'files'; paths: string[] };
 
+export interface HardwareInfo {
+  cpuModel: string;
+  gpuModel: string;
+  totalRamGB: number;
+  av1Supported: boolean;
+}
+
 export interface JobProgress {
   index: number;
   state: 'pending' | 'processing' | 'done' | 'error';
@@ -54,7 +61,13 @@ export interface JobProgress {
   currentStep: string;
   name: string;
   outputPath: string;
-  thumbnailPath?: string;
+  thumbnailPath: string | null;
+}
+
+export interface PipelineStats {
+  speed: number;
+  bitrateKbps: number;
+  fps: number;
 }
 
 export interface PipelineProgress {
@@ -81,7 +94,4 @@ export type PipelineEvent =
   | { type: 'Cancelled'; data: string }
   | { type: 'Paused'; data?: undefined }
   | { type: 'FatalError'; data: string }
-  | {
-      type: 'Stats';
-      data: { speed: number; bitrateKbps: number; fps: number };
-    };
+  | { type: 'Stats'; data: PipelineStats };

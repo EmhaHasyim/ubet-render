@@ -85,3 +85,66 @@ pub struct RenderStats {
     pub bitrate_kbps: f64,
     pub fps: f64,
 }
+
+#[cfg(test)]
+mod contract_tests {
+    use super::{JobProgress, JobState, PipelineEvent};
+
+    #[test]
+    fn pipeline_events_match_golden_wire_contract() {
+        let events = vec![
+            PipelineEvent::Progress {
+                total: 2,
+                completed: 1,
+                jobs: vec![
+                    JobProgress {
+                        index: 0,
+                        state: JobState::Done,
+                        progress_percent: 100,
+                        current_step: "Done".into(),
+                        name: "clip.mp4".into(),
+                        output_path: "out/clip.mp4".into(),
+                        thumbnail_path: Some("thumb.jpg".into()),
+                    },
+                    JobProgress {
+                        index: 1,
+                        state: JobState::Processing,
+                        progress_percent: 42,
+                        current_step: "Encoding".into(),
+                        name: "clip-2.mp4".into(),
+                        output_path: "out/clip-2.mp4".into(),
+                        thumbnail_path: None,
+                    },
+                ],
+            },
+            PipelineEvent::Log {
+                level: "info".into(),
+                message: "Building master audio pool...".into(),
+            },
+            PipelineEvent::Done {
+                completed: 2,
+                total: 2,
+                failed: 0,
+            },
+            PipelineEvent::Cancelled("Render cancelled by user".into()),
+            PipelineEvent::Paused,
+            PipelineEvent::FatalError("No audio files selected or found".into()),
+            PipelineEvent::Stats {
+                speed: 1.25,
+                bitrate_kbps: 4123.4,
+                fps: 29.97,
+            },
+        ];
+
+        let actual: Vec<serde_json::Value> = events
+            .iter()
+            .map(|event| serde_json::to_value(event).expect("pipeline event must serialize"))
+            .collect();
+        let expected: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+            "../../../src/contracts/pipeline-events.golden.json"
+        ))
+        .expect("golden pipeline event fixture must be valid JSON");
+
+        assert_eq!(actual, expected);
+    }
+}

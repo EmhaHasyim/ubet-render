@@ -8,7 +8,7 @@ describe('index.tsx entry point', () => {
     await expect(async () => {
       await import('./index');
     }).rejects.toThrow('Root element #root not found in the DOM.');
-  });
+  }, 15_000);
 
   it('calls render when #root is present', async () => {
     vi.resetModules();

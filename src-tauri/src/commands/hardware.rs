@@ -3,6 +3,7 @@ use std::process::Command;
 use std::sync::OnceLock;
 use sysinfo::System;
 use tauri_plugin_shell::ShellExt;
+use tauri_plugin_shell::process::{Command as ShellCommand, CommandEvent};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -37,11 +38,7 @@ pub async fn detect_hardware(app: tauri::AppHandle) -> HardwareInfo {
         (cpu_name, ram_gb, gpu_name)
     })
     .await
-    .unwrap_or_else(|_| (
-        "Unknown".to_string(),
-        0,
-        "Unknown".to_string(),
-    ));
+    .unwrap_or_else(|_| ("Unknown".to_string(), 0, "Unknown".to_string()));
 
     let av1_supported = check_av1_support(&app).await;
 
@@ -75,11 +72,10 @@ fn get_gpu_name() -> String {
         wmic_cmd.args(["path", "win32_VideoController", "get", "name"]);
         wmic_cmd.creation_flags(CREATE_NO_WINDOW);
         if let Ok(output) = wmic_cmd.output() {
-            let names: Vec<String> =
-                parse_gpu_names(&String::from_utf8_lossy(&output.stdout))
-                    .into_iter()
-                    .filter(|name| !name.eq_ignore_ascii_case("name"))
-                    .collect();
+            let names: Vec<String> = parse_gpu_names(&String::from_utf8_lossy(&output.stdout))
+                .into_iter()
+                .filter(|name| !name.eq_ignore_ascii_case("name"))
+                .collect();
             if !names.is_empty() {
                 return names.join(", ");
             }
@@ -181,6 +177,37 @@ async fn check_av1_support(app: &tauri::AppHandle) -> bool {
     supported
 }
 
+async fn run_probe(
+    command: ShellCommand,
+    timeout: std::time::Duration,
+) -> Option<(Option<i32>, Vec<u8>)> {
+    let (mut rx, child) = command.spawn().ok()?;
+    let mut child = Some(child);
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut stdout = Vec::new();
+
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep_until(deadline) => {
+                let _ = child.take().map(|process| process.kill());
+                return None;
+            }
+            event = rx.recv() => match event {
+                Some(CommandEvent::Stdout(bytes)) => stdout.extend(bytes),
+                Some(CommandEvent::Terminated(status)) => {
+                    return Some((status.code, stdout));
+                }
+                Some(CommandEvent::Error(_)) => {}
+                Some(_) => {}
+                None => {
+                    let _ = child.take().map(|process| process.kill());
+                    return None;
+                }
+            }
+        }
+    }
+}
+
 /// Run one ffmpeg hardware-encode probe. Returns `true` when the encoder
 /// produced a frame successfully within `probe_timeout`.
 async fn probe_hw_encoder(
@@ -192,18 +219,23 @@ async fn probe_hw_encoder(
         return false;
     };
     let sidecar_command = sidecar_command.args([
-        "-v", "error",
-        "-f", "lavfi",
-        "-i", "color=c=black:s=256x256",
-        "-vframes", "1",
-        "-c:v", encoder,
-        "-f", "null",
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=black:s=256x256",
+        "-vframes",
+        "1",
+        "-c:v",
+        encoder,
+        "-f",
+        "null",
         "-",
     ]);
-    matches!(
-        tokio::time::timeout(probe_timeout, sidecar_command.output()).await,
-        Ok(Ok(output)) if output.status.success()
-    )
+    run_probe(sidecar_command, probe_timeout)
+        .await
+        .is_some_and(|(code, _)| code == Some(0))
 }
 
 /// Cheap fallback: check whether the bundled ffmpeg lists `libsvtav1`
@@ -216,11 +248,9 @@ async fn scan_encoders_for_svt_av1(
         return false;
     };
     let sidecar_command = sidecar_command.args(["-hide_banner", "-encoders"]);
-    match tokio::time::timeout(probe_timeout, sidecar_command.output()).await {
-        Ok(Ok(out)) => {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            stdout.contains("libsvtav1")
-        }
-        _ => false,
-    }
+    run_probe(sidecar_command, probe_timeout)
+        .await
+        .is_some_and(|(code, stdout)| {
+            code == Some(0) && String::from_utf8_lossy(&stdout).contains("libsvtav1")
+        })
 }

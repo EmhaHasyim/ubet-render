@@ -41,6 +41,7 @@ describe('usePersistedConfig', () => {
     expect(c.loopCount()).toBe(1);
     expect(c.usePingpong()).toBe(true);
     expect(c.embedChapters()).toBe(true);
+    expect(c.skipIntermediateOnCodecMatch()).toBe(false);
     expect(c.videoSource()).toBeNull();
     expect(c.audioSource()).toBeNull();
   });

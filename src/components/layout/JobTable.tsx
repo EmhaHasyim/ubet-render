@@ -80,7 +80,8 @@ export function JobTable(props: {
               {(job) => {
                 const thumbPath = job().thumbnailPath;
                 const thumbFailed = () =>
-                  thumbPath !== undefined && failedThumbs().has(thumbPath);
+                  thumbPath !== null && failedThumbs().has(thumbPath);
+
                 return (
                   <tr class="border-b border-base-300/70 hover:bg-base-content/5 transition-colors">
                     <td class="min-w-64">

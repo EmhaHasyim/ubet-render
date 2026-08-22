@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { rememberFocus } from './focus';
 
+const noop = () => {};
+
 beforeEach(() => {
   document.body.innerHTML = '';
 });
@@ -59,7 +61,7 @@ describe('rememberFocus', () => {
       get: () => btn,
     });
 
-    let restore: () => void = () => {};
+    let restore: () => void = noop;
     try {
       restore = rememberFocus();
     } finally {

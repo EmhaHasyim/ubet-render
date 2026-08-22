@@ -321,7 +321,37 @@ describe('usePipeline — integration (end-to-end render lifecycle)', () => {
     expect(p.overallEta()).toBe('Render cancelled');
   });
 
-  it('restarts from saved state when resume is acked but no pipeline activity arrives (pause→quick-resume race)', async () => {
+  it('finishes local cancellation after backend completion acknowledgement', async () => {
+    mockInvokeImpl = async (cmd: string) => {
+      if (cmd === 'detect_hardware') {
+        return {
+          cpuName: 'CPU',
+          gpuName: 'GPU',
+          ramGb: 16,
+          av1Supported: true,
+        };
+      }
+      if (cmd === 'cancel_render') return true;
+      return undefined;
+    };
+
+    const p = mountPipeline();
+    await vi.waitFor(() => {
+      expect(p.hardwareInfo()).not.toBeNull();
+    });
+    p.setVideoSource({ type: 'files', paths: ['/v/vid.mp4'] });
+    p.setAudioSource({ type: 'files', paths: ['/a/aud.mp3'] });
+    p.setOutputPath('/out');
+    await p.startRender();
+
+    await p.cancelRender();
+    expect(p.running()).toBe(false);
+    expect(p.paused()).toBe(false);
+    expect(p.overallEta()).toBe('Render cancelled');
+    expect(listenHandlers.has('pipeline-event')).toBe(false);
+  });
+
+  it('does not restart a live resumed pipeline merely because activity is delayed', async () => {
     vi.useFakeTimers();
     try {
       mockInvokeImpl = async (cmd: string) => {
@@ -358,8 +388,9 @@ describe('usePipeline — integration (end-to-end render lifecycle)', () => {
       expect(p.running()).toBe(true);
       expect(p.paused()).toBe(false);
 
-      // No Progress/Stats ever arrives → the watchdog must fire and restart
-      // from the saved state file.
+      // No Progress/Stats arrives yet. The backend lifecycle acknowledgement
+      // is authoritative; a fixed frontend timer must not create a duplicate
+      // pipeline while the original task is still alive.
       await vi.advanceTimersByTimeAsync(6000);
 
       const { invoke } = await import('@tauri-apps/api/core');
@@ -367,10 +398,8 @@ describe('usePipeline — integration (end-to-end render lifecycle)', () => {
       const startCalls = invokeMock.mock.calls.filter(
         (c: unknown[]) => c[0] === 'start_render',
       );
-      // Initial start + watchdog restart.
-      expect(startCalls.length).toBe(2);
-      const [, params] = startCalls[1] as [string, unknown];
-      expect((params as { resume?: boolean }).resume).toBe(true);
+      // Only the initial start — no speculative duplicate is allowed.
+      expect(startCalls.length).toBe(1);
     } finally {
       vi.useRealTimers();
     }

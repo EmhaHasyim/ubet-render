@@ -15,6 +15,7 @@
  */
 import { DEFAULT_CONFIG } from './config';
 import type { MediaSource } from './types';
+import { safeSetStorageItem } from './storage';
 
 export const STORAGE_KEY = 'ubetrender-paths';
 export const STORAGE_VERSION = 2;
@@ -35,9 +36,10 @@ export interface PersistedConfig {
   audioMode: 'original' | 'normalize';
   embedChapters: boolean;
   outputFormat: 'mp4' | 'mkv';
-  /// When true (default), a codec-matched source is concatenated via the
-  /// concat demuxer with `-c copy` and the intermediate re-encode step is
-  /// bypassed. Honors the README's "Zero-Reencode Muxing" promise.
+  /// When true, a codec-matched source is concatenated via the concat demuxer
+  /// with `-c copy`; mismatched codecs still use the normal encode path.
+  /** Stream-copy only when the source codec matches; disabled by default so
+   * ping-pong and codec conversion remain predictable on first use. */
   skipIntermediateOnCodecMatch: boolean;
 }
 
@@ -59,11 +61,12 @@ export const MIGRATIONS = new Map<
   (prev: Record<string, unknown>) => Record<string, unknown>
 >();
 
-// v1 → v2: introduce `skipIntermediateOnCodecMatch` so that codec-matched
-// sources (e.g. AV1→AV1) bypass the pre-encode step and are muxed with
-// `-c copy`. Honors the README's "Zero-Reencode Muxing" promise.
+// v1 → v2: introduce `skipIntermediateOnCodecMatch` as an explicit opt-in
+// for codec-matched stream-copy; mismatched codecs keep the normal encode path.
 MIGRATIONS.set(1, (_prev) => ({
-  skipIntermediateOnCodecMatch: true,
+  // Preserve the previous default behavior: apply the configured video
+  // processing pipeline unless the user explicitly opts into stream-copy.
+  skipIntermediateOnCodecMatch: false,
 }));
 
 export function isMediaSource(value: unknown): value is MediaSource {
@@ -116,7 +119,7 @@ export function getDefaultInitial(): PersistedConfig {
     audioMode: 'original',
     embedChapters: true,
     outputFormat: 'mp4',
-    skipIntermediateOnCodecMatch: true,
+    skipIntermediateOnCodecMatch: false,
   };
 }
 
@@ -163,11 +166,11 @@ function coerceConfig(raw: Record<string, unknown>): PersistedConfig {
     codec: ['h264', 'h265', 'av1'].includes(String(raw.codec))
       ? String(raw.codec)
       : 'av1',
-    // Default ON so we honor the README's "Zero-Reencode" promise when the
+    // Default OFF so codec conversion and ping-pong remain safe when the
     // stored config omits the field (e.g. corrupted or pre-migration).
     skipIntermediateOnCodecMatch: booleanOr(
       raw.skipIntermediateOnCodecMatch,
-      true,
+      false,
     ),
   };
 }
@@ -210,7 +213,7 @@ export function loadPersistedConfig(): PersistedConfig {
         const migrateFn = MIGRATIONS.get(v);
         if (migrateFn) {
           const patch = migrateFn(migrated);
-          migrated = { ...migrated, ...patch };
+          Object.assign(migrated, patch);
         }
         migrated.version = v + 1;
       }
@@ -219,11 +222,7 @@ export function loadPersistedConfig(): PersistedConfig {
       const merged = { ...getDefaultInitial(), ...migrated };
 
       // Persist the migrated config back so next load is faster
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
-      } catch {
-        /* quota exceeded — ignore */
-      }
+      safeSetStorageItem(STORAGE_KEY, JSON.stringify(merged));
 
       return coerceConfig(merged);
     }
