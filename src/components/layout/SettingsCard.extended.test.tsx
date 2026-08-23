@@ -104,11 +104,13 @@ describe('SettingsCard — extended coverage', () => {
   it('renders the new "Skip re-encode" toggle with explanatory description', () => {
     renderCard();
     expect(
-      screen.getByText(/Skip re-encode \(zero-reencode \/ stream copy\)/i),
+      screen.getByText(/Skip re-encode \(direct stream copy\)/i),
     ).toBeTruthy();
     expect(screen.getByTestId('zero-reencode-toggle')).toBeTruthy();
     expect(
-      screen.getByText(/Bypass the intermediate re-encode completely/i),
+      screen.getByText(
+        /Bypass the intermediate re-encode and use the source video as-is/i,
+      ),
     ).toBeTruthy();
   });
 

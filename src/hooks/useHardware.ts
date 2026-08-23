@@ -1,6 +1,7 @@
 import { createSignal, onMount } from 'solid-js';
 import { invoke } from '@tauri-apps/api/core';
 import type { HardwareInfo } from '../core/types';
+import { CODECS } from '../core/config';
 
 export type { HardwareInfo } from '../core/types';
 
@@ -31,13 +32,13 @@ export function useHardware(
           av1Supported: info.av1Supported,
         });
 
-        if (!info.av1Supported && currentCodec() === 'av1') {
-          setCodec('h265');
+        if (!info.av1Supported && currentCodec() === CODECS.av1) {
+          setCodec(CODECS.h265);
         }
       })
       .catch(() => {
-        if (currentCodec() === 'av1') {
-          setCodec('h265');
+        if (currentCodec() === CODECS.av1) {
+          setCodec(CODECS.h265);
         }
         setHardwareInfo({
           cpuModel: 'Unknown',
@@ -51,18 +52,18 @@ export function useHardware(
   const resolveEncoder = (codec: string): string => {
     const gpu = hardwareInfo()?.gpuModel.toLowerCase() || '';
     switch (codec) {
-      case 'h264':
+      case CODECS.h264:
         if (gpu.includes('nvidia')) return 'h264_nvenc';
         if (gpu.includes('amd') || gpu.includes('radeon')) return 'h264_amf';
         if (gpu.includes('intel') || gpu.includes('arc')) return 'h264_qsv';
         return 'libx264';
-      case 'h265':
+      case CODECS.h265:
         if (gpu.includes('nvidia')) return 'hevc_nvenc';
         if (gpu.includes('amd') || gpu.includes('radeon')) return 'hevc_amf';
         if (gpu.includes('intel') || gpu.includes('arc')) return 'hevc_qsv';
         return 'libx265';
-      case 'av1':
-        if (!hardwareInfo()?.av1Supported) return resolveEncoder('h265');
+      case CODECS.av1:
+        if (!hardwareInfo()?.av1Supported) return resolveEncoder(CODECS.h265);
         if (gpu.includes('nvidia')) return 'av1_nvenc';
         if (gpu.includes('amd') || gpu.includes('radeon')) return 'av1_amf';
         if (gpu.includes('intel') || gpu.includes('arc')) return 'av1_qsv';

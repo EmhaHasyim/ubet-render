@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { DEFAULT_CONFIG, VIDEO_EXTENSIONS, AUDIO_EXTENSIONS } from './config';
+import {
+  DEFAULT_CONFIG,
+  VIDEO_EXTENSIONS,
+  AUDIO_EXTENSIONS,
+  LOUDNORM_PARAMS,
+  EMPTY_PATHS,
+  getSourcePaths,
+} from './config';
 
 describe('DEFAULT_CONFIG', () => {
   it('has expected directory defaults', () => {
@@ -30,7 +37,7 @@ describe('DEFAULT_CONFIG', () => {
     expect(DEFAULT_CONFIG.audio.concurrentPrep).toBe(5);
     expect(DEFAULT_CONFIG.audio.bitrate).toBe('192k');
     expect(DEFAULT_CONFIG.audio.sampleRate).toBe(44100);
-    expect(DEFAULT_CONFIG.audio.loudnormParams).toBe('I=-14:LRA=11:TP=-1');
+    expect(DEFAULT_CONFIG.audio.loudnormParams).toBe(LOUDNORM_PARAMS);
     expect(DEFAULT_CONFIG.audio.audioMode).toBe('original');
   });
 
@@ -111,5 +118,45 @@ describe('drift detection: extensions match docs/MEDIA_EXTENSIONS.md', () => {
 
   it('AUDIO_EXTENSIONS equals the canonical list', () => {
     expect(AUDIO_EXTENSIONS).toEqual(EXPECTED_AUDIO_EXTENSIONS);
+  });
+});
+
+describe('LOUDNORM_PARAMS', () => {
+  it('matches the YouTube Music EBU R128 spec', () => {
+    expect(LOUDNORM_PARAMS).toBe('I=-14:LRA=11:TP=-1');
+  });
+});
+
+describe('EMPTY_PATHS', () => {
+  it('is a frozen empty array', () => {
+    expect(EMPTY_PATHS).toEqual([]);
+    expect(EMPTY_PATHS.length).toBe(0);
+    expect(Object.isFrozen(EMPTY_PATHS)).toBe(true);
+  });
+});
+
+describe('getSourcePaths', () => {
+  it('returns paths from files type source', () => {
+    expect(
+      getSourcePaths({ type: 'files', paths: ['a.mp4', 'b.mkv'] }),
+    ).toEqual(['a.mp4', 'b.mkv']);
+  });
+
+  it('returns path wrapped in array from folder type source', () => {
+    expect(getSourcePaths({ type: 'folder', path: '/videos' })).toEqual([
+      '/videos',
+    ]);
+  });
+
+  it('returns EMPTY_PATHS for null source', () => {
+    expect(getSourcePaths(null)).toBe(EMPTY_PATHS);
+  });
+
+  it('returns EMPTY_PATHS for empty files paths', () => {
+    expect(getSourcePaths({ type: 'files', paths: [] })).toBe(EMPTY_PATHS);
+  });
+
+  it('returns EMPTY_PATHS for folder with empty path', () => {
+    expect(getSourcePaths({ type: 'folder', path: '' })).toBe(EMPTY_PATHS);
   });
 });

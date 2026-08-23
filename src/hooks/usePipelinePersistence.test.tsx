@@ -39,12 +39,10 @@ describe('usePipelinePersistence', () => {
     vi.mocked(invoke).mockResolvedValue(undefined);
   });
 
-  it('flushes the latest backend snapshot and clears dirty state', async () => {
+  it('flushes the latest backend snapshot successfully', async () => {
     const { persistence, dispose } = mountPersistence();
 
-    expect(persistence.dirty()).toBe(true);
     await expect(persistence.flush()).resolves.toBe(true);
-    expect(persistence.dirty()).toBe(false);
     expect(invoke).toHaveBeenCalledWith(
       'save_config',
       expect.objectContaining({ config: expect.any(Object) }),
@@ -65,7 +63,6 @@ describe('usePipelinePersistence', () => {
     await expect(flushPromise).resolves.toBe(true);
 
     expect(invoke).toHaveBeenCalledTimes(2);
-    expect(persistence.dirty()).toBe(false);
     dispose();
     vi.useRealTimers();
   });
@@ -81,7 +78,7 @@ describe('usePipelinePersistence', () => {
       .mockReturnValueOnce(firstSave)
       .mockResolvedValue(undefined);
 
-    const { persistence, dispose } = mountPersistence(makeConfig(codec));
+    const { dispose } = mountPersistence(makeConfig(codec));
 
     // Start the initial save and keep its IPC request pending.
     await vi.advanceTimersByTimeAsync(500);
@@ -100,7 +97,6 @@ describe('usePipelinePersistence', () => {
     await Promise.resolve();
 
     expect(invoke).toHaveBeenCalledTimes(2);
-    expect(persistence.dirty()).toBe(false);
     dispose();
     vi.useRealTimers();
   });

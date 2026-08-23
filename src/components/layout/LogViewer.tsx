@@ -72,7 +72,7 @@ interface LevelChipMeta {
   icon: string;
 }
 
-const LEVEL_CHIPS: LevelChipMeta[] = [
+const LEVEL_CHIPS = [
   {
     level: 'INFO',
     label: 'Info',
@@ -94,7 +94,7 @@ const LEVEL_CHIPS: LevelChipMeta[] = [
     inactiveClass: 'badge-outline text-base-content/60',
     icon: 'lucide:octagon-x',
   },
-];
+] as const satisfies readonly LevelChipMeta[];
 
 export function LogViewer(props: { logs: string[] }) {
   let containerRef!: HTMLDivElement;

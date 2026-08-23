@@ -25,6 +25,7 @@ export interface PipelineApi {
   liveStats: Accessor<PipelineStats | null>;
   hardwareInfo: Accessor<HardwareInfo | null>;
   av1Supported: Accessor<boolean>;
+  hasFailed: Accessor<boolean>;
   canStart: Accessor<boolean>;
   maxrateValid: Accessor<boolean>;
   disabledReason: Accessor<string>;

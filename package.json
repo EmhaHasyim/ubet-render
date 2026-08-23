@@ -1,6 +1,6 @@
 {
   "name": "ubet-render",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "",
   "license": "MIT",
   "type": "module",
@@ -11,6 +11,7 @@
     "serve": "vite preview",
     "tauri": "tauri",
     "test": "vitest run",
+    "typecheck": "tsc --noEmit",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "format": "oxfmt",

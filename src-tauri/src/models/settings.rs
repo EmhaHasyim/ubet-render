@@ -20,9 +20,9 @@ pub struct OverrideConfig {
     pub audio_mode: Option<String>,
     pub embed_chapters: Option<bool>,
     pub output_format: Option<String>,
-    /// When true and the source codec matches, the intermediate encode is
-    /// bypassed. Mismatched codecs always use the normal encode path. This is
-    /// an explicit opt-in and false preserves visual filters such as ping-pong.
+    /// When true the intermediate re-encode step is bypassed entirely —
+    /// the source video is stream-copied directly into the final output
+    /// regardless of codec. An explicit opt-in; false preserves ping-pong.
     pub skip_intermediate_on_codec_match: Option<bool>,
 }
 

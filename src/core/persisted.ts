@@ -13,7 +13,7 @@
  *
  * This allows users to upgrade the app without losing their saved settings.
  */
-import { DEFAULT_CONFIG } from './config';
+import { DEFAULT_CONFIG, CODECS, ALL_CODECS } from './config';
 import type { MediaSource } from './types';
 import { safeSetStorageItem } from './storage';
 
@@ -36,10 +36,9 @@ export interface PersistedConfig {
   audioMode: 'original' | 'normalize';
   embedChapters: boolean;
   outputFormat: 'mp4' | 'mkv';
-  /// When true, a codec-matched source is concatenated via the concat demuxer
-  /// with `-c copy`; mismatched codecs still use the normal encode path.
-  /** Stream-copy only when the source codec matches; disabled by default so
-   * ping-pong and codec conversion remain predictable on first use. */
+  /// When true, the intermediate re-encode step is bypassed entirely —
+  /// the source video is fed directly to the concat demuxer via stream-copy,
+  /// regardless of codec. Disabled by default.
   skipIntermediateOnCodecMatch: boolean;
 }
 
@@ -62,7 +61,8 @@ export const MIGRATIONS = new Map<
 >();
 
 // v1 → v2: introduce `skipIntermediateOnCodecMatch` as an explicit opt-in
-// for codec-matched stream-copy; mismatched codecs keep the normal encode path.
+// for stream-copy without intermediate re-encode. Disabled by default (v0.2.7+
+// makes this unconditional when ON, bypassing codec matching entirely).
 MIGRATIONS.set(1, (_prev) => ({
   // Preserve the previous default behavior: apply the configured video
   // processing pipeline unless the user explicitly opts into stream-copy.
@@ -115,7 +115,7 @@ export function getDefaultInitial(): PersistedConfig {
     minDurationHours: DEFAULT_CONFIG.target.minDurationSec / 3600,
     loopMode: 'duration',
     loopCount: 1,
-    codec: 'av1',
+    codec: CODECS.av1,
     audioMode: 'original',
     embedChapters: true,
     outputFormat: 'mp4',
@@ -163,9 +163,9 @@ function coerceConfig(raw: Record<string, unknown>): PersistedConfig {
       | 'normalize',
     embedChapters: booleanOr(raw.embedChapters, true),
     outputFormat: raw.outputFormat === 'mkv' ? 'mkv' : 'mp4',
-    codec: ['h264', 'h265', 'av1'].includes(String(raw.codec))
+    codec: ALL_CODECS.includes(String(raw.codec))
       ? String(raw.codec)
-      : 'av1',
+      : CODECS.av1,
     // Default OFF so codec conversion and ping-pong remain safe when the
     // stored config omits the field (e.g. corrupted or pre-migration).
     skipIntermediateOnCodecMatch: booleanOr(

@@ -1,7 +1,11 @@
 import { Icon } from '@iconify-icon/solid';
 import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
-import { AUDIO_EXTENSIONS, VIDEO_EXTENSIONS } from '../../core/config';
+import {
+  AUDIO_EXTENSIONS,
+  VIDEO_EXTENSIONS,
+  getSourcePaths,
+} from '../../core/config';
 import { SourceSelector } from '../media/SourceSelector';
 import { TAURI_COMMANDS } from '../../core/constants';
 import { usePipelineContext } from '../../context/pipeline';
@@ -15,19 +19,6 @@ import { FeaturesSection } from './FeaturesSection';
 
 // Replaces 1 ad-hoc console.error call; see `src/core/logger.ts`.
 const log = createLogger('SettingsCard');
-
-// Stable empty array so the binding doesn't allocate a fresh `[]` on every
-// reactive re-evaluation when the source is unset.
-const EMPTY_PATHS: string[] = [];
-
-/** Extract file paths from a MediaSource regardless of variant. */
-function getSourcePaths(
-  source: { type: string; paths?: string[]; path?: string } | null,
-): string[] {
-  if (source?.type === 'files' && source.paths) return source.paths;
-  if (source?.type === 'folder' && source.path) return [source.path];
-  return EMPTY_PATHS;
-}
 
 export function SettingsCard() {
   const pipeline = usePipelineContext();

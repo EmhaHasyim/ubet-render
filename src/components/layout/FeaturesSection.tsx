@@ -46,16 +46,16 @@ export function FeaturesSection(props: {
       <label
         class="flex min-h-20 items-center justify-between gap-4 rounded-lg border-2 border-primary/30 bg-primary/5 px-4 py-3"
         data-testid="zero-reencode-toggle"
-        title="When ON and the source codec matches the target, the intermediate encode is skipped and the source is muxed via -c copy. A codec mismatch safely uses the normal encode path."
+        title="When ON, the intermediate re-encode step is bypassed entirely and the source video is stream-copied directly. The output codec is determined by the source file — no codec matching check is performed. Disables ping-pong processing."
       >
         <span>
           <span class="block text-sm font-semibold text-primary">
-            Skip re-encode (zero-reencode / stream copy)
+            Skip re-encode (direct stream copy)
           </span>
           <span class="block text-xs text-base-content/70">
-            Bypass the intermediate re-encode completely. Use only when the
-            source codec already matches the target; this also disables
-            ping-pong processing.
+            Bypass the intermediate re-encode and use the source video as-is.
+            The output codec will follow the source file; ping-pong is
+            unavailable in this mode.
           </span>
         </span>
         <input
@@ -63,7 +63,7 @@ export function FeaturesSection(props: {
           class="toggle toggle-primary"
           checked={props.skipIntermediateOnCodecMatch()}
           onChange={(e) => props.onSkipReencodeChange(e.currentTarget.checked)}
-          aria-label="Skip re-encode (zero-reencode / stream copy)"
+          aria-label="Skip re-encode (direct stream copy)"
         />
       </label>
     </CollapsibleSection>

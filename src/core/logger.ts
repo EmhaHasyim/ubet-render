@@ -101,14 +101,17 @@ const pad2 = (n: number): string => String(n).padStart(2, '0');
 const pad3 = (n: number): string => String(n).padStart(3, '0');
 
 function formatTimestamp(): string {
-  // Local time, fixed-width precision so a `tail -f` of both frontend
+  // UTC, fixed-width precision so a `tail -f` of both frontend
   // console lines and the backend render log lines up by clock.
   // Mirrors `chrono::Utc::now().format("%H:%M:%S%.3f")` in
   // `src-tauri/src/utils/logger.rs::log_line`.
+  //
+  // NOTE: uses getUTC* so timestamps are timezone-agnostic and
+  // always match the Rust backend (which also logs in UTC).
   const d = new Date();
   return (
-    `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ` +
-    `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}.${pad3(d.getMilliseconds())}`
+    `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} ` +
+    `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())}.${pad3(d.getUTCMilliseconds())}`
   );
 }
 

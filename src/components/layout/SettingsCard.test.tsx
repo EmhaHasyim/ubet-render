@@ -146,10 +146,10 @@ describe('SettingsCard', () => {
     expect(screen.getByText('Embed chapters')).toBeTruthy();
   });
 
-  it('renders the "Skip re-encode (zero-reencode / stream copy)" toggle', () => {
+  it('renders the "Skip re-encode (direct stream copy)" toggle', () => {
     renderCard();
     expect(
-      screen.getByText(/Skip re-encode \(zero-reencode \/ stream copy\)/i),
+      screen.getByText(/Skip re-encode \(direct stream copy\)/i),
     ).toBeTruthy();
     expect(screen.getByTestId('zero-reencode-toggle')).toBeTruthy();
   });

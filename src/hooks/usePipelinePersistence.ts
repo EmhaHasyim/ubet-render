@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, type Accessor } from 'solid-js';
+import { createEffect, onCleanup } from 'solid-js';
 import { invoke } from '@tauri-apps/api/core';
 import {
   buildAppConfig,
@@ -15,8 +15,6 @@ const RETRY_COUNT = 3;
 const RETRY_BASE_DELAY_MS = 250;
 
 export interface PipelinePersistence {
-  /** True while the latest frontend settings are not confirmed on disk. */
-  dirty: Accessor<boolean>;
   /** Flushes the latest snapshot and resolves false when all attempts fail. */
   flush: () => Promise<boolean>;
 }
@@ -37,7 +35,6 @@ export function usePipelinePersistence(
   config: BackendConfigSnapshot,
   resolveEncoder: (codec: string) => string,
 ): PipelinePersistence {
-  const [dirty, setDirty] = createSignal(false);
   let persistTimer: ReturnType<typeof setTimeout> | null = null;
   let latestConfig: AppConfig | null = null;
   let saveInFlight: Promise<boolean> | null = null;
@@ -57,8 +54,7 @@ export function usePipelinePersistence(
     try {
       await invoke(TAURI_COMMANDS.saveConfig, { config: snapshot });
       // A newer edit may have arrived while this request was in flight.
-      // Keep dirty=true in that case so the newer snapshot is not lost.
-      if (latestConfig === snapshot) setDirty(false);
+      // Keep tracking for the next save attempt.
       return true;
     } catch (err) {
       log.error(
@@ -71,7 +67,6 @@ export function usePipelinePersistence(
       }
     }
 
-    setDirty(true);
     showToast('Settings could not be saved to disk', {
       variant: 'warning',
       ttl: 5000,
@@ -112,7 +107,6 @@ export function usePipelinePersistence(
     ];
 
     latestConfig = buildAppConfig(config, resolveEncoder);
-    setDirty(true);
     schedulePersist();
   });
 
@@ -141,5 +135,5 @@ export function usePipelinePersistence(
     void saveWithRetry();
   });
 
-  return { dirty, flush };
+  return { flush };
 }

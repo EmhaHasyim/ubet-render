@@ -108,7 +108,7 @@ export function createPipelineEventHandler(
   };
 
   const handleFatalError = (message: string) => {
-    runtime.appendLog(`FATAL: ${message}`);
+    runtime.appendLog(`[FATAL] ${message}`);
     runtime.setRunning(false);
     runtime.setPaused(false);
     runtime.setOverallEta('Failed');

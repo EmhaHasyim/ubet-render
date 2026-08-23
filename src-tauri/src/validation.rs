@@ -48,6 +48,10 @@ pub(crate) const VALID_ENCODERS: &[&str] = &[
 ];
 const MAX_PREFIX_LEN: usize = 100;
 const MAX_PATH_LEN: usize = 4096;
+/// Maximum parent-directory walk depth for [`canonicalize_lenient`].
+/// A depth above this value is treated as a malformed or adversarial path
+/// and causes the function to return `None` rather than loop indefinitely.
+const MAX_CANONICALIZE_DEPTH: usize = 256;
 
 const WINDOWS_RESERVED: &[&str] = &[
     "CON", "NUL", "PRN", "AUX", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
@@ -644,8 +648,14 @@ pub(crate) fn is_system_protected_path(path: &Path) -> bool {
 fn canonicalize_lenient(path: &Path) -> Option<PathBuf> {
     let mut current = path.to_path_buf();
     let mut unresolved = Vec::new();
+    let mut depth: usize = 0;
 
     loop {
+        depth += 1;
+        if depth > MAX_CANONICALIZE_DEPTH {
+            return None;
+        }
+
         if let Ok(canonical_base) = current.canonicalize() {
             let mut result = canonical_base;
             for component in unresolved.iter().rev() {

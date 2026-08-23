@@ -2,8 +2,6 @@ import { createSignal, type Accessor, type Setter } from 'solid-js';
 import type { PipelineStats } from '../core/types';
 import { EtaCalculator } from '../core/eta';
 
-const MAX_ETA_SAMPLES = 10;
-
 /**
  * Self-contained progress and ETA tracking for the render pipeline.
  *
@@ -19,29 +17,20 @@ export interface ProgressTracker {
   liveStats: Accessor<PipelineStats | null>;
   setLiveStats: Setter<PipelineStats | null>;
 
-  /** Internal: baseline progress for ETA calculation. */
-  getStartProgress: () => number;
-  /** Internal: update baseline progress. */
-  setStartProgress: (value: number) => void;
-  /** Internal: wall-clock start for ETA calculation. */
-  getStartTime: () => number;
-  /** Internal: EMA-based ETA calculator instance. */
-  etaCalculator: EtaCalculator;
-
   /** Reset progress signals before a new (or resumed) render starts. */
   resetProgress: (resuming: boolean) => void;
   /** Re-seed the ETA baseline after a pause→resume transition. */
   seedResumeBaseline: () => void;
 }
 
-export function useProgressTracker(): ProgressTracker {
+export function useProgressTracker() {
   const [overallProgress, setOverallProgress] = createSignal(0);
   const [overallEta, setOverallEta] = createSignal('');
   const [liveStats, setLiveStats] = createSignal<PipelineStats | null>(null);
 
   let startProgress = 0;
   let startTime = 0;
-  const etaCalculator = new EtaCalculator(MAX_ETA_SAMPLES);
+  const etaCalculator = new EtaCalculator(0);
 
   /**
    * Fresh ETA baseline for a resumed render. The backend resumes from the

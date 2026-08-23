@@ -33,12 +33,18 @@ export function isMaxrateValid(value: string): boolean {
   return Number.isFinite(k) && k >= MIN_BITRATE_K && k <= MAX_BITRATE_K;
 }
 
-/** Format a millisecond duration as a short, human-readable ETA string. */
+/** Format a millisecond duration as a short, human-readable ETA string.
+ *  Rounds seconds up to avoid the "0s" display for sub-second remainders
+ *  and collapses sub-minute durations to "< 1m". */
 export function formatDuration(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return '';
-  const totalSec = Math.floor(ms / 1000);
-  const s = totalSec % 60;
+  const totalSec = Math.ceil(ms / 1000);
   const m = Math.floor(totalSec / 60) % 60;
   const h = Math.floor(totalSec / 3600);
-  return `${h > 0 ? `${h}h ` : ''}${m}m ${s}s left`;
+
+  // Collapse sub-minute leftovers to avoid displaying "0s" — an ETA of
+  // "5m 0s" is noise; "5m" is clearer.
+  if (h > 0) return `${h}h ${m}m left`;
+  if (m > 0) return `${m}m left`;
+  return '< 1m left';
 }

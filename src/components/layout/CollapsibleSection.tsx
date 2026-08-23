@@ -1,4 +1,4 @@
-import type { JSX } from 'solid-js';
+import { createSignal, type JSX } from 'solid-js';
 import { Icon } from '@iconify-icon/solid';
 
 /** Shared collapse-title classes for consistent section headers. */
@@ -13,6 +13,10 @@ const collapseContentGrid =
  * Reusable DaisyUI collapse section wrapper used by all render-option
  * sections (Audio, Video & Encoding, Looping, Features).
  *
+ * Starts expanded by default (consistent with the pre-0.2.7
+ * `checked`-hardcoded behaviour). The user can toggle any section
+ * closed by clicking its title bar.
+ *
  * Extracted from {@link SettingsCard} to eliminate 4× duplicated collapse
  * boilerplate.
  */
@@ -21,9 +25,18 @@ export function CollapsibleSection(props: {
   title: string;
   children: JSX.Element;
 }) {
+  // Expand by default — preserves the historical always-open UX that
+  // every existing consumer implicitly depends on.
+  const [expanded, setExpanded] = createSignal(true);
+
   return (
     <div class="col-span-full collapse collapse-arrow bg-base-100 rounded-lg border border-base-300">
-      <input type="checkbox" checked />
+      <input
+        type="checkbox"
+        checked={expanded()}
+        onChange={(e) => setExpanded(e.currentTarget.checked)}
+        aria-label={`Toggle ${props.title} section`}
+      />
       <div class={collapseTitleClass}>
         <Icon icon={props.icon} width="14" height="14" />
         {props.title}

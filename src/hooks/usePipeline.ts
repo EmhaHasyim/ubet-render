@@ -14,6 +14,7 @@ import { RingBuffer } from '../core/ringBuffer';
 import { useProgressTracker } from './useProgressTracker';
 import { buildAppConfig } from '../core/buildAppConfig';
 import { TAURI_COMMANDS, TAURI_EVENTS } from '../core/constants';
+import { CODECS, getSourcePaths } from '../core/config';
 import { createLogger } from '../core/logger';
 
 const MAX_LOGS = 2000;
@@ -41,8 +42,8 @@ export function usePipeline(): PipelineApi {
     });
     hardwareInfo = () => null;
     resolveEncoder = (codec) => {
-      if (codec === 'av1') return 'libsvtav1';
-      if (codec === 'h265') return 'libx265';
+      if (codec === CODECS.av1) return 'libsvtav1';
+      if (codec === CODECS.h265) return 'libx265';
       return 'libx264';
     };
   }
@@ -189,8 +190,6 @@ export function usePipeline(): PipelineApi {
         embedChapters: config.embedChapters(),
         outputFormat: config.outputFormat(),
         loopCount: config.loopMode() === 'count' ? config.loopCount() : null,
-        // Honors the README's "Zero-Reencode Muxing" promise when source
-        // codec matches target encoder.
         skipIntermediateOnCodecMatch: config.skipIntermediateOnCodecMatch(),
       };
 
@@ -299,23 +298,11 @@ export function usePipeline(): PipelineApi {
     }
   };
 
-  const videoSourceReady = () => {
-    const v = config.videoSource();
-    return (
-      v !== null &&
-      ((v.type === 'files' && v.paths.length > 0) ||
-        (v.type === 'folder' && v.path.length > 0))
-    );
-  };
+  const videoSourceReady = () =>
+    getSourcePaths(config.videoSource()).length > 0;
 
-  const audioSourceReady = () => {
-    const a = config.audioSource();
-    return (
-      a !== null &&
-      ((a.type === 'files' && a.paths.length > 0) ||
-        (a.type === 'folder' && a.path.length > 0))
-    );
-  };
+  const audioSourceReady = () =>
+    getSourcePaths(config.audioSource()).length > 0;
 
   const outputPathReady = () => config.outputPath().length > 0;
 
@@ -327,9 +314,11 @@ export function usePipeline(): PipelineApi {
   const canStart = () => {
     const info = hardwareInfo();
     if (!pathsReady() || info === null) return false;
-    if (config.codec() === 'av1' && !info.av1Supported) return false;
+    if (config.codec() === CODECS.av1 && !info.av1Supported) return false;
     return maxrateValid();
   };
+
+  const hasFailed = createMemo(() => jobs().some((j) => j.state === 'error'));
 
   const disabledReason = createMemo(() => {
     const info = hardwareInfo();
@@ -337,7 +326,7 @@ export function usePipeline(): PipelineApi {
     if (!videoSourceReady()) return 'Select a video source';
     if (!audioSourceReady()) return 'Select audio tracks';
     if (!outputPathReady()) return 'Choose an output folder';
-    if (config.codec() === 'av1' && !info.av1Supported)
+    if (config.codec() === CODECS.av1 && !info.av1Supported)
       return 'AV1 not supported by your hardware';
     if (!maxrateValid()) return 'Enter a valid bitrate (100–50000)';
     return '';
@@ -358,6 +347,7 @@ export function usePipeline(): PipelineApi {
     liveStats: progress.liveStats,
     hardwareInfo,
     av1Supported: () => hardwareInfo()?.av1Supported ?? false,
+    hasFailed,
     canStart,
     maxrateValid,
     disabledReason,
@@ -400,6 +390,35 @@ export function usePipeline(): PipelineApi {
       }
       await startRender(true);
     },
-    ...config,
+    videoSource: config.videoSource,
+    audioSource: config.audioSource,
+    outputPath: config.outputPath,
+    outputPrefix: config.outputPrefix,
+    maxrate: config.maxrate,
+    usePingpong: config.usePingpong,
+    songsPerPlaylist: config.songsPerPlaylist,
+    minDurationHours: config.minDurationHours,
+    loopMode: config.loopMode,
+    loopCount: config.loopCount,
+    codec: config.codec,
+    audioMode: config.audioMode,
+    embedChapters: config.embedChapters,
+    outputFormat: config.outputFormat,
+    skipIntermediateOnCodecMatch: config.skipIntermediateOnCodecMatch,
+    setVideoSource: config.setVideoSource,
+    setAudioSource: config.setAudioSource,
+    setOutputPath: config.setOutputPath,
+    setOutputPrefix: config.setOutputPrefix,
+    setMaxrate: config.setMaxrate,
+    setUsePingpong: config.setUsePingpong,
+    setSongsPerPlaylist: config.setSongsPerPlaylist,
+    setMinDurationHours: config.setMinDurationHours,
+    setLoopMode: config.setLoopMode,
+    setLoopCount: config.setLoopCount,
+    setCodec: config.setCodec,
+    setAudioMode: config.setAudioMode,
+    setEmbedChapters: config.setEmbedChapters,
+    setOutputFormat: config.setOutputFormat,
+    setSkipIntermediateOnCodecMatch: config.setSkipIntermediateOnCodecMatch,
   };
 }

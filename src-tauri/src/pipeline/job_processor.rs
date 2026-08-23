@@ -52,9 +52,10 @@ fn requires_intermediate(
     skip_intermediate_on_codec_match: bool,
     should_reencode: bool,
 ) -> bool {
-    // The toggle is the complete policy switch: OFF means always run the
-    // intermediate processing step; ON permits stream-copy only after a
-    // successful codec match. A mismatch can never bypass conversion.
+    // OFF = always run the intermediate processing step.
+    // ON  = skip it when the source can be stream-copied (i.e. re-encode
+    //        is not required — either codec matches or the user forced
+    //        unconditional skip).
     !skip_intermediate_on_codec_match || should_reencode
 }
 
@@ -124,23 +125,33 @@ pub(crate) async fn process_single_job(
     let input_duration = input_duration
         .map_err(|_| AppError::Pipeline(format!("Failed to detect video duration: {}", name)))?;
 
-    let should_reencode = match (&input_codec, params.encoder_selected.as_deref()) {
-        (Some(in_codec), Some(enc)) => {
-            // Normalize BOTH sides via the same mapper so codec aliases
-            // returned by ffprobe (e.g. `libaom-av1`) compare equal to the
-            // encoder name chosen by the frontend (e.g. `libsvtav1`).
-            let mapped_enc = map_encoder_to_codec(enc);
-            let mapped_in = map_encoder_to_codec(in_codec);
-            mapped_in != mapped_enc
+    // When the user opts into skip-intermediate, bypass the codec
+    // comparison entirely. The source video is fed directly to the
+    // concat demuxer via stream-copy, regardless of whether the source
+    // codec matches the target encoder. This is an explicit user choice
+    // (the toggle is OFF by default) and the user accepts that the
+    // output container/codec is determined solely by the source file.
+    let should_reencode = if params.skip_intermediate_on_codec_match {
+        false
+    } else {
+        match (&input_codec, params.encoder_selected.as_deref()) {
+            (Some(in_codec), Some(enc)) => {
+                // Normalize BOTH sides via the same mapper so codec aliases
+                // returned by ffprobe (e.g. `libaom-av1`) compare equal to the
+                // encoder name chosen by the frontend (e.g. `libsvtav1`).
+                let mapped_enc = map_encoder_to_codec(enc);
+                let mapped_in = map_encoder_to_codec(in_codec);
+                mapped_in != mapped_enc
+            }
+            (Some(in_codec), None) => {
+                // No encoder override: compare against the configured default encoder
+                // to avoid unnecessary re-encoding when source already matches target.
+                let mapped_enc = map_encoder_to_codec(params.video_cfg.encoder.as_str());
+                let mapped_in = map_encoder_to_codec(in_codec);
+                mapped_in != mapped_enc
+            }
+            _ => true,
         }
-        (Some(in_codec), None) => {
-            // No encoder override: compare against the configured default encoder
-            // to avoid unnecessary re-encoding when source already matches target.
-            let mapped_enc = map_encoder_to_codec(params.video_cfg.encoder.as_str());
-            let mapped_in = map_encoder_to_codec(in_codec);
-            mapped_in != mapped_enc
-        }
-        _ => true,
     };
 
     let ping_pong_path;
@@ -148,19 +159,15 @@ pub(crate) async fn process_single_job(
     let target_dur = input_duration.max(0.001) * if params.use_pingpong { 2.0 } else { 1.0 };
 
     // Decide whether the intermediate re-encode (the "1/2 ..." step) is
-    // required. Stream-copy is safe only after codec detection succeeds and
-    // the source codec matches the selected encoder. A codec mismatch always
-    // takes the normal encode path, even when the opt-in toggle is enabled.
+    // required. When skip_intermediate_on_codec_match is ON, the source
+    // is stream-copied unconditionally (should_reencode is forced false).
+    // When OFF, the normal codec-matching logic applies.
     let skip_match = params.skip_intermediate_on_codec_match;
     let can_stream_copy = skip_match && !should_reencode;
     let needs_intermediate =
         requires_intermediate(params.use_pingpong, skip_match, should_reencode);
 
     if can_stream_copy {
-        let canonical = input_codec
-            .as_deref()
-            .map(map_encoder_to_codec)
-            .unwrap_or("unknown");
         let pingpong_note = if params.use_pingpong {
             " Ping-pong is disabled because stream-copy was explicitly selected."
         } else {
@@ -171,8 +178,8 @@ pub(crate) async fn process_single_job(
             PipelineEvent::Log {
                 level: "info".into(),
                 message: format!(
-                    "Zero-reencode mode ON: source codec matches target ({}); using -c copy.{}",
-                    canonical, pingpong_note
+                    "Zero-reencode mode ON: skipping intermediate encode and using stream copy.{} Source codec will determine the final output format.",
+                    pingpong_note
                 ),
             },
         );

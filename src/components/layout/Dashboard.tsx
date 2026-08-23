@@ -64,14 +64,12 @@ export function Dashboard(props: {
   // ── Taskbar progress indicator (Windows) ───────────────────
   createEffect(() => {
     const pct = pipeline.overallProgress();
-    const jobs = pipeline.jobs();
-    const hasFailed = jobs.some((j) => j.state === 'error');
 
     if (pipeline.running()) {
       appWindow
         .setProgressBar({ progress: Math.round(Math.min(100, pct || 0)) })
         .catch(() => {});
-    } else if (hasFailed) {
+    } else if (pipeline.hasFailed()) {
       appWindow
         .setProgressBar({
           status: ProgressBarStatus.Error,

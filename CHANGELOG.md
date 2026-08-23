@@ -1,219 +1,83 @@
 # Changelog
 
-All notable changes to **Ubet Render** are documented in this file.
-
-The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+All notable changes to Ubet Render are documented in this file.
 
 ---
 
-## [0.2.5] — 2026-08-05
-
-**Bug-fix release.** A full source audit (HIGH / MEDIUM / LOW severity) of
-the frontend and the Rust backend surfaced 17 issues across the render-
-pipeline state machine, hardware probing, virtual scrolling, persistence,
-and theme handling — all fixed and covered by new tests.
-
-### Fixed (HIGH)
-
-- **Pause→Resume race left the UI stuck on "Rendering" forever.** The job
-  loop previously used a `for_each` stream that silently dropped an
-  interrupted job when the user resumed mid-pause; the backend
-  `RenderControl` now carries a `terminated` flag so `resume_render`
-  refuses to resume a pipeline that has committed to exiting, and the
-  job loop was refactored into an explicit `while` loop that **retries
-  the interrupted job in place**. Frontend: a 6-second resume watchdog
-  restarts the render from the state file if a resume ack arrives
-  without pipeline activity; the watchdog is cancelled by Progress /
-  Stats / Done / Cancelled / FatalError / Paused events and on user
-  cancel.
-- **LogViewer virtual scroll broke on wrapped lines.** Line height is now
-  derived from the measured monospace character width (prefix sums +
-  binary search) instead of assuming one fixed line, so wrapped lines no
-  longer make the content jump.
-- **`createSignal` inside `<Index>` re-created thumbnail state per row.**
-  Replaced with a stable `Set<string>` of failed-thumbnail paths — failed
-  placeholders no longer flicker on every Progress event.
-- **Startup blocked ~30 s while probing hardware encoders.** The AV1/HEVC
-  encoder probes and the `-encoders` scan now run in parallel
-  (`futures::join_all` + `tokio::join!`) and the results are cached in a
-  `OnceLock` — worst case dropped from ~32 s to ~8 s, typically <1 s.
-- **Filenames containing `:` were rejected on Linux/macOS.** The NTFS-ADS
-  colon check now runs only on Windows and only detects a second colon
-  after a drive letter, so files like `My:Song.mp3` are legal on Unix.
-- **Renders longer than 24 h were rejected by the backend with no UI
-  guard.** The duration is now clamped to 0.1–24 h in the setters, in
-  `coerceConfig` (corrupt localStorage), and via `max="24"` on the
-  SettingsCard input — consistent with the Rust validation.
-
-### Fixed (MEDIUM)
-
-- **Video ping-pong filter stretched non-16:9 sources.**
-  `create_ping_pong_video` now uses `force_original_aspect_ratio=decrease`
-  - black `pad` (letterbox) so portrait/square sources keep their aspect
-    ratio while the output stays uniformly 1920×1080 for concat. The filter
-    was extracted into `build_base_filter()` with unit tests.
-- **Notification permission failure was cached as a permanent denial.**
-  Transient IPC exceptions in `ensurePermission` are no longer cached, so
-  a later `notify()` retries; real granted/denied decisions are still
-  cached to avoid re-prompting.
-- **ETA was capped at 24 h while renders may legitimately run that long.**
-  The ETA display cap was raised from 24 h to 7 days; tests updated.
-- **Resume produced an ETA spike.** After a resume, the first post-resume
-  Progress event now establishes a fresh ETA baseline (sentinel, applied
-  on both the acked-resume and the watchdog-restart paths) instead of
-  reusing the pre-pause sample.
-- **Hardware probe block indentation artifact** left over from the AV1
-  parallelisation fix was cleaned up.
-- **Dead code** (`retryJob ?? undefined`) removed from `App.tsx`.
-- **"Songs per video" input capped at 50** while the setter and backend
-  accept up to 100 — the `max` attribute now matches.
-
-### Fixed (LOW)
-
-- **Theme flash on startup & an unregistered theme.** `data-theme="dark"`
-  in `index.html` was not a registered DaisyUI theme, and `:root { color-
-scheme: dark }` forced native controls dark in light mode. The theme is
-  now applied synchronously before the first render, `data-theme` defaults
-  to the valid `business` theme, and `color-scheme` is set per theme.
-- **Unhandled promise rejections in the Titlebar** window controls are now
-  caught, and double-clicking the window-control buttons no longer toggles
-  maximize (the Windows convention of double-click anywhere on the bar is
-  preserved via stopPropagation on the button cluster).
-- **Config changes could be lost on quit.** `usePersistedConfig` now
-  flushes the pending debounced localStorage write synchronously on
-  unmount.
-- **Per-render function allocation in `SourceSelector`** moved to module
-  scope (lint + micro-perf).
-- **Render log files accumulated forever.** `init_logger` now prunes
-  `render_YYYYMMDD_HHMMSS.log` files older than 7 days (deterministic
-  timestamp parse + tests); two flaky tests sharing the `LOG_PATH` global
-  were merged into one deterministic test.
-
----
-
-## [0.2.4] — 2026-07-27
-
-**Stability & observability release.** The frontend polish of 0.2.3 holds;
-this release tightens the feedback loops (toast coverage, frontend
-persistence, log filtering) and exposes the keyboard shortcuts dialog so
-new users can discover the existing window controls.
-
-### Added
-
-- **Frontend logs persisted to disk.** New `log_to_file` Tauri command in
-  `src-tauri/src/commands/logger.rs` accepts batched `FrontendLogEntry`
-  payloads and appends them to the same `{TEMP}/ubet-render/logs/render_*.log`
-  file the backend uses. Frontend-side errors and warnings are now
-  inspectable after the webview is closed. Coalesced via a 500 ms debounce
-  in `src/core/logger.ts` with a 100-entry cap-driven early flush so busy
-  FFmpeg progress doesn't flood IPC.
-- **Wider toast coverage in `usePipeline`.** Eight additional `showToast`
-  call sites — hardware detection fallback (warning), drag-and-drop
-  unavailability (info), bitrate validation on Start (warning),
-  `handleDone` success vs warning completion, `handleFatalError` (sticky
-  error), start-error catch, pause-error catch, and the debounced
-  save-config IPC failure (info).
-- **Job retry button.** Each row in `JobTable` whose `state === 'error'`
-  now shows a `lucide:rotate-cw` retry button with `aria-label` per row.
-  Wired through `usePipeline.retryJob`, which validates the render
-  preconditions first and surfaces a toast when retry is impossible
-  (already running, or paths unset).
-- **LogViewer filter & search.** New header in `LogViewer.tsx` hosts
-  three level chips (Info / Warn / Error) and a substring search input.
-  The chip activation state mirrors the colour coding of `LogLine.tsx`
-  via a shared `parseLevel` helper exported from
-  `src/core/logLevels.ts`. The count badge toggles between the raw total
-  and a `X / Y` format when filtering is active; an extra empty state
-  ("No log lines match the current filter") is shown when filters narrow
-  to zero rows.
-- **F1 keyboard shortcuts dialog.** New `src/components/ui/ShortcutsDialog.tsx`
-  modal — built on the same `<dialog>` + `rememberFocus` + `onClose`
-  pattern as the existing `ConfirmDialog` — documents the global
-  shortcuts registered in `App.tsx` (Ctrl+W, F11, Ctrl+Shift+M, Ctrl+1/2)
-  plus the new F1 help hotkey itself. Bindings live in a
-  `ShortcutsDialogBridge` component so the hotkey works regardless of
-  which sub-tree has focus.
-
-### Changed
-
-- **Pause optimistic-state reconciliation** (from 0.2.3) was previously
-  silent except for the timeout warning toast. The new `retryJob` guard
-  path uses the same toast idiom to surface "Cannot retry" / "Already
-  rendering" dead-click feedback.
-- **LogViewer virtual scroll reset** now tracks filter/search inputs
-  rather than the filtered memo, so rapidly arriving raw log lines
-  don't yank the user back to the top mid-inspection.
-- **README test command** updated from `bun test` to `bun run test` with
-  a callout explaining that bare `bun test` activates Bun's built-in
-  test runner (different API surface than Vitest).
+## [0.2.7] — 2026-08-23
 
 ### Fixed
 
-- **notify.test.ts line-92 assertion** was pre-existing: the test
-  assumed `log.error(msg, err)` would reach `console.error` with two
-  args, but `logger.ts` concatenates into a single prefixed line. The
-  assertion now checks that the formatted line contains both substrings.
-- **`ShortcutsDialog` dead/risky code removed** — auto-dismissing
-  sticky toasts via `querySelectorAll` and a stray `void dismissToast`
-  placeholder are gone; rendering switched to idiomatic SolidJS `<For>`
-  in place of `.map`.
-
----
-
-## [0.2.3] — 2026-07-27
-
-**Frontend polish & a11y release.** The audio-pipeline behaviour and the
-binary/engine surface area are unchanged from `0.2.2`; this release tightens
-the SolidJS dashboard and improves keyboard/screen-reader ergonomics.
-
-### Added
-
-- **In-app toast notification system.** A small `src/core/toast.ts` signal
-  store plus a `<ToastViewport />` portal mounted in `App.tsx`. Distinct
-  from `src/core/notify.ts` (which sends OS-level notifications when the
-  app is in the tray) — toasts are for short, ephemeral feedback _while
-  the user is looking at the app_. Auto-dismiss with configurable TTL
-  (default 3500 ms), `role="status"` / `role="alert"` mapped to variant,
-  dismiss button + ESC. _Currently used by `usePipeline.handlePaused` and
-  `usePipeline.pauseRender`'s reconciliation timer._
-- **Light / dark theme toggle.** A new `src/core/theme.ts` module persists
-  the user's theme preference under `localStorage['ubetrender-theme']`
-  (separate from the versioned config schema, so no migration runs).
-  First-launch defaults respect `prefers-color-scheme: light` from the
-  OS, otherwise falls back to the existing `business` dark theme.
-  Toggle button lives in `Titlebar.tsx` next to the minimise control
-  (`lucide:sun` ↔ `lucide:moon`). DaisyUI plugin in `App.css` now
-  registers both `business` and `light` themes.
-- **Modal focus restoration utility.** New `src/core/focus.ts` exports
-  `rememberFocus()`. `ConfirmDialog` (shared) and the cancel-render
-  dialog in `AppHeader.tsx` now capture `document.activeElement` before
-  `showModal()` and refocus it on `onClose`, so keyboard / screen-reader
-  users land back on the trigger that opened the dialog instead of being
-  stranded at `<body>`.
+- Removed the stray `nul` file (Windows `> nul` redirect artifact) from the repository root. It was already listed in `.gitignore` but had been committed before the ignore rule was added.
+- **Logger timestamp alignment:** `formatTimestamp()` now uses UTC (`getUTCHours()` etc.) instead of local time, matching the Rust backend's `chrono::Utc` — frontend and backend log timestamps are now always in sync regardless of timezone.
+- **Fullscreen state corruption:** `useAppShortcuts` no longer uses a broken `fullscreenStateResolved` flag that could leave the toggle stuck in the wrong state. Detection is now a simple direct assignment from the Tauri probe.
+- **Dead signal removed:** the unused `dirty` signal in `usePipelinePersistence` has been removed (no consumer ever read it).
+- **EMPTY_PATHS hardening:** the shared sentinel array is now `readonly` + `Object.freeze()` to prevent accidental mutation by any consumer.
+- **Collapsible sections toggle:** sections now use a reactive signal instead of a hardcoded `checked` attribute, so users can collapse them.
+- **formatDuration polish:** removed redundant seconds display (`5m 0s left` → `5m left`), rounds up sub-minute durations to `< 1m left`.
+- **Job processor simplification:** the `skipIntermediateOnCodecMatch` toggle now unconditionally stream-copies source video regardless of codec, rather than requiring an exact codec match — fulfilling the original "zero re-encode" promise.
+- **Version sync:** `Cargo.toml` bumped to 0.2.7 (was 0.2.6) so Tauri metadata matches `package.json`.
 
 ### Changed
 
-- **Tab keyboard navigation follows focus.** The Render / Activity tabs
-  in `App.tsx` now implement the W3C ARIA tabs pattern: `tabIndex` follows
-  the active tab (roving tabindex, `0` / `-1`), and the focus ring moves
-  in lockstep with `ArrowLeft` / `ArrowRight` so the visible focused
-  element always matches the selected tab.
-- **Pause optimistic-state reconciliation.** `usePipeline.pauseRender`
-  set `paused=true` optimistically before awaiting `invoke('pause_render')`.
-  If the backend's `Paused` event never arrived (IPC delay, webview
-  suspend, dropped channel), the UI was stuck in `running=true, paused=true`
-  indefinitely. v0.2.3 schedules a 5-second reconcile timer; the timer is
-  cleared by `handlePaused` on ack, by `pauseRender` on error, by
-  `cancelRender`, and by the hook's `onCleanup`. On timeout the UI
-  reverts to `running` and surfaces a `warning`-variant toast.
+- Extracted `LOUDNORM_PARAMS` as a named constant in `core/config.ts` (replaces the inline magic string in `DEFAULT_CONFIG.audio.loudnormParams`).
+- Moved `EMPTY_PATHS` and `getSourcePaths()` from `SettingsCard.tsx` into `core/config.ts` so they can be reused by any future source-picker component without duplication.
+- Replaced the manual `jobs.some(j => j.state === 'error')` loop in `Dashboard.tsx`'s taskbar progress effect with a `hasFailed` derived signal on the pipeline context, so the iterator in `StatsStrip` stays the single source of truth for job-state metrics.
+- Used TypeScript's `satisfies` operator on `LEVEL_CHIPS` in `LogViewer.tsx` and `statusMap` in `StatusBadge.tsx` for extra compile-time safety without widening the inferred literal types.
+- Replaced 6+ scattered string literals (`'h264'`, `'h265'`, `'av1'`) with the `CODECS` constant object + `CodecId` type in `core/config.ts`, used by `persisted.ts`, `useHardware.ts`, and `usePipeline.ts`.
+- `useProgressTracker` no longer exposes internal fields (`getStartProgress`, `setStartProgress`, `getStartTime`, `etaCalculator`) on its public interface — they are still passed to `createPipelineEventHandler` via closure scope but are hidden from casual consumers.
+- `usePipeline` now explicitly re-exports each config accessor/setter instead of `...config`, making the public API surface auditable at the return statement.
+- Added a max-depth guard (256 levels) to `canonicalize_lenient` in the Rust validation layer to prevent infinite loops on malformed or adversarial paths.
+- Log prefixes are now consistently bracket-style (`[FATAL]`, `[WARN]`) across all pipeline event handlers.
+- Removed dead `MAX_ETA_SAMPLES` constant from `useProgressTracker`.
+- Updated the "Skip re-encode" toggle label and tooltip to reflect the new unconditional stream-copy behavior (no longer mentions codec matching).
 
-### Fixed
+### Added
 
-- **Cancel-render dialog focus loss.** (Pre-existed; a11y regression that
-  went unnoted in 0.2.2.) After the cancel dialog closed, focus fell to
-  `<body>`. Restored via `rememberFocus()` as described above.
+- New `typecheck` script (`tsc --noEmit`) in `package.json` — now CI and contributors can run `bun run typecheck` alongside `bun run lint`.
 
 ---
 
-## [0.2.2] — 2026-07-27
+## [0.2.6] — 2026-07-25
+
+### Added
+
+- Centralized logger (`src/core/logger.ts`) replacing 11 scattered `console.error` / `console.warn` calls across the production codebase. Each call site now uses a pre-bound `createLogger(context)` that formats logs as `[timestamp] [context] message` and forwards them to the Rust backend's file sink on a 500 ms debounce.
+- Toast notification system (`src/core/toast.ts` + `src/components/ui/Toast.tsx`) for short, ephemeral in-app feedback (distinct from OS-level notifications). Toasts auto-dismiss on a configurable TTL and are rendered via a `<Portal>` in the bottom-right corner.
+- ETA calculator (`src/core/eta.ts`) using an exponential moving average of the rate (% per ms) so the progress bar reacts quickly to stalls while smoothing noise from individual FFmpeg progress lines.
+- Focus restoration utility (`src/core/focus.ts`) — `rememberFocus()` captures `document.activeElement` before opening a modal and returns a callback that restores focus after the modal closes. Used by `ConfirmDialog`, `AppHeader`, and `ShortcutsDialog`.
+- Virtual scrolling in `LogViewer` with height-aware row estimation based on measured monospace character width — handles wrapped lines (long FFmpeg output in narrow panels) without misaligning the scroller.
+- Level filter chips (Info / Warn / Error) and a full-text search box in `LogViewer` so users can narrow the log stream by severity or keyword.
+- Shortcuts dialog (`F1`) documenting all keyboard shortcuts: `F11` (fullscreen), `Ctrl+W` (hide to tray), `Ctrl+Shift+M` (minimize), `Ctrl+1` / `Ctrl+2` (switch tabs).
+- Ring buffer (`src/core/ringBuffer.ts`) — pre-allocated array of 2000 entries for log lines and ETA samples to avoid GC pressure during high-frequency FFmpeg output.
+- Log-level parsing module (`src/core/logLevels.ts`) — shared `parseLevel()` used by both `LogLine` (colour) and `LogViewer` (filter chips), guaranteeing those two sites never drift.
+- Schema versioning and migration system in `core/persisted.ts` — `STORAGE_VERSION` tracks the current schema, `MIGRATIONS` map defines forward transforms so users never lose settings on upgrade.
+- `Storage` wrapper (`src/core/storage.ts`) — single `safeSetStorageItem()` helper that swallows quota / disabled-storage errors, replacing three duplicate try/catch blocks.
+- `buildAppConfig` / `BackendConfigSnapshot` — extracted the frontend→backend config bridge from `usePipelinePersistence` into a pure module (`src/core/buildAppConfig.ts`) for unit-testability.
+- `useProgressTracker` hook — extracted progress signals, baseline state, and ETA calculator from `usePipeline` into a self-contained module.
+- `pipelineEvents` handler factory — isolated event-to-state transitions (Progress, Done, Paused, Cancelled, FatalError) from the lifecycle-aware `usePipeline` orchestrator.
+- Pipeline persistence with retry (`usePipelinePersistence`) — debounced saves to the Rust backend with exponential backoff (3 retries) so transient IPC/filesystem failures don't lose settings.
+- Media source selector with clear-confirmation dialog (`SourceSelector`) — file picker with extension filtering, last-directory memory, and a "Clear" button guarded by `ConfirmDialog`.
+- Output folder selector (`OutputFolderSelector`) with "Open in Explorer" button.
+- Extracted collapsible section sections: `AudioSection`, `VideoEncodingSection`, `LoopingSection`, `FeaturesSection` — each is a self-contained component feeding into a reusable `CollapsibleSection` wrapper.
+- Comprehensive test suite: 402 tests across 42 files covering core utilities, hooks (unit + integration), components (unit + extended coverage), contracts (golden tests), and the pipeline context contract.
+
+### Changed
+
+- Moved `usePipeline()` call from the top of `App` into a `PipelineBridge` component wrapped by `<ErrorBoundary>`. If `usePipeline` throws during initialization, `FatalScreen` presents a "Try Again" button that remounts the bridge without losing the application shell.
+- Replaced 17 individual `createSignal` calls in `usePersistedConfig` with a single `createStore` — all fields share one reactive root, reducing SolidJS dependency tracking overhead.
+- Extracted `AppHeader` + `HardwareInfo` + `OverallProgress` into separate components from the monolithic dashboard.
+- Extracted `Titlebar` with drag region, window controls (minimize/maximize/close), theme toggle, and right-click context menu.
+- Extracted `StatsStrip` with single-pass memoized job-state counters and a placeholder skeleton when idle.
+- Consolidated keyboard shortcut handling into `useAppShortcuts` hook (was scattered across `Titlebar`, tab navigation, and the shortcuts dialog).
+- Centralized Tauri command and event name constants in `core/constants.ts`.
+- Theme persistence uses a separate `ubetrender-theme` localStorage key (not mixed into `PersistedConfig`) so UI cosmetics never trigger schema migrations.
+- Notification permission is cached for the session after first grant/deny to avoid re-requesting on every `notify()` call.
+- Pause render includes a 5-second reconciliation timer — if the backend never acknowledges the pause, the UI auto-returns to "running" so the user isn't stranded.
+
+### Fixed
+
+- Fixed theme flash on launch: `applyTheme(loadTheme())` now runs synchronously before the first `render()` call in `index.tsx`, so the browser never paints the wrong theme.
+- Fixed "Resume" incorrectly restarting from scratch when the backend pipeline was still alive — now checks the return value before falling back to `startRender(true)`.
+- Fixed taskbar progress bar not clearing after render completion on Windows.
+- Fixed drag-and-drop coordinate scaling for HiDPI displays: Tauri native DnD events now divide position by `devicePixelRatio` so hit-testing aligns with the DOM.

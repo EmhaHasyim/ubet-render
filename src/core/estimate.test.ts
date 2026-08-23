@@ -73,19 +73,22 @@ describe('normalizeBitrate', () => {
 });
 
 describe('formatDuration', () => {
-  it('formats seconds only', () => {
-    expect(formatDuration(5000)).toBe('0m 5s left');
+  it('formats sub-minute durations as "< 1m"', () => {
+    expect(formatDuration(5000)).toBe('< 1m left');
+    expect(formatDuration(59000)).toBe('< 1m left');
   });
 
-  it('formats minutes and seconds', () => {
-    expect(formatDuration(65000)).toBe('1m 5s left');
+  it('formats minutes only (no seconds noise)', () => {
+    expect(formatDuration(60000)).toBe('1m left');
+    expect(formatDuration(65000)).toBe('1m left');
   });
 
-  it('formats hours, minutes and seconds', () => {
-    expect(formatDuration(3661000)).toBe('1h 1m 1s left');
+  it('formats hours and minutes (no seconds noise)', () => {
+    expect(formatDuration(3660000)).toBe('1h 1m left');
+    expect(formatDuration(3661000)).toBe('1h 1m left');
   });
 
-  it('returns an empty string for non-positive or invalid input', () => {
+  it('returns empty string for non-positive or invalid input', () => {
     expect(formatDuration(0)).toBe('');
     expect(formatDuration(-1000)).toBe('');
     expect(formatDuration(NaN)).toBe('');

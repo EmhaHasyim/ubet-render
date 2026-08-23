@@ -18,6 +18,8 @@ export function createMockPipeline(overrides?: Partial<Pipeline>): Pipeline {
     liveStats: () => null,
     hardwareInfo: () => null,
     av1Supported: () => false,
+    hasFailed: () => false,
+    disabledReason: () => '',
     canStart: () => false,
     maxrateValid: () => true,
     dragHover: () => null,

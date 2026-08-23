@@ -28,17 +28,19 @@ export function useAppShortcuts(setActiveTab: Setter<AppTabId>): AppShortcuts {
   onMount(() => {
     // Track Tauri window fullscreen state (separate from browser
     // document.fullscreenElement — they are different APIs).
+    //
+    // Use a mutable closure variable instead of a signal because the
+    // state is only consumed synchronously inside the F11 handler;
+    // no component needs to reactively observe it.
     let isFullscreen = false;
-    let fullscreenStateResolved = false;
+    // Async probe the initial state; on failure assume non-fullscreen.
     appWindow
       .isFullscreen()
       .then((value) => {
-        if (!fullscreenStateResolved) {
-          isFullscreen = value;
-        }
+        isFullscreen = value;
       })
       .catch(() => {
-        fullscreenStateResolved = true;
+        // IPC failed — safest default is false (windowed).
       });
 
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -61,7 +63,6 @@ export function useAppShortcuts(setActiveTab: Setter<AppTabId>): AppShortcuts {
       // F11 → toggle Tauri window fullscreen.
       if (event.key === 'F11') {
         event.preventDefault();
-        fullscreenStateResolved = true;
         isFullscreen = !isFullscreen;
         appWindow.setFullscreen(isFullscreen).catch(() => {});
         return;

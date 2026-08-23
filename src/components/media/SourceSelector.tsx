@@ -8,7 +8,7 @@ import { createLogger } from '../../core/logger';
 interface SourceSelectorProps {
   label: string;
   allowedExtensions: string[];
-  value: string[];
+  value: readonly string[];
   onChange: (paths: string[] | null) => void;
   icon: string;
   themeColor: 'primary' | 'secondary' | 'accent' | 'info';
