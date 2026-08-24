@@ -53,7 +53,9 @@ describe('JobTable', () => {
   it('shows empty state when jobs array is empty', () => {
     render(() => <JobTable jobs={[]} />);
     expect(screen.getByText('No jobs yet')).toBeTruthy();
-    expect(screen.getByText(/Queue is empty/i)).toBeTruthy();
+    expect(
+      screen.getByText(/Start a render from the Render tab/i),
+    ).toBeTruthy();
   });
 
   it('renders job rows for each job', () => {

@@ -51,7 +51,9 @@ describe('StatsStrip', () => {
       </WithPipeline>
     ));
     expect(container.querySelector('.stats')).toBeTruthy();
-    expect(screen.getByText('Ready to render')).toBeTruthy();
+    expect(
+      screen.getByText('Configure your sources and start a render'),
+    ).toBeTruthy();
     expect(screen.getByText('Idle')).toBeTruthy();
   });
 

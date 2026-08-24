@@ -59,7 +59,7 @@ export function JobTable(props: {
           />
           <p class="font-medium">No jobs yet</p>
           <p class="mt-1 max-w-sm text-sm text-base-content/60">
-            Queue is empty.
+            Start a render from the Render tab to see your batch here.
           </p>
         </div>
       }

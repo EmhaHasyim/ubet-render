@@ -1,9 +1,8 @@
 use super::{muxer, state::StateManager, video_loop};
 use crate::error::AppError;
 use crate::ffmpeg;
-use crate::models::job::{JobState, PipelineEvent, RenderJob, RenderStats};
+use crate::models::job::{JobState, RenderJob, RenderStats};
 use crate::models::media::ProcessedAudio;
-use crate::utils::event;
 use crate::utils::fs;
 use rand::SeedableRng;
 use rand::prelude::SliceRandom;
@@ -163,50 +162,10 @@ pub(crate) async fn process_single_job(
     // is stream-copied unconditionally (should_reencode is forced false).
     // When OFF, the normal codec-matching logic applies.
     let skip_match = params.skip_intermediate_on_codec_match;
-    let can_stream_copy = skip_match && !should_reencode;
     let needs_intermediate =
         requires_intermediate(params.use_pingpong, skip_match, should_reencode);
 
-    if can_stream_copy {
-        let pingpong_note = if params.use_pingpong {
-            " Ping-pong is disabled because stream-copy was explicitly selected."
-        } else {
-            ""
-        };
-        event::emit(
-            app,
-            PipelineEvent::Log {
-                level: "info".into(),
-                message: format!(
-                    "Zero-reencode mode ON: skipping intermediate encode and using stream copy.{} Source codec will determine the final output format.",
-                    pingpong_note
-                ),
-            },
-        );
-    } else if skip_match && should_reencode {
-        event::emit(
-            app,
-            PipelineEvent::Log {
-                level: "info".into(),
-                message: "Source codec does not match target; keeping the intermediate encode for a compatible output.".into(),
-            },
-        );
-    } else if params.use_pingpong && !should_reencode {
-        let canonical = input_codec
-            .as_deref()
-            .map(map_encoder_to_codec)
-            .unwrap_or("unknown");
-        event::emit(
-            app,
-            PipelineEvent::Log {
-                level: "info".into(),
-                message: format!(
-                    "Source codec matches target ({}). Applying the ping-pong intermediate.",
-                    canonical
-                ),
-            },
-        );
-    }
+
 
     if needs_intermediate {
         {
@@ -354,22 +313,7 @@ pub(crate) async fn process_single_job(
         lock[ctx.index].timestamps = timestamps.clone();
     }
 
-    event::emit(
-        app,
-        PipelineEvent::Log {
-            level: "info".into(),
-            message: format!("=== Timestamps untuk {} ===", name),
-        },
-    );
-    for ts in &timestamps {
-        event::emit(
-            app,
-            PipelineEvent::Log {
-                level: "info".into(),
-                message: ts.clone(),
-            },
-        );
-    }
+
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<f64>(100);
     let stats_tx_mux = ctx.stats_tx.clone();

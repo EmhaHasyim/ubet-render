@@ -17,14 +17,29 @@ import { TAURI_COMMANDS, TAURI_EVENTS } from '../core/constants';
 import { CODECS, getSourcePaths } from '../core/config';
 import { createLogger } from '../core/logger';
 
-const MAX_LOGS = 2000;
-
 // Single namespaced logger for this hook.  Replaces 5 ad-hoc console.error
 // calls — see `src/core/logger.ts`.
 const log = createLogger('usePipeline');
 
 export function usePipeline(): PipelineApi {
   const config = usePersistedConfig();
+
+  // ── Log buffer and appendLog must be defined BEFORE the hardware / drag-drop
+  //     catch blocks below, because those catch blocks may call appendLog()
+  //     synchronously during hook initialisation.
+  const MAX_LOGS = 2000;
+  const logBuffer = new RingBuffer<string>(MAX_LOGS);
+  const [logs, setLogs] = createSignal<string[]>([]);
+  const flushLogs = () => setLogs(logBuffer.toArray());
+  let logPushesSinceFlush = 0;
+  const appendLog = (line: string) => {
+    logBuffer.push(line);
+    logPushesSinceFlush += 1;
+    if (logPushesSinceFlush >= 10 || logBuffer.length === 1) {
+      logPushesSinceFlush = 0;
+      flushLogs();
+    }
+  };
 
   let hardwareInfo: () => import('../hooks/useHardware').HardwareInfo | null;
   let resolveEncoder: (codec: string) => string;
@@ -34,8 +49,9 @@ export function usePipeline(): PipelineApi {
     resolveEncoder = hw.resolveEncoder;
   } catch (err) {
     log.error('useHardware failed, using fallback encoder:', err);
-    // Surface a warning toast so the user knows the encoder may be slower
-    // (software fallback) — a silent log line is easy to miss.
+    appendLog(
+      '[WARN] Hardware detection failed — using software encoder fallback',
+    );
     showToast('Hardware detection failed — using software fallback', {
       variant: 'warning',
       ttl: 5000,
@@ -57,6 +73,7 @@ export function usePipeline(): PipelineApi {
     ).dragHover;
   } catch (err) {
     log.error('useDragDrop failed, drag-drop disabled:', err);
+    appendLog('[INFO] Drag-and-drop is unavailable in this environment');
     showToast('Drag-and-drop is unavailable in this environment', {
       variant: 'info',
       ttl: 4000,
@@ -69,7 +86,6 @@ export function usePipeline(): PipelineApi {
   const [running, setRunning] = createSignal(false);
   const [paused, setPaused] = createSignal(false);
   const [jobs, setJobs] = createSignal<JobProgress[]>([]);
-  const [logs, setLogs] = createSignal<string[]>([]);
 
   const progress = useProgressTracker();
 
@@ -80,19 +96,6 @@ export function usePipeline(): PipelineApi {
   // would otherwise be stuck in `running=true, paused=true` indefinitely.
   // The handlePaused event handler clears this timer once the ack arrives.
   let pauseReconcileTimer: ReturnType<typeof setTimeout> | null = null;
-  const logBuffer = new RingBuffer<string>(MAX_LOGS);
-
-  const flushLogs = () => setLogs(logBuffer.toArray());
-
-  let logPushesSinceFlush = 0;
-  const appendLog = (line: string) => {
-    logBuffer.push(line);
-    logPushesSinceFlush += 1;
-    if (logPushesSinceFlush >= 10 || logBuffer.length === 1) {
-      logPushesSinceFlush = 0;
-      flushLogs();
-    }
-  };
 
   const safeUnlisten = () => {
     if (!unlistenGuard && unlisten) {
@@ -282,6 +285,9 @@ export function usePipeline(): PipelineApi {
         pauseReconcileTimer = null;
         if (running() && paused()) {
           log.warn('Pause ack timeout; reverting paused state');
+          appendLog(
+            '[WARN] Pause request timed out — the render may still be running',
+          );
           setPaused(false);
           progress.setOverallEta('Pause timeout');
           showToast('Pause timed out', { variant: 'warning', ttl: 5000 });

@@ -26,6 +26,9 @@ export const SHORTCUTS: ShortcutEntry[] = [
   },
 
   // Rendering — active when the renderer is mounted.
+  { group: 'Render', keys: ['Ctrl', 'Enter'], label: 'Start render' },
+  { group: 'Render', keys: ['Ctrl', 'P'], label: 'Pause / Resume render' },
+  { group: 'Render', keys: ['Ctrl', 'Shift', 'C'], label: 'Cancel render' },
   { group: 'Render', keys: ['Ctrl', '1'], label: 'Open Render tab' },
   { group: 'Render', keys: ['Ctrl', '2'], label: 'Open Activity tab' },
 

@@ -11,8 +11,17 @@ export function AppHeader(props: {
   onPause: () => void;
   canStart: boolean;
   disabledReason?: string;
+  /**
+   * Human-readable render estimate shown near the Start button.
+   * Example: "~45 videos · ~12 min each ≃ 9 hours". Pass undefined to hide.
+   */
+  renderEstimate?: string;
 }) {
   const [showCancelDialog, setShowCancelDialog] = createSignal(false);
+  // Track whether the cancel was triggered from the paused state so the
+  // dialog text can reflect the actual situation (FFmpeg is already stopped
+  // when paused, so there is no active process to kill).
+  const [cancelFromPaused, setCancelFromPaused] = createSignal(false);
   let cancelModalRef: HTMLDialogElement | undefined;
   // Captured in the show-effect below; consumed by the close-handler so the
   // opener button (or whatever had focus before showModal()) regains focus
@@ -109,18 +118,37 @@ export function AppHeader(props: {
                   <Icon icon="lucide:play" width="18" height="18" />
                   Start new batch
                 </button>
+                {props.renderEstimate && (
+                  <p class="mt-1.5 text-center text-xs text-base-content/50">
+                    {props.renderEstimate}
+                  </p>
+                )}
               </div>
             </Show>
 
             <Show when={!props.running && props.paused}>
-              <button
-                type="button"
-                class="btn btn-primary w-full gap-2"
-                onClick={() => props.onResume()}
-              >
-                <Icon icon="lucide:play-circle" width="18" height="18" />
-                Resume render
-              </button>
+              <div class="flex flex-col gap-2 animate-fadeIn">
+                <button
+                  type="button"
+                  class="btn btn-primary w-full gap-2"
+                  onClick={() => props.onResume()}
+                >
+                  <Icon icon="lucide:play-circle" width="18" height="18" />
+                  Resume render
+                </button>
+
+                <button
+                  type="button"
+                  class="btn btn-outline btn-error w-full gap-2"
+                  onClick={() => {
+                    setCancelFromPaused(true);
+                    setShowCancelDialog(true);
+                  }}
+                >
+                  <Icon icon="lucide:circle-stop" width="18" height="18" />
+                  Cancel render
+                </button>
+              </div>
             </Show>
 
             <Show when={props.running}>
@@ -137,7 +165,10 @@ export function AppHeader(props: {
                 <button
                   type="button"
                   class="btn btn-outline btn-error w-full gap-2"
-                  onClick={() => setShowCancelDialog(true)}
+                  onClick={() => {
+                    setCancelFromPaused(false);
+                    setShowCancelDialog(true);
+                  }}
                 >
                   <Icon icon="lucide:circle-stop" width="18" height="18" />
                   Cancel render
@@ -154,9 +185,6 @@ export function AppHeader(props: {
           class="modal modal-bottom sm:modal-middle"
           onClose={() => {
             setShowCancelDialog(false);
-            // Restore focus to whatever element was active before the modal
-            // opened — prevents screen readers and keyboard users from being
-            // stranded at <body> after dismissing the dialog.
             restoreFocusOnClose();
           }}
         >
@@ -166,12 +194,15 @@ export function AppHeader(props: {
               Cancel render?
             </h3>
             <p class="py-4 text-sm text-base-content/70">
-              The current FFmpeg process will stop and unfinished output for the
-              active job may be incomplete.
+              {cancelFromPaused()
+                ? 'The render is currently paused. Cancelling will discard all progress and you will need to start over.'
+                : 'The current FFmpeg process will stop and unfinished output for the active job may be incomplete.'}
             </p>
             <div class="modal-action mt-0">
               <form method="dialog">
-                <button class="btn btn-ghost">Keep rendering</button>
+                <button class="btn btn-ghost">
+                  {cancelFromPaused() ? 'Keep paused' : 'Keep rendering'}
+                </button>
               </form>
               <button class="btn btn-error" onClick={confirmCancel}>
                 Cancel render

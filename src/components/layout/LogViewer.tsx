@@ -14,6 +14,7 @@ import {
   parseLevel,
   type LogLevel,
 } from '../../core/logLevels';
+import { safeSetStorageItem } from '../../core/storage';
 
 // Height (px) of a single visual line in the monospace container at the
 // `text-xs` size with `leading-relaxed` line-height.
@@ -103,14 +104,34 @@ export function LogViewer(props: { logs: string[] }) {
   const [contentWidth, setContentWidth] = createSignal(0);
   const [shouldAutoScroll, setShouldAutoScroll] = createSignal(true);
 
-  // ---- Filter / search state (local — never persisted) ----
-  // Default: all 3 levels enabled, no search query. Mirrors "show
-  // everything" so the existing tests that look up first-paint DOM
-  // remain valid.
-  const [enabledLevels, setEnabledLevels] = createSignal<Set<LogLevel>>(
-    new Set(ALL_LEVELS),
-  );
-  const [searchQuery, setSearchQuery] = createSignal('');
+  // ---- Filter / search state (persisted across tab switches) ----
+  // Levels are stored as a comma-separated string in localStorage so the
+  // filter survives mount/unmount cycles (tab switches).
+  const readEnabledLevels = (): Set<LogLevel> => {
+    try {
+      const raw = localStorage.getItem('logs.filter.levels');
+      if (raw) {
+        const parsed = raw
+          .split(',')
+          .filter((l) => ALL_LEVELS.includes(l as LogLevel)) as LogLevel[];
+        if (parsed.length > 0) return new Set(parsed);
+      }
+    } catch {
+      /* quota / disabled */
+    }
+    return new Set(ALL_LEVELS);
+  };
+  const readSearchQuery = (): string => {
+    try {
+      return localStorage.getItem('logs.filter.query') ?? '';
+    } catch {
+      return '';
+    }
+  };
+
+  const [enabledLevels, setEnabledLevels] =
+    createSignal<Set<LogLevel>>(readEnabledLevels());
+  const [searchQuery, setSearchQuery] = createSignal(readSearchQuery());
   let searchInputRef: HTMLInputElement | undefined;
 
   const toggleLevel = (level: LogLevel) => {
@@ -118,8 +139,14 @@ export function LogViewer(props: { logs: string[] }) {
       const next = new Set(cur);
       if (next.has(level)) next.delete(level);
       else next.add(level);
+      safeSetStorageItem('logs.filter.levels', [...next].join(','));
       return next;
     });
+  };
+
+  const handleSearchInput = (value: string) => {
+    setSearchQuery(value);
+    safeSetStorageItem('logs.filter.query', value);
   };
 
   // Filtered (and search-narrowed) view of the logs that the virtual
@@ -263,8 +290,23 @@ export function LogViewer(props: { logs: string[] }) {
       // as onMount — so the two paths stay consistent. `contentRect` would
       // exclude padding and break the `- 24` in `charsPerLine`.
       if (!containerRef) return;
-      setViewportHeight(containerRef.clientHeight);
-      setContentWidth(containerRef.clientWidth);
+      const newHeight = containerRef.clientHeight;
+      const newWidth = containerRef.clientWidth;
+      const prevWidth = contentWidth();
+
+      // When the scrollbar appears or disappears the container's clientWidth
+      // shifts by ~15-17 px (scrollbar gutter). That tiny change retriggers
+      // the full virtual-scroll pipeline (charsPerLine → rowHeights →
+      // prefixSums) and remaps the user's scroll position to different items,
+      // causing visible content to jump. Skip the update when the delta is
+      // small enough to be a scrollbar toggle rather than a real panel resize.
+      if (prevWidth > 0 && Math.abs(newWidth - prevWidth) <= 18) {
+        setViewportHeight(newHeight);
+      } else {
+        setViewportHeight(newHeight);
+        setContentWidth(newWidth);
+      }
+
       // If the user was at the bottom, re-scroll so new content stays visible.
       if (shouldAutoScroll()) {
         rAFId = requestAnimationFrame(() => {
@@ -285,10 +327,15 @@ export function LogViewer(props: { logs: string[] }) {
   // to work after the ring buffer fills up and length stops changing.
   createEffect(() => {
     filteredLogs();
-    if (!containerRef || !shouldAutoScroll()) return;
 
     const id = requestAnimationFrame(() => {
       if (!containerRef) return;
+      // Re-check shouldAutoScroll inside the rAF callback — by the time the
+      // frame paints, a concurrent user scroll may have toggled it off.
+      // Reading the signal here (not in the outer effect body) avoids a race
+      // where new logs arrive between the user scrolling up and the next
+      // handleScroll firing.
+      if (!shouldAutoScroll()) return;
       containerRef.scrollTop = containerRef.scrollHeight;
       setScrollTop(containerRef.scrollTop);
     });
@@ -309,20 +356,49 @@ export function LogViewer(props: { logs: string[] }) {
             />
             <h3 class="font-semibold">Logs</h3>
           </div>
-          <span
-            class={`badge badge-ghost badge-sm font-mono ${
-              isFiltering() ? 'badge-info' : ''
-            }`}
-            aria-label={
-              isFiltering()
-                ? `Showing ${filteredLogs().length} of ${props.logs.length} log lines`
-                : `${props.logs.length} log lines`
-            }
-          >
-            {isFiltering()
-              ? `${filteredLogs().length} / ${props.logs.length}`
-              : props.logs.length}
-          </span>
+          <div class="flex items-center gap-1.5">
+            <Show when={props.logs.length > 0}>
+              <button
+                type="button"
+                class="btn btn-ghost btn-xs gap-1"
+                title="Copy all logs to clipboard"
+                aria-label="Copy all logs to clipboard"
+                onClick={async () => {
+                  const text = props.logs.join('\n');
+                  try {
+                    await navigator.clipboard.writeText(text);
+                  } catch {
+                    // Fallback for insecure contexts
+                    const ta = document.createElement('textarea');
+                    ta.value = text;
+                    ta.style.position = 'fixed';
+                    ta.style.left = '-9999px';
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(ta);
+                  }
+                }}
+              >
+                <Icon icon="lucide:clipboard-copy" width="12" height="12" />
+                Copy all
+              </button>
+            </Show>
+            <span
+              class={`badge badge-ghost badge-sm font-mono ${
+                isFiltering() ? 'badge-info' : ''
+              }`}
+              aria-label={
+                isFiltering()
+                  ? `Showing ${filteredLogs().length} of ${props.logs.length} log lines`
+                  : `${props.logs.length} log lines`
+              }
+            >
+              {isFiltering()
+                ? `${filteredLogs().length} / ${props.logs.length}`
+                : props.logs.length}
+            </span>
+          </div>
         </div>
 
         <Show when={props.logs.length > 0}>
@@ -369,7 +445,7 @@ export function LogViewer(props: { logs: string[] }) {
                 value={searchQuery()}
                 aria-label="Filter log lines by text"
                 data-testid="log-search-input"
-                onInput={(e) => setSearchQuery(e.currentTarget.value)}
+                onInput={(e) => handleSearchInput(e.currentTarget.value)}
               />
               <Show when={searchQuery().length > 0}>
                 <button
@@ -377,7 +453,7 @@ export function LogViewer(props: { logs: string[] }) {
                   class="btn btn-ghost btn-xs btn-square absolute right-1 top-1/2 -translate-y-1/2"
                   aria-label="Clear log filter"
                   onClick={() => {
-                    setSearchQuery('');
+                    handleSearchInput('');
                     searchInputRef?.focus();
                   }}
                 >
@@ -401,7 +477,7 @@ export function LogViewer(props: { logs: string[] }) {
               when={props.logs.length > 0}
               fallback={
                 <div class="py-10 text-center text-neutral-content/65">
-                  No log output yet.
+                  Logs will appear here when you start a render.
                 </div>
               }
             >

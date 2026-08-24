@@ -87,6 +87,12 @@ pub async fn build_master_audio_pool(
 
     let processed = Arc::new(AtomicUsize::new(0));
     let total = dedup_files.len();
+    // Track the last milestone band we emitted so concurrent completions
+    // don't produce duplicate progress lines.
+    let emitted_milestone = Arc::new(AtomicUsize::new(0));
+    // Milestone granularity: every 10 tracks for large pools, every 25% for
+    // small ones (≤20 tracks). Minimum step of 1 so the division never panics.
+    let milestone_step = if total <= 20 { (total / 4).max(1) } else { 10usize };
     let cache_dir_arc = Arc::new(cache_dir.to_path_buf());
 
     let loudnorm_params = settings.loudnorm_params.clone();
@@ -101,6 +107,7 @@ pub async fn build_master_audio_pool(
         let lp = loudnorm_params.clone();
         let br = bitrate.clone();
         let processed = Arc::clone(&processed);
+        let emitted_milestone = Arc::clone(&emitted_milestone);
         async move {
             // Pre-flight cancel before spawning any heavyweight probe.
             if let Some(c) = cancel_control.as_ref() {
@@ -287,29 +294,34 @@ pub async fn build_master_audio_pool(
                 return Err(AppError::InvalidDuration(song));
             }
 
-            // FEATURE 4 (per-track progress): emit `Audio N/M ready: ...`
-            // after every track finishes. The label tells the user
-            // exactly which code path executed.
             let completed = processed.fetch_add(1, Ordering::Relaxed) + 1;
-            let mode_label = if use_smart_skip {
-                "copied (smart-skip)"
-            } else if measurement.is_some() {
-                "normalized 2-pass"
-            } else if normalize {
-                "normalized (1-pass fallback)"
-            } else {
-                "re-encoded"
-            };
-            event::emit(
-                &app_clone,
-                crate::models::job::PipelineEvent::Log {
-                    level: "info".into(),
-                    message: format!(
-                        "Audio {}/{} ready: {} ({})",
-                        completed, total, original_name, mode_label
-                    ),
-                },
-            );
+            // Emit a single progress line at each milestone (every N tracks
+            // or every 25% for small pools) instead of one line per track.
+            // `fetch_max` ensures only the first completion that crosses a
+            // milestone band emits the log, even under concurrent dispatch.
+            let band = completed / milestone_step;
+            let prev = emitted_milestone.fetch_max(band, Ordering::Relaxed);
+            if band > prev || completed == total {
+                let mode_summary = if use_smart_skip {
+                    "stream-copied"
+                } else if measurement.is_some() {
+                    "2-pass normalized"
+                } else if normalize {
+                    "1-pass normalized"
+                } else {
+                    "re-encoded"
+                };
+                event::emit(
+                    &app_clone,
+                    crate::models::job::PipelineEvent::Log {
+                        level: "info".into(),
+                        message: format!(
+                            "Audio pool: {}/{} tracks ready ({})",
+                            completed, total, mode_summary
+                        ),
+                    },
+                );
+            }
 
             Ok(ProcessedAudio {
                 path: cache_path.to_string_lossy().to_string(),

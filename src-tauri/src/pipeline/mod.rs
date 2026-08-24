@@ -580,6 +580,9 @@ impl Pipeline {
         // pipeline from the state file.
         let mut idx = 0usize;
         let mut pause_exit = false;
+        let milestone_step = if total_jobs <= 20 { (total_jobs / 4).max(1) } else { 10usize };
+        let mut completed: usize = 0;
+        let mut last_milestone: usize = 0;
         while idx < total_jobs {
             if control.is_cancelled() {
                 break;
@@ -609,6 +612,18 @@ impl Pipeline {
                     .state_manager
                     .save_state_from_arc(&state_path, &jobs_arc)
                     .await;
+                completed += 1;
+                let band = completed / milestone_step;
+                if band > last_milestone || completed == total_jobs {
+                    event::emit(
+                        &pipeline_arc.app,
+                        PipelineEvent::Log {
+                            level: "success".into(),
+                            message: format!("Videos: {}/{} done", completed, total_jobs),
+                        },
+                    );
+                    last_milestone = band;
+                }
                 idx += 1;
                 continue;
             }
@@ -659,14 +674,18 @@ impl Pipeline {
                             .state_manager
                             .save_state_from_arc(&state_path, &jobs_arc)
                             .await;
-                    } else {
+                    }
+                    completed += 1;
+                    let band = completed / milestone_step;
+                    if band > last_milestone || completed == total_jobs {
                         event::emit(
                             &pipeline_arc.app,
                             PipelineEvent::Log {
                                 level: "success".into(),
-                                message: format!("Job {} finished", idx),
+                                message: format!("Videos: {}/{} done", completed, total_jobs),
                             },
                         );
+                        last_milestone = band;
                     }
                     idx += 1;
                 }

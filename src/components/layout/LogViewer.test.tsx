@@ -5,7 +5,9 @@ import { LogViewer } from './LogViewer';
 describe('LogViewer', () => {
   it('shows empty state when logs array is empty', () => {
     render(() => <LogViewer logs={[]} />);
-    expect(screen.getByText('No log output yet.')).toBeTruthy();
+    expect(
+      screen.getByText('Logs will appear here when you start a render.'),
+    ).toBeTruthy();
   });
 
   it('renders log lines', () => {

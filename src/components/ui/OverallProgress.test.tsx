@@ -3,8 +3,16 @@ import { render, screen } from '@solidjs/testing-library';
 import { OverallProgress } from './OverallProgress';
 
 describe('OverallProgress', () => {
-  it('renders skeleton placeholder when value is 0 and no eta', () => {
-    const { container } = render(() => <OverallProgress value={0} />);
+  it('renders idle placeholder when active is false', () => {
+    render(() => <OverallProgress value={0} active={false} />);
+    expect(screen.getByText('Waiting for render start')).toBeTruthy();
+    expect(screen.getByLabelText('Batch progress — idle')).toBeTruthy();
+  });
+
+  it('renders skeleton placeholder when active but value is 0 and no eta', () => {
+    const { container } = render(() => (
+      <OverallProgress value={0} active={true} />
+    ));
     // Should render skeleton shimmer elements instead of the actual UI
     expect(
       container.querySelectorAll('.skeleton-shimmer').length,
@@ -14,43 +22,43 @@ describe('OverallProgress', () => {
   });
 
   it('renders skeleton with correct aria label', () => {
-    render(() => <OverallProgress value={0} />);
+    render(() => <OverallProgress value={0} active={true} />);
     expect(screen.getByLabelText('Batch progress loading')).toBeTruthy();
   });
 
   it('renders the progress percentage when value > 0', () => {
-    render(() => <OverallProgress value={50} />);
+    render(() => <OverallProgress value={50} active={true} />);
     expect(screen.getByText('50%')).toBeTruthy();
   });
 
   it('renders the ETA when provided', () => {
-    render(() => <OverallProgress value={30} eta="5m 0s left" />);
+    render(() => <OverallProgress value={30} eta="5m 0s left" active={true} />);
     expect(screen.getByText('5m 0s left')).toBeTruthy();
   });
 
   it('shows "Preparing..." when ETA is empty but value > 0', () => {
-    render(() => <OverallProgress value={1} />);
+    render(() => <OverallProgress value={1} active={true} />);
     expect(screen.getByText('Preparing...')).toBeTruthy();
   });
 
   it('clamps value to 0 when negative (non-zero shows real UI)', () => {
-    render(() => <OverallProgress value={-10} />);
+    render(() => <OverallProgress value={-10} active={true} />);
     // -10 !== 0, so it renders the real UI with safeValue = 0
     expect(screen.getByText('0%')).toBeTruthy();
   });
 
   it('clamps value to 100 when above max', () => {
-    render(() => <OverallProgress value={150} />);
+    render(() => <OverallProgress value={150} active={true} />);
     expect(screen.getByText('100%')).toBeTruthy();
   });
 
   it('handles NaN value gracefully (renders real UI clamped to 0)', () => {
-    render(() => <OverallProgress value={NaN} />);
+    render(() => <OverallProgress value={NaN} active={true} />);
     expect(screen.getByText('0%')).toBeTruthy();
   });
 
   it('renders with progress element attributes for accessibility', () => {
-    render(() => <OverallProgress value={75} />);
+    render(() => <OverallProgress value={75} active={true} />);
     const bar = screen.getByRole('progressbar');
     expect((bar as HTMLProgressElement).value).toBe(75);
     expect((bar as HTMLProgressElement).max).toBe(100);

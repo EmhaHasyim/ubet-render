@@ -97,6 +97,12 @@ export function VideoEncodingSection(props: {
           value={props.outputPrefix()}
           onInput={(e) => props.onPrefixChange(e.currentTarget.value)}
         />
+        <span class="label py-1">
+          <span class="label-text-alt text-base-content/50">
+            Used as the filename prefix:{' '}
+            <em>{props.outputPrefix() || 'Ubet Render'} - video_name.mp4</em>
+          </span>
+        </span>
       </label>
     </CollapsibleSection>
   );

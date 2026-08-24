@@ -44,15 +44,18 @@ export function FeaturesSection(props: {
       </label>
 
       <label
-        class="flex min-h-20 items-center justify-between gap-4 rounded-lg border-2 border-primary/30 bg-primary/5 px-4 py-3"
+        class="flex min-h-20 items-center justify-between gap-4 rounded-lg border border-base-300 bg-base-100 px-4 py-3"
         data-testid="zero-reencode-toggle"
         title="When ON, the intermediate re-encode step is bypassed entirely and the source video is stream-copied directly. The output codec is determined by the source file — no codec matching check is performed. Disables ping-pong processing."
       >
         <span>
-          <span class="block text-sm font-semibold text-primary">
+          <span class="inline-flex items-center gap-2 text-sm font-medium">
             Skip re-encode (direct stream copy)
+            <span class="badge badge-xs badge-outline text-[0.625rem]">
+              ADVANCED
+            </span>
           </span>
-          <span class="block text-xs text-base-content/70">
+          <span class="block text-xs text-base-content/60">
             Bypass the intermediate re-encode and use the source video as-is.
             The output codec will follow the source file; ping-pong is
             unavailable in this mode.

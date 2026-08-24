@@ -1,5 +1,8 @@
 import {
   createEffect,
+  createMemo,
+  onCleanup,
+  onMount,
   Show,
   type Accessor,
   type JSX,
@@ -7,6 +10,8 @@ import {
 } from 'solid-js';
 import { Icon } from '@iconify-icon/solid';
 import { getCurrentWindow, ProgressBarStatus } from '@tauri-apps/api/window';
+import { confirm } from '@tauri-apps/plugin-dialog';
+import { getSourcePaths } from '../../core/config';
 import { usePipeline } from '../../hooks/usePipeline';
 import {
   AppHeader,
@@ -60,6 +65,102 @@ export function Dashboard(props: {
 
   const tabClass = (tab: AppTabId) =>
     `tab gap-2 ${activeTab() === tab ? 'tab-active' : ''}`;
+
+  // ── Render keyboard shortcuts + close guard ──────────────
+  onMount(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Don't intercept shortcuts when the user is typing in an input field.
+      const tag = (event.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+      const mod = event.metaKey || event.ctrlKey;
+
+      // Ctrl+Enter → Start
+      if (
+        mod &&
+        event.key === 'Enter' &&
+        !pipeline.running() &&
+        !pipeline.paused() &&
+        pipeline.canStart()
+      ) {
+        event.preventDefault();
+        pipeline.startRender(false);
+      }
+
+      // Ctrl+P → Pause / Resume
+      if (mod && event.key === 'p' && !event.shiftKey) {
+        event.preventDefault();
+        if (pipeline.running()) pipeline.pauseRender();
+        else if (pipeline.paused()) pipeline.resumeRender();
+      }
+
+      // Ctrl+Shift+C → Cancel (when running or paused)
+      if (
+        mod &&
+        event.shiftKey &&
+        event.key === 'C' &&
+        (pipeline.running() || pipeline.paused())
+      ) {
+        event.preventDefault();
+        pipeline.cancelRender();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+
+    // Intercept window close while rendering — save state first so the user
+    // can resume later.  A native dialog confirms the action.
+    const unlistenClose = appWindow.onCloseRequested(async (ev) => {
+      if (!pipeline.running() && !pipeline.paused()) return;
+      // Prevent immediate close; the dialog is async.
+      ev.preventDefault();
+      const isPaused = !pipeline.running() && pipeline.paused();
+      const ok = await confirm(
+        isPaused
+          ? 'A render is paused. Close anyway? Progress will be saved.'
+          : 'A render is in progress. Close anyway?',
+        {
+          title: isPaused ? 'Render paused' : 'Render in progress',
+          kind: 'warning',
+          okLabel: 'Close',
+          cancelLabel: isPaused ? 'Keep paused' : 'Keep rendering',
+        },
+      );
+      if (ok) {
+        // Auto-pause + save before closing so the user can resume.
+        if (pipeline.running()) await pipeline.pauseRender();
+        appWindow.close();
+      }
+    });
+
+    onCleanup(() => {
+      window.removeEventListener('keydown', handleKeyDown);
+      unlistenClose.then((fn) => fn()).catch(() => {});
+    });
+  });
+
+  // ── Pre-start render estimate ────────────────────────────
+  const renderEstimate = createMemo(() => {
+    if (pipeline.running() || pipeline.paused()) return undefined;
+    const videoCount = getSourcePaths(pipeline.videoSource()).length;
+    const audioCount = getSourcePaths(pipeline.audioSource()).length;
+    if (videoCount === 0 || audioCount === 0) return undefined;
+
+    const songsPerVideo = pipeline.songsPerPlaylist();
+    const totalSongs = videoCount * songsPerVideo;
+    const loopMode = pipeline.loopMode();
+
+    let loopDesc = '';
+    if (loopMode === 'duration') {
+      const hrs = pipeline.minDurationHours();
+      loopDesc = ` · min ${hrs}h`;
+    } else {
+      const cnt = pipeline.loopCount();
+      loopDesc = ` · ${cnt}x loop`;
+    }
+
+    return `${videoCount} video${videoCount > 1 ? 's' : ''} · ~${songsPerVideo} song${songsPerVideo > 1 ? 's' : ''} each · ${totalSongs} total${loopDesc}`;
+  });
 
   // ── Taskbar progress indicator (Windows) ───────────────────
   createEffect(() => {
@@ -176,6 +277,28 @@ export function Dashboard(props: {
         </div>
       </header>
 
+      {/* ---- Slim progress bar (YouTube-style) ---- */}
+      <Show
+        when={
+          pipeline.running() ||
+          pipeline.paused() ||
+          pipeline.overallProgress() > 0
+        }
+      >
+        <div
+          class="h-1 bg-base-200"
+          role="progressbar"
+          aria-label="Global render progress"
+        >
+          <div
+            class="h-full bg-primary transition-all duration-500 ease-linear"
+            style={{
+              width: `${Math.min(100, Math.max(0, pipeline.overallProgress() || 0))}%`,
+            }}
+          />
+        </div>
+      </Show>
+
       {/* ---- Main content area ---- */}
       <main class="flex flex-col overflow-hidden h-[calc(100vh-6.75rem)]">
         {/* ---- Render tab: full-page scroll ---- */}
@@ -204,6 +327,19 @@ export function Dashboard(props: {
                     <StatsStrip />
 
                     <SettingsCard />
+
+                    {/* Mini log viewer — shows while render is running so
+                        the user doesn't need to switch tabs to see progress */}
+                    <Show
+                      when={
+                        pipeline.running() ||
+                        pipeline.paused() ||
+                        (pipeline.overallProgress() > 0 &&
+                          pipeline.overallProgress() < 100)
+                      }
+                    >
+                      <MiniLogViewer logs={pipeline.logs()} />
+                    </Show>
                   </div>
 
                   <aside class="flex min-w-0 flex-col gap-5">
@@ -216,20 +352,20 @@ export function Dashboard(props: {
                       onPause={pipeline.pauseRender}
                       canStart={pipeline.canStart()}
                       disabledReason={pipeline.disabledReason()}
+                      renderEstimate={renderEstimate()}
                     />
 
                     <HardwareInfo info={pipeline.hardwareInfo()} />
 
-                    <Show
-                      when={
-                        pipeline.running() || pipeline.overallProgress() > 0
+                    <OverallProgress
+                      value={pipeline.overallProgress()}
+                      eta={pipeline.overallEta()}
+                      active={
+                        pipeline.running() ||
+                        pipeline.paused() ||
+                        pipeline.overallProgress() > 0
                       }
-                    >
-                      <OverallProgress
-                        value={pipeline.overallProgress()}
-                        eta={pipeline.overallEta()}
-                      />
-                    </Show>
+                    />
                   </aside>
                 </div>
               </div>
@@ -288,5 +424,61 @@ export function Dashboard(props: {
         </Show>
       </main>
     </div>
+  );
+}
+
+/**
+ * Compact log viewer for the Render tab — shows the last few log lines so
+ * the user can monitor progress without switching to the Activity tab.
+ * Height-constrained and auto-scrolls to the bottom on new entries.
+ */
+function MiniLogViewer(props: { logs: string[] }) {
+  let scrollRef!: HTMLDivElement;
+
+  // Show only the last 8 lines — enough for the most recent milestone and
+  // any trailing warnings, but not so many that it dominates the layout.
+  const visible = () => props.logs.slice(-8);
+
+  // Auto-scroll to the bottom whenever logs change.
+  createEffect(() => {
+    props.logs;
+    if (scrollRef) {
+      requestAnimationFrame(() => {
+        if (scrollRef) scrollRef.scrollTop = scrollRef.scrollHeight;
+      });
+    }
+  });
+
+  return (
+    <section class="panel flex min-h-0 flex-col overflow-hidden">
+      <div class="flex items-center gap-2 border-b border-base-300 px-3 py-2 shrink-0">
+        <Icon
+          icon="lucide:terminal"
+          class="text-primary"
+          width="14"
+          height="14"
+        />
+        <span class="text-xs font-semibold">Recent logs</span>
+        <span class="badge badge-ghost badge-xs ml-auto font-mono">
+          {props.logs.length}
+        </span>
+      </div>
+      <div
+        ref={scrollRef}
+        class="max-h-40 overflow-y-auto bg-neutral p-2 font-mono text-xs leading-relaxed text-neutral-content custom-scrollbar"
+      >
+        {visible().length === 0 ? (
+          <p class="py-2 text-center text-neutral-content/50 text-[0.65rem]">
+            Waiting for logs...
+          </p>
+        ) : (
+          visible().map((line) => (
+            <pre class="whitespace-pre-wrap break-words">
+              <code>{line}</code>
+            </pre>
+          ))
+        )}
+      </div>
+    </section>
   );
 }
