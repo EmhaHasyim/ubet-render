@@ -20,7 +20,7 @@ export function VideoEncodingSection(props: {
   onPrefixChange: (v: string) => void;
 }) {
   return (
-    <CollapsibleSection icon="lucide:monitor" title="Video & Encoding">
+    <CollapsibleSection step={3} title="Video & Encoding">
       <label class="form-control">
         <span class="label py-1">
           <span class="label-text font-medium">Video codec</span>

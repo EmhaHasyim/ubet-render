@@ -17,7 +17,22 @@ vi.mock('@tauri-apps/api/window', () => ({
   })),
 }));
 
+import { createSignal } from 'solid-js';
 import { Titlebar } from './Titlebar';
+import type { AppTabId } from '../../hooks/useAppShortcuts';
+
+function renderTitlebar(overrides?: Partial<Parameters<typeof Titlebar>[0]>) {
+  const [activeTab, setActiveTab] = createSignal<AppTabId>('renderer');
+  const props = {
+    activeTab,
+    setActiveTab,
+    running: false,
+    paused: false,
+    jobCount: 0,
+    ...overrides,
+  };
+  return render(() => <Titlebar {...props} />);
+}
 
 describe('Titlebar', () => {
   beforeEach(() => {
@@ -26,46 +41,46 @@ describe('Titlebar', () => {
   });
 
   it('renders the titlebar with app name', () => {
-    render(() => <Titlebar />);
+    renderTitlebar();
     expect(screen.getByText('Ubet Render')).toBeTruthy();
   });
 
   it('renders minimize button', () => {
-    render(() => <Titlebar />);
+    renderTitlebar();
     expect(screen.getByLabelText('Minimize')).toBeTruthy();
   });
 
   it('renders maximize button (not maximized)', () => {
-    render(() => <Titlebar />);
+    renderTitlebar();
     expect(screen.getByLabelText('Maximize')).toBeTruthy();
   });
 
   it('renders close button', () => {
-    render(() => <Titlebar />);
+    renderTitlebar();
     expect(screen.getByLabelText('Close to tray')).toBeTruthy();
   });
 
   it('calls minimize on minimize button click', async () => {
-    render(() => <Titlebar />);
+    renderTitlebar();
     screen.getByLabelText('Minimize').click();
     // SolidJS async onMount hasn't resolved yet, but click handler is sync
     expect(mockMinimize).toHaveBeenCalled();
   });
 
   it('calls toggleMaximize on maximize button click', async () => {
-    render(() => <Titlebar />);
+    renderTitlebar();
     screen.getByLabelText('Maximize').click();
     expect(mockToggleMaximize).toHaveBeenCalled();
   });
 
   it('calls hide on close button click', async () => {
-    render(() => <Titlebar />);
+    renderTitlebar();
     screen.getByLabelText('Close to tray').click();
     expect(mockHide).toHaveBeenCalled();
   });
 
   it('shows context menu items on right click', () => {
-    const { container } = render(() => <Titlebar />);
+    const { container } = renderTitlebar();
     const dragRegion = container.querySelector(
       '[data-tauri-drag-region]',
     ) as HTMLElement;
@@ -79,7 +94,7 @@ describe('Titlebar', () => {
 
   it('shows Restore label when maximized on mount', async () => {
     mockIsMaximized.mockResolvedValue(true);
-    render(() => <Titlebar />);
+    renderTitlebar();
 
     await vi.waitFor(() => {
       expect(screen.getByLabelText('Restore')).toBeTruthy();

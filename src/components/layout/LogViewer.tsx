@@ -345,16 +345,16 @@ export function LogViewer(props: { logs: string[] }) {
   return (
     <section class="panel flex min-h-0 min-w-0 flex-col overflow-hidden">
       {/* ---- Header: title, level chips, search, count badge ---- */}
-      <div class="flex flex-col gap-2 border-b border-base-300 px-3 py-2 shrink-0">
+      <div class="flex flex-col gap-2 border-b border-base-300/70 px-3.5 py-2.5 shrink-0">
         <div class="flex items-center justify-between gap-2">
           <div class="flex items-center gap-2">
             <Icon
               icon="lucide:terminal"
-              class="text-primary"
-              width="18"
-              height="18"
+              class="text-base-content/50"
+              width="16"
+              height="16"
             />
-            <h3 class="font-semibold">Logs</h3>
+            <h3 class="text-sm font-semibold">Logs</h3>
           </div>
           <div class="flex items-center gap-1.5">
             <Show when={props.logs.length > 0}>
@@ -467,7 +467,7 @@ export function LogViewer(props: { logs: string[] }) {
 
       <div
         ref={containerRef}
-        class="min-h-0 flex-1 overflow-y-auto bg-neutral p-3 font-mono text-xs leading-relaxed text-neutral-content custom-scrollbar"
+        class="min-h-0 flex-1 overflow-y-auto border-t border-base-300/40 bg-base-200/60 p-3 font-mono text-xs leading-relaxed text-base-content/75 custom-scrollbar"
         onScroll={handleScroll}
       >
         <Show
@@ -476,12 +476,12 @@ export function LogViewer(props: { logs: string[] }) {
             <Show
               when={props.logs.length > 0}
               fallback={
-                <div class="py-10 text-center text-neutral-content/65">
+                <div class="py-10 text-center text-base-content/55">
                   Logs will appear here when you start a render.
                 </div>
               }
             >
-              <div class="py-10 text-center text-neutral-content/65">
+              <div class="py-10 text-center text-base-content/55">
                 <Icon
                   icon="lucide:filter-x"
                   class="mx-auto mb-2 opacity-70"

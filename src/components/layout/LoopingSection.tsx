@@ -15,7 +15,7 @@ export function LoopingSection(props: {
   onCountChange: (v: number) => void;
 }) {
   return (
-    <CollapsibleSection icon="lucide:repeat-2" title="Looping">
+    <CollapsibleSection step={4} title="Looping">
       <div class="fieldset p-0">
         <span class="fieldset-legend">Repeat mode</span>
         <div class="join w-full">

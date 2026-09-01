@@ -25,17 +25,17 @@ export function OverallProgress(props: {
           <div class="card-body p-4">
             <div class="mb-3 flex items-center justify-between gap-3">
               <div>
-                <h3 class="font-semibold">Batch progress</h3>
-                <p class="text-sm text-base-content/60">
+                <h3 class="text-sm font-semibold">Batch progress</h3>
+                <p class="mt-0.5 text-[13px] text-base-content/50">
                   Waiting for render start
                 </p>
               </div>
-              <span class="font-mono text-xl font-semibold text-base-content/25">
+              <span class="font-mono text-xl font-semibold text-base-content/20">
                 —
               </span>
             </div>
             <progress
-              class="progress progress-primary w-full h-3"
+              class="progress progress-primary w-full h-2.5"
               value={0}
               max="100"
               aria-label="Batch progress (idle)"
@@ -66,8 +66,8 @@ export function OverallProgress(props: {
           <div class="card-body p-4">
             <div class="mb-3 flex items-center justify-between gap-3">
               <div>
-                <h3 class="font-semibold">Batch progress</h3>
-                <p class="text-sm text-base-content/60">
+                <h3 class="text-sm font-semibold">Batch progress</h3>
+                <p class="mt-0.5 text-[13px] text-base-content/50">
                   {props.eta || 'Preparing...'}
                 </p>
               </div>
@@ -76,7 +76,7 @@ export function OverallProgress(props: {
               </span>
             </div>
             <progress
-              class="progress progress-primary w-full h-3"
+              class="progress progress-primary w-full h-2.5"
               value={Math.round(safeValue())}
               max="100"
               aria-label="Batch progress"

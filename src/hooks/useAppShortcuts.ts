@@ -5,7 +5,7 @@ import {
   type Accessor,
   type Setter,
 } from 'solid-js';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getSafeWindow } from '../core/window';
 
 export type AppTabId = 'renderer' | 'activity';
 
@@ -23,7 +23,9 @@ export interface AppShortcuts {
  */
 export function useAppShortcuts(setActiveTab: Setter<AppTabId>): AppShortcuts {
   const [isShortcutsOpen, setShortcutsOpen] = createSignal(false);
-  const appWindow = getCurrentWindow();
+  // Safe wrapper: in plain browser dev there is no Tauri window, and the
+  // stub keeps the app renderable instead of throwing before the boundary.
+  const appWindow = getSafeWindow();
 
   onMount(() => {
     // Track Tauri window fullscreen state (separate from browser

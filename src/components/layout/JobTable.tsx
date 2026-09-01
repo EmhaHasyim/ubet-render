@@ -67,12 +67,22 @@ export function JobTable(props: {
       <div class="overflow-x-auto">
         <table class="table table-sm">
           <thead>
-            <tr class="border-b border-base-300">
-              <th>Video</th>
-              <th>Status</th>
-              <th>Step</th>
-              <th class="w-40">Progress</th>
-              <th class="w-20">Actions</th>
+            <tr class="border-b border-base-300/70">
+              <th class="text-[11px] font-medium uppercase tracking-wider text-base-content/55">
+                Video
+              </th>
+              <th class="text-[11px] font-medium uppercase tracking-wider text-base-content/55">
+                Status
+              </th>
+              <th class="text-[11px] font-medium uppercase tracking-wider text-base-content/55">
+                Step
+              </th>
+              <th class="w-40 text-[11px] font-medium uppercase tracking-wider text-base-content/55">
+                Progress
+              </th>
+              <th class="w-20 text-[11px] font-medium uppercase tracking-wider text-base-content/55">
+                Actions
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -83,7 +93,7 @@ export function JobTable(props: {
                   thumbPath !== null && failedThumbs().has(thumbPath);
 
                 return (
-                  <tr class="border-b border-base-300/70 hover:bg-base-content/5 transition-colors">
+                  <tr class="border-b border-base-300/40 hover:bg-base-content/[0.04] transition-colors">
                     <td class="min-w-64">
                       <div class="flex items-center gap-3">
                         <Show
@@ -133,7 +143,7 @@ export function JobTable(props: {
                     <td>
                       <div class="flex items-center gap-2">
                         <progress
-                          class="progress progress-primary w-24 h-2"
+                          class="progress progress-primary w-24 h-1.5"
                           value={job().progressPercent}
                           max="100"
                           aria-label={`${job().name} progress`}

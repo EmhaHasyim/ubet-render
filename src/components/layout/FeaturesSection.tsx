@@ -14,7 +14,7 @@ export function FeaturesSection(props: {
   onSkipReencodeChange: (v: boolean) => void;
 }) {
   return (
-    <CollapsibleSection icon="lucide:sparkles" title="Features">
+    <CollapsibleSection step={5} title="Features">
       <label class="flex min-h-20 items-center justify-between gap-4 rounded-lg border border-base-300 bg-base-100 px-4 py-3">
         <span>
           <span class="block text-sm font-medium">Ping-pong effect</span>
@@ -46,19 +46,18 @@ export function FeaturesSection(props: {
       <label
         class="flex min-h-20 items-center justify-between gap-4 rounded-lg border border-base-300 bg-base-100 px-4 py-3"
         data-testid="zero-reencode-toggle"
-        title="When ON, the intermediate re-encode step is bypassed entirely and the source video is stream-copied directly. The output codec is determined by the source file — no codec matching check is performed. Disables ping-pong processing."
+        title="Copies the source video without re-encoding. Faster, but the output codec follows the source file and ping-pong is disabled."
       >
         <span>
           <span class="inline-flex items-center gap-2 text-sm font-medium">
-            Skip re-encode (direct stream copy)
+            Skip re-encode
             <span class="badge badge-xs badge-outline text-[0.625rem]">
               ADVANCED
             </span>
           </span>
           <span class="block text-xs text-base-content/60">
-            Bypass the intermediate re-encode and use the source video as-is.
-            The output codec will follow the source file; ping-pong is
-            unavailable in this mode.
+            Copy the source video without re-encoding — faster, but the output
+            codec follows the source file and ping-pong is off.
           </span>
         </span>
         <input

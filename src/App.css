@@ -1,7 +1,8 @@
 @import 'tailwindcss';
 
 @plugin "daisyui" {
-  /* `business` = dark mode (cyan/rose/lime accents on neutral base).
+  /* `business` = dark mode — kept as the default theme name so theme
+     persistence (core/theme.ts) and index.html keep working.
      `light` = hi-contrast day mode, used by the toggle in Titlebar. */
   themes:
     business --default,
@@ -10,7 +11,11 @@
 
 /* ── Theme tokens ───────────────────────────────────────────── */
 @theme {
-  --font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
+  --font-sans:
+    Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+    sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
 
   /* Animation durations (non-color tokens stay in @theme) */
   --duration-fast: 150ms;
@@ -21,46 +26,105 @@
 }
 
 /*
- * Palette overrides MUST live on :root AFTER the DaisyUI plugin so they
- * win against the built-in business theme (which is processed by the
- * plugin and injected earlier in the cascade).  Writing them here
- * instead of inside @theme guarantees source-order precedence.
+ * Custom palettes. These MUST live on the per-theme selectors AFTER the
+ * DaisyUI plugin so they win against the built-in business/light themes
+ * (which are processed by the plugin and injected earlier in the cascade).
  *
- * Primary: Cyan (195°)  •  Secondary: Rose (350°)  •  Accent: Lime (140°)
+ * ── Design language: "True Dark Studio" ────────────────────────
+ * A genuinely dark, neutral near-black palette — no warm or blue tints on
+ * the canvas, inspired by the comfortable darks of VS Code / GitHub:
+ *   - near-black neutral surfaces with very low chroma
+ *   - one restrained blue accent, used sparingly for actions + focus
+ *   - colour appears only where it means something (status, progress)
+ *   - soft 1px borders instead of heavy shadows
+ *   - gentle radii (≈12px boxes, 8px fields)
  */
-:root {
-  --color-primary: oklch(63% 0.19 195);
-  --color-primary-content: oklch(15% 0.03 195);
-  --color-secondary: oklch(60% 0.18 350);
-  --color-secondary-content: oklch(15% 0.03 350);
-  --color-accent: oklch(68% 0.2 140);
-  --color-accent-content: oklch(15% 0.03 140);
 
-  --color-info: oklch(65% 0.17 225);
-  --color-info-content: oklch(15% 0.03 225);
-  --color-success: oklch(62% 0.2 142);
-  --color-success-content: oklch(15% 0.03 142);
-  --color-warning: oklch(65% 0.18 80);
-  --color-warning-content: oklch(15% 0.03 80);
-  --color-error: oklch(55% 0.22 28);
-  --color-error-content: oklch(15% 0.03 28);
-}
-
-/* color-scheme follows the active theme so native form controls and
-   scrollbars match the UI. Previously hardcoded to dark on :root, which
-   left dark-themed native controls visible in light mode. index.html ships
-   with data-theme="business", so the first paint is covered too. */
+/* ── Dark theme (`business`) ────────────────────────────────── */
 [data-theme='business'] {
   color-scheme: dark;
+
+  --color-base-100: oklch(16.5% 0.003 250);
+  --color-base-200: oklch(13% 0.003 250);
+  --color-base-300: oklch(24% 0.005 250);
+  --color-base-content: oklch(93% 0.003 250);
+
+  --color-primary: oklch(70% 0.125 255);
+  --color-primary-content: oklch(98% 0.005 255);
+  --color-secondary: oklch(70% 0.08 200);
+  --color-secondary-content: oklch(20% 0.02 200);
+  --color-accent: oklch(75% 0.07 220);
+  --color-accent-content: oklch(20% 0.02 220);
+
+  --color-neutral: oklch(22% 0.004 250);
+  --color-neutral-content: oklch(90% 0.003 250);
+
+  --color-info: oklch(76% 0.09 235);
+  --color-info-content: oklch(20% 0.03 235);
+  --color-success: oklch(74% 0.13 160);
+  --color-success-content: oklch(20% 0.03 160);
+  --color-warning: oklch(83% 0.12 85);
+  --color-warning-content: oklch(22% 0.03 85);
+  --color-error: oklch(70% 0.14 25);
+  --color-error-content: oklch(98% 0.01 25);
+
+  --radius-box: 0.75rem;
+  --radius-field: 0.5rem;
+  --radius-selector: 0.5rem;
+
+  /* Very faint cool glow so the deep canvas never feels flat. */
+  --app-ambient: radial-gradient(
+    1100px 480px at 12% -12%,
+    color-mix(in oklch, var(--color-primary) 6%, transparent),
+    transparent 62%
+  );
 }
 
+/* ── Light theme ────────────────────────────────────────────── */
 [data-theme='light'] {
   color-scheme: light;
+
+  --color-base-100: oklch(99% 0 0);
+  --color-base-200: oklch(96.5% 0.002 250);
+  --color-base-300: oklch(90.5% 0.004 250);
+  --color-base-content: oklch(26% 0.008 250);
+
+  --color-primary: oklch(52% 0.13 255);
+  --color-primary-content: oklch(98% 0.005 255);
+  --color-secondary: oklch(48% 0.08 200);
+  --color-secondary-content: oklch(98% 0.01 200);
+  --color-accent: oklch(52% 0.09 225);
+  --color-accent-content: oklch(98% 0.01 225);
+
+  --color-neutral: oklch(34% 0.008 250);
+  --color-neutral-content: oklch(97% 0 0);
+
+  --color-info: oklch(48% 0.1 235);
+  --color-info-content: oklch(98% 0.01 235);
+  --color-success: oklch(50% 0.12 160);
+  --color-success-content: oklch(98% 0.01 160);
+  --color-warning: oklch(58% 0.12 85);
+  --color-warning-content: oklch(98% 0.01 85);
+  --color-error: oklch(54% 0.15 25);
+  --color-error-content: oklch(98% 0.01 25);
+
+  --radius-box: 0.75rem;
+  --radius-field: 0.5rem;
+  --radius-selector: 0.5rem;
+
+  /* Softer ambient so the cool blush never fights the paper canvas. */
+  --app-ambient: radial-gradient(
+    1100px 480px at 12% -12%,
+    color-mix(in oklch, var(--color-primary) 4%, transparent),
+    transparent 62%
+  );
 }
 
 /* ── DaisyUI card–backed panel utility ──────────────────────── */
+/* Soft border + flat surface (shadow-free, studio-style) instead of the
+   boxed card look. Consumers add their own inner padding. */
 @utility panel {
-  @apply card card-border bg-base-100 shadow-sm;
+  @apply card border border-base-300/70 bg-base-100;
 }
 
 /* ── Base layer ─────────────────────────────────────────────── */
@@ -75,11 +139,18 @@
     margin: 0;
     background-color: var(--color-base-200);
     color: var(--color-base-content);
+    /* Faint cool glow + gentle vertical depth, kept behind the app shell. */
+    background-image: var(--app-ambient);
+    background-attachment: fixed;
   }
 
   /* Custom text selection */
   ::selection {
-    background-color: var(--color-primary);
+    background-color: color-mix(
+      in oklch,
+      var(--color-primary) 80%,
+      transparent
+    );
     color: var(--color-primary-content);
   }
 
@@ -96,7 +167,8 @@
   :focus-visible:not(.btn):not(.input):not(.select):not(.textarea):not(
     .toggle
   ):not(.checkbox):not(.radio):not(.range):not([tabindex='-1']) {
-    outline: 2px solid var(--color-primary);
+    outline: 2px solid
+      color-mix(in oklch, var(--color-primary) 75%, transparent);
     outline-offset: 2px;
   }
 

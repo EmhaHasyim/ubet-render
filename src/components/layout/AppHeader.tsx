@@ -62,7 +62,7 @@ export function AppHeader(props: {
         <div class="card-body p-4">
           <div class="flex items-start gap-3">
             <div
-              class={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${props.running ? 'bg-warning/15 text-warning' : props.paused ? 'bg-info/15 text-info' : 'bg-primary/10 text-primary'}`}
+              class={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-base-300/50 ${props.running ? 'text-info' : props.paused ? 'text-warning' : 'text-primary'}`}
             >
               <Icon
                 icon={
@@ -78,14 +78,14 @@ export function AppHeader(props: {
               />
             </div>
             <div class="min-w-0 flex-1">
-              <h3 class="font-semibold">
+              <h3 class="text-sm font-semibold">
                 {props.running
                   ? 'Rendering batch'
                   : props.paused
                     ? 'Render paused'
                     : 'Ready'}
               </h3>
-              <p class="mt-1 text-sm text-base-content/60">
+              <p class="mt-0.5 text-[13px] text-base-content/50">
                 {props.running
                   ? 'Batch in progress.'
                   : props.paused
@@ -188,7 +188,7 @@ export function AppHeader(props: {
             restoreFocusOnClose();
           }}
         >
-          <div class="modal-box rounded-lg border border-error/20 bg-base-100">
+          <div class="modal-box rounded-xl border border-error/20 bg-base-100">
             <h3 class="flex items-center gap-2 text-lg font-semibold text-error">
               <Icon icon="lucide:triangle-alert" width="20" height="20" />
               Cancel render?

@@ -12,7 +12,7 @@ export function AudioSection(props: {
   onModeChange: (v: 'original' | 'normalize') => void;
 }) {
   return (
-    <CollapsibleSection icon="lucide:music" title="Audio">
+    <CollapsibleSection step={2} title="Audio">
       <label class="form-control">
         <span class="label py-1">
           <span class="label-text font-medium">Songs per video</span>

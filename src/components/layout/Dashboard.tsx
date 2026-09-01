@@ -9,9 +9,10 @@ import {
   type Setter,
 } from 'solid-js';
 import { Icon } from '@iconify-icon/solid';
-import { getCurrentWindow, ProgressBarStatus } from '@tauri-apps/api/window';
+import { ProgressBarStatus } from '@tauri-apps/api/window';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { getSourcePaths } from '../../core/config';
+import { getSafeWindow } from '../../core/window';
 import { usePipeline } from '../../hooks/usePipeline';
 import {
   AppHeader,
@@ -20,12 +21,12 @@ import {
   LogViewer,
   OverallProgress,
   SettingsCard,
+  Sidebar,
   StatsStrip,
   Titlebar,
 } from '../index';
 import { PipelineProvider, type Pipeline } from '../../context/pipeline';
 import { type AppTabId } from '../../hooks/useAppShortcuts';
-import logoUrl from '../../assets/logo.svg';
 
 /**
  * Thin bridge that calls {@link usePipeline} *inside* the ErrorBoundary tree.
@@ -61,10 +62,7 @@ export function Dashboard(props: {
   setActiveTab: Setter<AppTabId>;
 }) {
   const { pipeline, activeTab, setActiveTab } = props;
-  const appWindow = getCurrentWindow();
-
-  const tabClass = (tab: AppTabId) =>
-    `tab gap-2 ${activeTab() === tab ? 'tab-active' : ''}`;
+  const appWindow = getSafeWindow();
 
   // ── Render keyboard shortcuts + close guard ──────────────
   onMount(() => {
@@ -163,119 +161,50 @@ export function Dashboard(props: {
   });
 
   // ── Taskbar progress indicator (Windows) ───────────────────
+  // Progress events arrive ~8×/second; only hit the IPC boundary when the
+  // observable taskbar state actually changes (status or rounded percent).
+  let lastSentTaskbar = '';
   createEffect(() => {
     const pct = pipeline.overallProgress();
+    const rounded = Math.round(Math.min(100, pct || 0));
+
+    let key: string;
+    let call: () => Promise<unknown>;
 
     if (pipeline.running()) {
-      appWindow
-        .setProgressBar({ progress: Math.round(Math.min(100, pct || 0)) })
-        .catch(() => {});
+      key = `normal:${rounded}`;
+      call = () => appWindow.setProgressBar({ progress: rounded });
     } else if (pipeline.hasFailed()) {
-      appWindow
-        .setProgressBar({
+      key = `error:${rounded}`;
+      call = () =>
+        appWindow.setProgressBar({
           status: ProgressBarStatus.Error,
-          progress: Math.round(Math.min(100, pct || 0)),
-        })
-        .catch(() => {});
+          progress: rounded,
+        });
     } else if (pct > 0) {
       // Render complete, briefly show full bar then clear
-      appWindow.setProgressBar({ progress: 100 }).catch(() => {});
+      key = 'complete';
+      call = () => appWindow.setProgressBar({ progress: 100 });
     } else {
-      appWindow
-        .setProgressBar({ status: ProgressBarStatus.None })
-        .catch(() => {});
+      key = 'none';
+      call = () => appWindow.setProgressBar({ status: ProgressBarStatus.None });
     }
+
+    if (key === lastSentTaskbar) return;
+    lastSentTaskbar = key;
+    call().catch(() => {});
   });
 
   return (
-    <div class="h-screen overflow-hidden bg-base-200 text-base-content">
-      {/* ---- Custom titlebar (window controls + drag region) ---- */}
-      <Titlebar />
-
-      {/* ---- Header (DaisyUI navbar) ---- */}
-      <header class="navbar border-b border-base-300 bg-base-100 px-5">
-        <div class="navbar-start flex items-center gap-3">
-          <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-base-200 p-1">
-            <img src={logoUrl} class="h-full w-full" alt="Ubet Render" />
-          </div>
-          <div class="min-w-0">
-            <h1 class="truncate text-base font-semibold leading-5">
-              Ubet Render
-            </h1>
-            <p class="truncate text-xs text-base-content/60">Local workspace</p>
-          </div>
-        </div>
-
-        <div class="navbar-center flex">
-          <div
-            class="tabs tabs-box"
-            role="tablist"
-            aria-label="Main navigation"
-            onKeyDown={(e) => {
-              if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-                e.preventDefault();
-                setActiveTab((prev) =>
-                  prev === 'renderer' ? 'activity' : 'renderer',
-                );
-                requestAnimationFrame(() => {
-                  const el = document.querySelector(
-                    'button[role="tab"][aria-selected="true"]',
-                  ) as HTMLElement | null;
-                  el?.focus();
-                });
-              }
-            }}
-          >
-            <button
-              role="tab"
-              aria-selected={activeTab() === 'renderer'}
-              tabIndex={activeTab() === 'renderer' ? 0 : -1}
-              class={tabClass('renderer')}
-              onClick={() => setActiveTab('renderer')}
-            >
-              <Icon icon="lucide:wand-sparkles" width="16" height="16" />
-              Render
-            </button>
-            <button
-              role="tab"
-              aria-selected={activeTab() === 'activity'}
-              tabIndex={activeTab() === 'activity' ? 0 : -1}
-              class={tabClass('activity')}
-              onClick={() => setActiveTab('activity')}
-            >
-              <Icon icon="lucide:list-checks" width="16" height="16" />
-              Activity
-              <Show when={pipeline.jobs().length > 0}>
-                <span class="badge badge-sm ml-1">
-                  {pipeline.jobs().length}
-                </span>
-              </Show>
-            </button>
-          </div>
-        </div>
-
-        <div class="navbar-end flex items-center gap-2" aria-live="polite">
-          <Show when={pipeline.paused()}>
-            <span class="badge badge-info badge-sm gap-1">
-              <Icon icon="lucide:pause" width="12" height="12" />
-              Paused
-            </span>
-          </Show>
-          <Show
-            when={pipeline.running()}
-            fallback={
-              <Show when={!pipeline.paused()}>
-                <span class="badge badge-outline badge-sm">Idle</span>
-              </Show>
-            }
-          >
-            <span class="badge badge-info badge-sm gap-1">
-              <span class="loading loading-spinner loading-xs" />
-              Rendering
-            </span>
-          </Show>
-        </div>
-      </header>
+    <div class="flex h-screen flex-col overflow-hidden bg-base-200 text-base-content">
+      {/* ---- Slim chrome bar: brand, page, status, window controls ---- */}
+      <Titlebar
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        running={pipeline.running()}
+        paused={pipeline.paused()}
+        jobCount={pipeline.jobs().length}
+      />
 
       {/* ---- Slim progress bar (YouTube-style) ---- */}
       <Show
@@ -286,7 +215,7 @@ export function Dashboard(props: {
         }
       >
         <div
-          class="h-1 bg-base-200"
+          class="h-1 shrink-0 bg-base-200"
           role="progressbar"
           aria-label="Global render progress"
         >
@@ -299,130 +228,161 @@ export function Dashboard(props: {
         </div>
       </Show>
 
-      {/* ---- Main content area ---- */}
-      <main class="flex flex-col overflow-hidden h-[calc(100vh-6.75rem)]">
-        {/* ---- Render tab: full-page scroll ---- */}
-        <Show when={activeTab() === 'renderer'}>
-          <div class="overflow-y-auto flex-1 custom-scrollbar">
-            <div class="mx-auto flex max-w-7xl flex-col gap-5 p-4 md:p-6">
-              <div class="tab-content flex flex-col">
-                <div class="grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-                  <div class="flex min-w-0 flex-col gap-5">
-                    <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+      {/* ---- Navigation rail + main content ---- */}
+      <div class="flex min-h-0 flex-1">
+        <Sidebar
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          jobCount={pipeline.jobs().length}
+        />
+
+        <main class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden xl:flex-row">
+          <section class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+            {/* ---- Render tab: full-bleed scroll ---- */}
+            <Show when={activeTab() === 'renderer'}>
+              <div class="overflow-y-auto flex-1 custom-scrollbar">
+                {/* ---- Sticky page header (stays pinned while steps scroll) ---- */}
+                <div class="sticky top-0 z-10 border-b border-base-300/60 bg-base-200/85 backdrop-blur-sm">
+                  <div class="mx-auto flex w-full max-w-[1760px] items-center justify-between gap-2 px-4 py-3 md:px-6">
+                    <div class="flex items-center gap-2.5">
+                      <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                        <Icon
+                          icon="lucide:wand-sparkles"
+                          width="16"
+                          height="16"
+                        />
+                      </div>
                       <div>
-                        <h2 class="text-2xl font-semibold">Render setup</h2>
-                        <p class="text-sm text-base-content/60">
+                        <h2 class="text-[17px] font-semibold tracking-tight">
+                          Render setup
+                        </h2>
+                        <p class="text-[13px] text-base-content/50">
                           Sources, audio, output, and encoding.
                         </p>
                       </div>
-                      <button
-                        class="btn btn-ghost btn-sm gap-2"
-                        onClick={() => setActiveTab('activity')}
-                      >
-                        <Icon icon="lucide:logs" width="16" height="16" />
-                        View activity
-                      </button>
                     </div>
+                    <button
+                      class="btn btn-ghost btn-sm gap-2 border border-base-300/60"
+                      onClick={() => setActiveTab('activity')}
+                    >
+                      <Icon icon="lucide:logs" width="15" height="15" />
+                      View activity
+                    </button>
+                  </div>
+                </div>
 
+                <div class="mx-auto w-full max-w-[1760px] p-4 md:p-6">
+                  <div class="tab-content flex flex-col gap-3.5">
                     <StatsStrip />
 
                     <SettingsCard />
-
-                    {/* Mini log viewer — shows while render is running so
-                        the user doesn't need to switch tabs to see progress */}
-                    <Show
-                      when={
-                        pipeline.running() ||
-                        pipeline.paused() ||
-                        (pipeline.overallProgress() > 0 &&
-                          pipeline.overallProgress() < 100)
-                      }
-                    >
-                      <MiniLogViewer logs={pipeline.logs()} />
-                    </Show>
                   </div>
-
-                  <aside class="flex min-w-0 flex-col gap-5">
-                    <AppHeader
-                      running={pipeline.running()}
-                      paused={pipeline.paused()}
-                      onStart={pipeline.startRender}
-                      onResume={pipeline.resumeRender}
-                      onCancel={pipeline.cancelRender}
-                      onPause={pipeline.pauseRender}
-                      canStart={pipeline.canStart()}
-                      disabledReason={pipeline.disabledReason()}
-                      renderEstimate={renderEstimate()}
-                    />
-
-                    <HardwareInfo info={pipeline.hardwareInfo()} />
-
-                    <OverallProgress
-                      value={pipeline.overallProgress()}
-                      eta={pipeline.overallEta()}
-                      active={
-                        pipeline.running() ||
-                        pipeline.paused() ||
-                        pipeline.overallProgress() > 0
-                      }
-                    />
-                  </aside>
                 </div>
               </div>
-            </div>
-          </div>
-        </Show>
+            </Show>
 
-        {/* ---- Activity tab: fixed-height, panels scroll independently ---- */}
-        <Show when={activeTab() === 'activity'}>
-          <div class="flex flex-1 flex-col overflow-hidden p-4 md:p-6">
-            <div class="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-5 overflow-hidden">
-              <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between shrink-0">
-                <div>
-                  <h2 class="text-2xl font-semibold">Activity</h2>
-                  <p class="text-sm text-base-content/60">Jobs and logs.</p>
-                </div>
-                <button
-                  class="btn btn-primary btn-sm gap-2"
-                  onClick={() => setActiveTab('renderer')}
-                >
-                  <Icon icon="lucide:arrow-left" width="16" height="16" />
-                  Back to setup
-                </button>
-              </div>
-
-              <div class="grid flex-1 grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_380px] overflow-hidden">
-                {/* ---- Jobs panel ---- */}
-                <section class="panel flex min-h-0 min-w-0 flex-col overflow-hidden">
-                  <div class="flex items-center justify-between border-b border-base-300 px-4 py-3 shrink-0">
-                    <div class="flex items-center gap-2">
-                      <Icon
-                        icon="lucide:layers-3"
-                        class="text-primary"
-                        width="18"
-                        height="18"
-                      />
-                      <h3 class="font-semibold">Jobs</h3>
+            {/* ---- Activity tab: fixed-height, panels scroll independently ---- */}
+            <Show when={activeTab() === 'activity'}>
+              <div class="flex flex-1 flex-col overflow-hidden p-4 md:p-6">
+                <div class="mx-auto flex w-full max-w-[1760px] flex-1 flex-col gap-4 overflow-hidden">
+                  <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between shrink-0">
+                    <div class="flex items-center gap-2.5">
+                      <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                        <Icon
+                          icon="lucide:list-checks"
+                          width="16"
+                          height="16"
+                        />
+                      </div>
+                      <div>
+                        <h2 class="text-[17px] font-semibold tracking-tight">
+                          Activity
+                        </h2>
+                        <p class="text-[13px] text-base-content/50">
+                          Jobs and logs.
+                        </p>
+                      </div>
                     </div>
-                    <span class="badge badge-ghost badge-sm">
-                      {pipeline.jobs().length} total
-                    </span>
+                    <button
+                      class="btn btn-primary btn-sm gap-2"
+                      onClick={() => setActiveTab('renderer')}
+                    >
+                      <Icon icon="lucide:arrow-left" width="15" height="15" />
+                      Back to setup
+                    </button>
                   </div>
-                  <div class="min-h-0 flex-1 overflow-auto p-3 custom-scrollbar">
-                    <JobTable
-                      jobs={pipeline.jobs()}
-                      onRetry={pipeline.retryJob}
-                    />
-                  </div>
-                </section>
 
-                {/* ---- Logs panel ---- */}
-                <LogViewer logs={pipeline.logs()} />
+                  <div class="grid flex-1 grid-cols-1 gap-4 overflow-hidden lg:grid-cols-[minmax(0,1fr)_380px] 2xl:grid-cols-[minmax(0,1fr)_440px]">
+                    {/* ---- Jobs panel ---- */}
+                    <section class="panel flex min-h-0 min-w-0 flex-col overflow-hidden">
+                      <div class="flex items-center justify-between border-b border-base-300/70 px-4 py-3 shrink-0">
+                        <div class="flex items-center gap-2">
+                          <Icon
+                            icon="lucide:layers-3"
+                            class="text-base-content/50"
+                            width="16"
+                            height="16"
+                          />
+                          <h3 class="text-sm font-semibold">Jobs</h3>
+                        </div>
+                        <span class="rounded-full bg-base-300/60 px-2 py-0.5 text-[11px] font-medium text-base-content/60">
+                          {pipeline.jobs().length} total
+                        </span>
+                      </div>
+                      <div class="min-h-0 flex-1 overflow-auto p-3 custom-scrollbar">
+                        <JobTable
+                          jobs={pipeline.jobs()}
+                          onRetry={pipeline.retryJob}
+                        />
+                      </div>
+                    </section>
+
+                    {/* ---- Logs panel ---- */}
+                    <LogViewer logs={pipeline.logs()} />
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
-        </Show>
-      </main>
+            </Show>
+          </section>
+
+          {/* ---- Inspector rail: a fixed right column on wide screens
+              (16:9 fullscreen), a bottom drawer on narrow windows. Stays
+              put while the setup steps scroll — Figma/DaVinci-style. ---- */}
+          <aside
+            class={`flex max-h-[40vh] shrink-0 flex-col gap-4 overflow-y-auto border-t border-base-300/60 bg-base-100/40 p-4 custom-scrollbar xl:max-h-none xl:w-80 xl:border-t-0 xl:border-l ${
+              activeTab() === 'renderer' ? '' : 'hidden xl:flex'
+            }`}
+          >
+            <AppHeader
+              running={pipeline.running()}
+              paused={pipeline.paused()}
+              onStart={pipeline.startRender}
+              onResume={pipeline.resumeRender}
+              onCancel={pipeline.cancelRender}
+              onPause={pipeline.pauseRender}
+              canStart={pipeline.canStart()}
+              disabledReason={pipeline.disabledReason()}
+              renderEstimate={renderEstimate()}
+            />
+
+            <OverallProgress
+              value={pipeline.overallProgress()}
+              eta={pipeline.overallEta()}
+              active={
+                pipeline.running() ||
+                pipeline.paused() ||
+                pipeline.overallProgress() > 0
+              }
+            />
+
+            <HardwareInfo info={pipeline.hardwareInfo()} />
+
+            {/* Mini log viewer — docked at the end of the rail so live
+                progress stays visible without scrolling the setup steps */}
+            <MiniLogViewer logs={pipeline.logs()} />
+          </aside>
+        </main>
+      </div>
     </div>
   );
 }
@@ -451,24 +411,26 @@ function MiniLogViewer(props: { logs: string[] }) {
 
   return (
     <section class="panel flex min-h-0 flex-col overflow-hidden">
-      <div class="flex items-center gap-2 border-b border-base-300 px-3 py-2 shrink-0">
+      <div class="flex items-center gap-2 border-b border-base-300/70 px-3.5 py-2 shrink-0">
         <Icon
           icon="lucide:terminal"
-          class="text-primary"
+          class="text-base-content/50"
           width="14"
           height="14"
         />
-        <span class="text-xs font-semibold">Recent logs</span>
-        <span class="badge badge-ghost badge-xs ml-auto font-mono">
+        <span class="text-xs font-medium text-base-content/80">
+          Recent logs
+        </span>
+        <span class="ml-auto rounded-full bg-base-300/60 px-1.5 py-0.5 font-mono text-[10px] text-base-content/60">
           {props.logs.length}
         </span>
       </div>
       <div
         ref={scrollRef}
-        class="max-h-40 overflow-y-auto bg-neutral p-2 font-mono text-xs leading-relaxed text-neutral-content custom-scrollbar"
+        class="max-h-40 overflow-y-auto border-t border-base-300/40 bg-base-200/60 p-2.5 font-mono text-xs leading-relaxed text-base-content/70 custom-scrollbar"
       >
         {visible().length === 0 ? (
-          <p class="py-2 text-center text-neutral-content/50 text-[0.65rem]">
+          <p class="py-2 text-center text-[0.65rem] text-base-content/55">
             Waiting for logs...
           </p>
         ) : (

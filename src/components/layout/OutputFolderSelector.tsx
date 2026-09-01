@@ -15,21 +15,23 @@ export function OutputFolderSelector(props: {
   onReveal: () => void;
 }) {
   return (
-    <div class={`flex min-h-full flex-col gap-3 rounded-lg ${props.dropClass}`}>
+    <div
+      class={`flex min-h-full flex-col gap-2.5 rounded-xl ${props.dropClass}`}
+    >
       <button
         type="button"
-        class="flex min-h-36 w-full flex-col items-start justify-between rounded-lg border border-dashed border-accent/35 bg-accent/5 p-4 text-left text-accent transition-colors hover:border-accent"
+        class="flex min-h-36 w-full flex-col items-start justify-between rounded-xl border border-dashed border-base-300/70 bg-base-100/40 p-4 text-left text-base-content/80 transition-all duration-150 hover:-translate-y-0.5 hover:border-accent/40 hover:bg-accent/[0.04] hover:shadow-lg hover:shadow-black/20"
         onClick={props.onChooseFolder}
       >
-        <span class="flex h-10 w-10 items-center justify-center rounded-lg bg-base-100 text-current shadow-sm">
-          <Icon icon="lucide:folder-output" width="20" height="20" />
+        <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-accent/10 text-accent ring-1 ring-base-300/50">
+          <Icon icon="lucide:folder-output" width="19" height="19" />
         </span>
 
         <span class="mt-4 block">
           <span class="block text-sm font-semibold text-base-content">
             Output folder
           </span>
-          <span class="mt-1 block text-xs text-base-content/60">
+          <span class="mt-0.5 block text-xs text-base-content/50">
             {props.outputPath() ? 'Destination selected' : 'Choose folder'}
           </span>
         </span>
@@ -38,12 +40,12 @@ export function OutputFolderSelector(props: {
       <Show
         when={props.outputPath()}
         fallback={
-          <div class="rounded-lg border border-base-300 bg-base-100 px-3 py-2 text-xs text-base-content/60">
+          <div class="rounded-lg border border-base-300/60 bg-base-100/50 px-3 py-2 text-[11px] text-base-content/50">
             No folder selected.
           </div>
         }
       >
-        <div class="rounded-lg border border-base-300 bg-base-100 p-3">
+        <div class="rounded-lg border border-base-300/70 bg-base-100/60 p-3">
           <p class="mb-1 text-xs font-medium text-base-content/70">
             Selected folder
           </p>

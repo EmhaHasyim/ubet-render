@@ -55,6 +55,8 @@ bun-debug.log*
 *.swp
 *~
 
+.freebuff/
+
 .DS_Store
 .AppleDouble
 .LSOverride

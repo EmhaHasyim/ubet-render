@@ -88,7 +88,10 @@ describe('App', () => {
 
   it('shows Settings area on Render tab', () => {
     render(() => <App />);
-    expect(screen.getByText('Render setup')).toBeTruthy();
+    // Titlebar page label + page heading both read "Render setup".
+    expect(screen.getAllByText('Render setup').length).toBeGreaterThanOrEqual(
+      1,
+    );
     expect(
       screen.getByText('Sources, audio, output, and encoding.'),
     ).toBeTruthy();
@@ -123,7 +126,9 @@ describe('App', () => {
 
     // Go back
     screen.getByText('Back to setup').click();
-    expect(screen.getByText('Render setup')).toBeTruthy();
+    expect(screen.getAllByText('Render setup').length).toBeGreaterThanOrEqual(
+      1,
+    );
   });
 
   it('switches to Activity with the Ctrl+2 global shortcut', () => {

@@ -5,6 +5,7 @@ export { ShortcutsDialog } from './ui/ShortcutsDialog';
 export { ToastViewport } from './ui/Toast';
 export { AppHeader } from './layout/AppHeader';
 export { Titlebar } from './layout/Titlebar';
+export { Sidebar } from './layout/Sidebar';
 export { SettingsCard } from './layout/SettingsCard';
 export { StatsStrip } from './layout/StatsStrip';
 export { JobTable } from './layout/JobTable';

@@ -17,12 +17,13 @@ interface SourceSelectorProps {
 // Replaces 1 ad-hoc console.warn call; see `src/core/logger.ts`.
 const log = createLogger('SourceSelector');
 
-const colorClass = {
-  primary: 'border-primary/35 bg-primary/5 text-primary hover:border-primary',
-  secondary:
-    'border-secondary/35 bg-secondary/5 text-secondary hover:border-secondary',
-  accent: 'border-accent/35 bg-accent/5 text-accent hover:border-accent',
-  info: 'border-info/35 bg-info/5 text-info hover:border-info',
+// Gentle per-source identity lives on the icon tile only — the card itself
+// stays neutral so the canvas reads as a calm, true-dark workspace.
+const tileTint = {
+  primary: 'bg-primary/10 text-primary',
+  secondary: 'bg-secondary/10 text-secondary',
+  accent: 'bg-accent/10 text-accent',
+  info: 'bg-info/10 text-info',
 };
 
 /** Last path segment for display — module-level so it isn't recreated per render. */
@@ -69,21 +70,23 @@ export function SourceSelector(props: SourceSelectorProps) {
   };
 
   return (
-    <div class="flex h-full flex-col gap-3">
+    <div class="flex h-full flex-col gap-2.5">
       <button
         type="button"
-        class={`group flex min-h-36 w-full flex-col items-start justify-between rounded-lg border border-dashed p-4 text-left transition-colors ${colorClass[props.themeColor]}`}
+        class="group flex min-h-36 w-full flex-col items-start justify-between rounded-xl border border-dashed border-base-300/70 bg-base-100/40 p-4 text-left transition-all duration-150 hover:-translate-y-0.5 hover:border-primary/40 hover:bg-primary/[0.04] hover:shadow-lg hover:shadow-black/20"
         onClick={browseFiles}
       >
-        <span class="flex h-10 w-10 items-center justify-center rounded-lg bg-base-100 text-current shadow-sm">
-          <Icon icon={props.icon} width="20" height="20" />
+        <span
+          class={`flex h-9 w-9 items-center justify-center rounded-lg bg-base-200/80 ring-1 ring-base-300/50 ${tileTint[props.themeColor]}`}
+        >
+          <Icon icon={props.icon} width="19" height="19" />
         </span>
 
         <span class="mt-4 block">
           <span class="block text-sm font-semibold text-base-content">
             {props.label}
           </span>
-          <span class="mt-1 block text-xs text-base-content/60">
+          <span class="mt-0.5 block text-xs text-base-content/50">
             {props.value.length > 0
               ? `${props.value.length} selected`
               : 'Choose files'}
@@ -94,13 +97,13 @@ export function SourceSelector(props: SourceSelectorProps) {
       <Show
         when={props.value.length > 0}
         fallback={
-          <div class="rounded-lg border border-base-300 bg-base-100 px-3 py-2 text-xs text-base-content/60">
+          <div class="rounded-lg border border-base-300/60 bg-base-100/50 px-3 py-2 text-[11px] text-base-content/50">
             {props.allowedExtensions.join(', ')}
           </div>
         }
       >
-        <div class="rounded-lg border border-base-300 bg-base-100">
-          <div class="flex items-center justify-between border-b border-base-300 px-3 py-2">
+        <div class="overflow-hidden rounded-lg border border-base-300/70 bg-base-100/60">
+          <div class="flex items-center justify-between border-b border-base-300/70 px-3 py-2">
             <span class="text-xs font-medium text-base-content/70">
               Selected files
             </span>

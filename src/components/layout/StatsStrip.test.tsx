@@ -44,17 +44,16 @@ const sampleJobs: JobProgress[] = [
 ];
 
 describe('StatsStrip', () => {
-  it('shows placeholder stats strip when there are no jobs and no live stats', () => {
+  it('renders nothing when there are no jobs and no live stats', () => {
+    // Idle guidance lives in the inspector rail ("Ready · Missing paths")
+    // and the titlebar Idle pill — a filler banner would waste space.
     const { container } = render(() => (
       <WithPipeline>
         <StatsStrip />
       </WithPipeline>
     ));
-    expect(container.querySelector('.stats')).toBeTruthy();
-    expect(
-      screen.getByText('Configure your sources and start a render'),
-    ).toBeTruthy();
-    expect(screen.getByText('Idle')).toBeTruthy();
+    expect(container.querySelector('.stats')).toBeNull();
+    expect(container.textContent).toBe('');
   });
 
   it('shows total, done, failed, processing counts', () => {

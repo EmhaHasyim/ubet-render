@@ -1,5 +1,11 @@
-import { createSignal, onCleanup, onMount, Show } from 'solid-js';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import {
+  createSignal,
+  onCleanup,
+  onMount,
+  Show,
+  type Accessor,
+  type Setter,
+} from 'solid-js';
 import { Icon } from '@iconify-icon/solid';
 import {
   applyTheme,
@@ -7,13 +13,34 @@ import {
   toggleTheme,
   type Theme,
 } from '../../core/theme';
+import { getSafeWindow } from '../../core/window';
+import type { AppTabId } from '../../hooks/useAppShortcuts';
 
-export function Titlebar() {
+const PAGE_LABELS: Record<AppTabId, string> = {
+  renderer: 'Render setup',
+  activity: 'Activity',
+};
+
+/**
+ * Single chrome bar for the whole app.
+ *
+ * Navigation now lives in {@link Sidebar}, so this bar is a slim, purely
+ * functional strip: brand + current page on the draggable left side, and
+ * status pill + theme toggle + window controls on the right. The window
+ * title mirrors the active page — the convention desktop users expect.
+ */
+export function Titlebar(props: {
+  activeTab: Accessor<AppTabId>;
+  setActiveTab: Setter<AppTabId>;
+  running: boolean;
+  paused: boolean;
+  jobCount: number;
+}) {
   const [isMaximized, setIsMaximized] = createSignal(false);
   const [showContextMenu, setShowContextMenu] = createSignal(false);
   const [theme, setTheme] = createSignal<Theme>('business');
   let contextMenuRef: HTMLDivElement | undefined;
-  const appWindow = getCurrentWindow();
+  const appWindow = getSafeWindow();
 
   onMount(async () => {
     // Load saved theme preference (or smart default from OS) and apply it
@@ -105,38 +132,84 @@ export function Titlebar() {
     setShowContextMenu(true);
   };
 
+  const controlClass =
+    'flex h-full w-10 items-center justify-center text-base-content/55 transition-colors hover:bg-base-200 hover:text-base-content';
+
   return (
     <div
       data-tauri-drag-region
-      class="relative flex h-11 shrink-0 select-none items-center justify-between bg-base-100"
+      class="relative flex h-11 shrink-0 select-none items-center border-b border-base-300/60 bg-base-100"
       onDblClick={handleDoubleClick}
       onContextMenu={handleContextMenu}
     >
-      {/* Left: drag region + app name */}
-      <div class="flex items-center gap-2 pl-3">
-        <div class="flex h-6 w-6 items-center justify-center rounded bg-base-200">
-          <Icon
-            icon="lucide:clapperboard"
-            width="14"
-            height="14"
-            class="text-primary"
-          />
+      {/* Left: drag region + brand + current page */}
+      <div
+        data-tauri-drag-region
+        class="flex h-full min-w-0 items-center gap-2.5 pl-4"
+      >
+        <div
+          data-tauri-drag-region
+          class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-primary/12 text-primary"
+        >
+          <Icon icon="lucide:clapperboard" width="15" height="15" />
         </div>
-        <span class="text-xs font-medium text-base-content/60">
+        <span
+          data-tauri-drag-region
+          class="truncate text-[13px] font-semibold tracking-tight text-base-content"
+        >
           Ubet Render
+        </span>
+        <span
+          data-tauri-drag-region
+          class="hidden items-center gap-1.5 border-l border-base-300 pl-2.5 text-[12px] text-base-content/55 sm:flex"
+        >
+          {PAGE_LABELS[props.activeTab()]}
+          <Show when={props.jobCount > 0}>
+            <span class="rounded-full bg-base-300/70 px-1.5 py-0.5 text-[10px] font-medium leading-none text-base-content/60">
+              {props.jobCount} job{props.jobCount === 1 ? '' : 's'}
+            </span>
+          </Show>
         </span>
       </div>
 
-      {/* Right: window controls — stop dblclick bubbling so double-clicking
-          a control button can't accidentally toggle maximize. */}
+      {/* Right: status + window controls — stop dblclick bubbling so
+          double-clicking a control button can't accidentally toggle maximize. */}
+      {/* NOTE: no data-tauri-drag-region here on purpose — Tauri starts a
+          window drag whenever the *event target itself* carries the
+          attribute, so an attribute with value "false" would still drag. */}
       <div
-        class="flex h-full"
-        data-tauri-drag-region={false}
+        class="ml-auto flex h-full items-center gap-1 pr-1"
         onDblClick={(e) => e.stopPropagation()}
       >
+        {/* Status pill */}
+        <div class="flex items-center px-1" aria-live="polite">
+          <Show when={props.paused}>
+            <span class="flex items-center gap-1.5 rounded-full border border-warning/25 bg-warning/10 px-2.5 py-1 text-[11px] font-medium text-warning">
+              <Icon icon="lucide:pause" width="11" height="11" />
+              Paused
+            </span>
+          </Show>
+          <Show
+            when={props.running}
+            fallback={
+              <Show when={!props.paused}>
+                <span class="flex items-center gap-1.5 rounded-full border border-base-300 px-2.5 py-1 text-[11px] font-medium text-base-content/55">
+                  <span class="h-1.5 w-1.5 rounded-full bg-base-content/25" />
+                  Idle
+                </span>
+              </Show>
+            }
+          >
+            <span class="flex items-center gap-1.5 rounded-full border border-info/25 bg-info/10 px-2.5 py-1 text-[11px] font-medium text-info">
+              <span class="loading loading-spinner loading-xs" />
+              Rendering
+            </span>
+          </Show>
+        </div>
+
         <button
           type="button"
-          class="flex h-full w-12 items-center justify-center text-base-content/50 transition-colors hover:bg-base-200 hover:text-base-content"
+          class={controlClass}
           onClick={handleToggleTheme}
           aria-label={
             theme() === 'business'
@@ -157,7 +230,7 @@ export function Titlebar() {
         </button>
         <button
           type="button"
-          class="flex h-full w-12 items-center justify-center text-base-content/50 transition-colors hover:bg-base-200 hover:text-base-content"
+          class={controlClass}
           onClick={handleMinimize}
           aria-label="Minimize"
           tabIndex={-1}
@@ -166,7 +239,7 @@ export function Titlebar() {
         </button>
         <button
           type="button"
-          class="flex h-full w-12 items-center justify-center text-base-content/50 transition-colors hover:bg-base-200 hover:text-base-content"
+          class={controlClass}
           onClick={handleToggleMaximize}
           aria-label={isMaximized() ? 'Restore' : 'Maximize'}
           tabIndex={-1}
@@ -179,7 +252,7 @@ export function Titlebar() {
         </button>
         <button
           type="button"
-          class="flex h-full w-12 items-center justify-center text-base-content/50 transition-colors hover:bg-error hover:text-error-content"
+          class={`${controlClass} hover:bg-error hover:text-error-content`}
           onClick={handleClose}
           aria-label="Close to tray"
           tabIndex={-1}

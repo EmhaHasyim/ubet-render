@@ -49,76 +49,74 @@ export function StatsStrip() {
     return list.find((j) => j.state === 'processing')?.name ?? null;
   });
 
-  // Show a compact idle banner instead of 5 empty columns
+  // Shared cell styles — compact, calm, border-separated (studio-style).
+  const statClass = 'stat px-3.5 py-2.5 gap-0';
+  const titleClass =
+    'stat-title text-[10px] font-medium uppercase tracking-wide text-base-content/55';
+  const valueClass = 'stat-value text-base font-semibold';
+  const descClass = 'stat-desc text-[11px] text-base-content/55';
+
+  // No jobs and no live stats → render nothing. The inspector rail already
+  // shows the Ready state ("Ready · Missing paths" + Start button) and the
+  // titlebar shows the Idle pill, so a filler banner would only waste
+  // vertical space on a fullscreen desktop layout. The page starts straight
+  // at pipeline step 01 instead.
   if (total() === 0 && !live()) {
-    return (
-      <div class="stats stats-vertical shadow sm:stats-horizontal w-full bg-base-100 opacity-70">
-        <div class="stat">
-          <div class="stat-figure text-primary/50">
-            <Icon icon="lucide:sparkles" width="28" height="28" />
-          </div>
-          <div class="stat-title">Ready</div>
-          <div class="stat-value text-base-content/40 text-lg">Idle</div>
-          <div class="stat-desc text-base-content/40">
-            Configure your sources and start a render
-          </div>
-        </div>
-      </div>
-    );
+    return null;
   }
 
   return (
-    <div class="stats stats-vertical shadow sm:stats-horizontal w-full bg-base-100">
-      <div class="stat">
-        <div class="stat-figure text-primary">
-          <Icon icon="lucide:list-checks" width="28" height="28" />
-        </div>
-        <div class="stat-title">Total Jobs</div>
-        <div class="stat-value">{total()}</div>
-        <div class="stat-desc">
+    <div class="stats stats-vertical shadow-none sm:stats-horizontal w-full bg-base-100 border border-base-300/70 rounded-box overflow-hidden">
+      <div class={statClass}>
+        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-base-300/50 text-base-content/70">
+          <Icon icon="lucide:list-checks" width="16" height="16" />
+        </span>
+        <div class={titleClass}>Total Jobs</div>
+        <div class={valueClass}>{total()}</div>
+        <div class={descClass}>
           {counts().processing} processing · {counts().pending} queued
         </div>
       </div>
 
-      <div class="stat">
-        <div class="stat-figure text-success">
-          <Icon icon="lucide:circle-check" width="28" height="28" />
-        </div>
-        <div class="stat-title">Done</div>
-        <div class="stat-value text-success">{counts().done}</div>
-        <div class="stat-desc">jobs done</div>
+      <div class={statClass}>
+        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-base-300/50 text-base-content/70">
+          <Icon icon="lucide:circle-check" width="16" height="16" />
+        </span>
+        <div class={titleClass}>Done</div>
+        <div class={`${valueClass} text-success`}>{counts().done}</div>
+        <div class={descClass}>jobs done</div>
       </div>
 
-      <div class="stat">
-        <div class="stat-figure text-error">
-          <Icon icon="lucide:circle-x" width="28" height="28" />
-        </div>
-        <div class="stat-title">Failed</div>
-        <div class="stat-value text-error">{counts().failed}</div>
-        <div class="stat-desc">needs attention</div>
+      <div class={statClass}>
+        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-base-300/50 text-base-content/70">
+          <Icon icon="lucide:circle-x" width="16" height="16" />
+        </span>
+        <div class={titleClass}>Failed</div>
+        <div class={`${valueClass} text-error`}>{counts().failed}</div>
+        <div class={descClass}>needs attention</div>
       </div>
 
-      <div class="stat" aria-live="polite">
-        <div class="stat-figure text-primary">
-          <Icon icon="lucide:gauge" width="28" height="28" />
-        </div>
-        <div class="stat-title">Progress</div>
-        <div class="stat-value text-primary">{pct()}%</div>
-        <div class="stat-desc">{eta()}</div>
+      <div class={statClass} aria-live="polite">
+        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-base-300/50 text-base-content/70">
+          <Icon icon="lucide:gauge" width="16" height="16" />
+        </span>
+        <div class={titleClass}>Progress</div>
+        <div class={`${valueClass} text-primary`}>{pct()}%</div>
+        <div class={descClass}>{eta()}</div>
       </div>
 
-      <div class="stat" aria-live="polite">
-        <div class="stat-figure text-secondary">
-          <Icon icon="lucide:activity" width="28" height="28" />
-        </div>
-        <div class="stat-title">Live Render</div>
-        <div class="stat-value text-secondary text-lg">
+      <div class={statClass} aria-live="polite">
+        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-base-300/50 text-base-content/70">
+          <Icon icon="lucide:activity" width="16" height="16" />
+        </span>
+        <div class={titleClass}>Live Render</div>
+        <div class={`${valueClass} text-secondary`}>
           {(() => {
             const l = live();
             return l ? `${l.speed.toFixed(1)}x` : 'Idle';
           })()}
         </div>
-        <div class="stat-desc">
+        <div class={descClass}>
           {(() => {
             const l = live();
             if (!l) return 'waiting for stats';
@@ -137,15 +135,15 @@ export function StatsStrip() {
         const name = currentVideo();
         if (!name) return null;
         return (
-          <div class="stat" aria-live="polite">
-            <div class="stat-figure text-info">
-              <Icon icon="lucide:film" width="28" height="28" />
-            </div>
-            <div class="stat-title">Now Encoding</div>
-            <div class="stat-value truncate text-info text-lg" title={name}>
+          <div class={statClass} aria-live="polite">
+            <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-base-300/50 text-base-content/70">
+              <Icon icon="lucide:film" width="16" height="16" />
+            </span>
+            <div class={titleClass}>Now Encoding</div>
+            <div class={`${valueClass} truncate text-info`} title={name}>
               {name}
             </div>
-            <div class="stat-desc">current video</div>
+            <div class={descClass}>current video</div>
           </div>
         );
       })()}
