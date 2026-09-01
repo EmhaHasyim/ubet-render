@@ -275,7 +275,7 @@ bun run test src/core/persisted.test.ts  # Single file
 
 ## Project Status
 
-**Version:** 0.2.7 • **License:** MIT
+**Version:** 0.2.8 • **License:** MIT
 
 See [CHANGELOG.md](./CHANGELOG.md) for the full release history.
 
