@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::process::Command;
+use std::sync::OnceLock;
 use sysinfo::System;
+use tauri_plugin_shell::ShellExt;
+use tauri_plugin_shell::process::{Command as ShellCommand, CommandEvent};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -8,6 +11,7 @@ use std::os::windows::process::CommandExt;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct HardwareInfo {
     pub cpu_name: String,
     pub gpu_name: String,
@@ -16,8 +20,8 @@ pub struct HardwareInfo {
 }
 
 #[tauri::command]
-pub async fn detect_hardware() -> HardwareInfo {
-    tokio::task::spawn_blocking(move || {
+pub async fn detect_hardware(app: tauri::AppHandle) -> HardwareInfo {
+    let (cpu_name, ram_gb, gpu_name) = tokio::task::spawn_blocking(move || {
         let mut sys = System::new_all();
         sys.refresh_cpu_all();
         sys.refresh_memory();
@@ -26,62 +30,112 @@ pub async fn detect_hardware() -> HardwareInfo {
             .cpus()
             .first()
             .map(|c| c.brand().to_string())
-            .unwrap_or_else(|| "Tidak diketahui".to_string());
+            .unwrap_or_else(|| "Unknown".to_string());
 
         let ram_gb = (sys.total_memory() as f64 / (1024.0 * 1024.0 * 1024.0)).round() as u64;
 
         let gpu_name = get_gpu_name();
-        let av1_supported = check_av1_support();
-
-        HardwareInfo {
-            cpu_name,
-            gpu_name,
-            ram_gb,
-            av1_supported,
-        }
+        (cpu_name, ram_gb, gpu_name)
     })
     .await
-    .unwrap_or_else(|_| HardwareInfo {
-        cpu_name: "Tidak diketahui".to_string(),
-        gpu_name: "Tidak diketahui".to_string(),
-        ram_gb: 0,
-        av1_supported: false,
-    })
+    .unwrap_or_else(|_| ("Unknown".to_string(), 0, "Unknown".to_string()));
+
+    let av1_supported = check_av1_support(&app).await;
+
+    HardwareInfo {
+        cpu_name,
+        gpu_name,
+        ram_gb,
+        av1_supported,
+    }
 }
 
 fn get_gpu_name() -> String {
-    let mut ps_cmd = Command::new("powershell");
-    ps_cmd.args([
-        "-NoProfile",
-        "-Command",
-        "(Get-CimInstance Win32_VideoController).Name",
-    ]);
+    // ── Windows: PowerShell + WMIC fallback ───────────────────────────
     #[cfg(target_os = "windows")]
-    ps_cmd.creation_flags(CREATE_NO_WINDOW);
-    if let Ok(output) = ps_cmd.output() {
-        let names = parse_gpu_names(&String::from_utf8_lossy(&output.stdout));
-        if !names.is_empty() {
-            return names.join(", ");
+    {
+        let mut ps_cmd = Command::new("powershell");
+        ps_cmd.args([
+            "-NoProfile",
+            "-Command",
+            "(Get-CimInstance Win32_VideoController).Name",
+        ]);
+        ps_cmd.creation_flags(CREATE_NO_WINDOW);
+        if let Ok(output) = ps_cmd.output() {
+            let names = parse_gpu_names(&String::from_utf8_lossy(&output.stdout));
+            if !names.is_empty() {
+                return names.join(", ");
+            }
+        }
+
+        let mut wmic_cmd = Command::new("wmic");
+        wmic_cmd.args(["path", "win32_VideoController", "get", "name"]);
+        wmic_cmd.creation_flags(CREATE_NO_WINDOW);
+        if let Ok(output) = wmic_cmd.output() {
+            let names: Vec<String> = parse_gpu_names(&String::from_utf8_lossy(&output.stdout))
+                .into_iter()
+                .filter(|name| !name.eq_ignore_ascii_case("name"))
+                .collect();
+            if !names.is_empty() {
+                return names.join(", ");
+            }
         }
     }
 
-    let mut wmic_cmd = Command::new("wmic");
-    wmic_cmd.args(["path", "win32_VideoController", "get", "name"]);
-    #[cfg(target_os = "windows")]
-    wmic_cmd.creation_flags(CREATE_NO_WINDOW);
-    if let Ok(output) = wmic_cmd.output() {
-        let names: Vec<String> = parse_gpu_names(&String::from_utf8_lossy(&output.stdout))
-            .into_iter()
-            .filter(|name| !name.eq_ignore_ascii_case("name"))
-            .collect();
-        if !names.is_empty() {
-            return names.join(", ");
+    // ── macOS: system_profiler ────────────────────────────────────────
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = Command::new("system_profiler")
+            .args(["SPDisplaysDataType"])
+            .output()
+        {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            // Extract lines like "Chipset Model: Apple M1 Pro"
+            let gpus: Vec<String> = stdout
+                .lines()
+                .filter_map(|line| {
+                    let trimmed = line.trim();
+                    trimmed
+                        .strip_prefix("Chipset Model: ")
+                        .or_else(|| trimmed.strip_prefix("Chipset Model:"))
+                        .map(str::to_string)
+                })
+                .collect();
+            if !gpus.is_empty() {
+                return gpus.join(", ");
+            }
         }
     }
 
-    "Tidak diketahui".to_string()
+    // ── Linux: lspci ──────────────────────────────────────────────────
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(output) = Command::new("lspci").args(["-mm"]).output() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let gpus: Vec<String> = stdout
+                .lines()
+                .filter(|line| {
+                    let lower = line.to_lowercase();
+                    lower.contains("vga") || lower.contains("3d") || lower.contains("display")
+                })
+                .filter_map(|line| {
+                    // "-mm" machine-readable: double-quoted fields.
+                    // rsplit('"') yields ["", last_field, " ", ..., first_field, ""];
+                    // nth(1) picks the last substantive field (the device name).
+                    line.rsplit('"').nth(1).map(|s| s.trim().to_string())
+                })
+                .collect();
+            if !gpus.is_empty() {
+                return gpus.join(", ");
+            }
+        }
+    }
+
+    "Unknown".to_string()
 }
 
+// Only called on Windows (cfg-gated inside get_gpu_name).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn parse_gpu_names(stdout: &str) -> Vec<String> {
     stdout
         .lines()
@@ -91,16 +145,112 @@ fn parse_gpu_names(stdout: &str) -> Vec<String> {
         .collect()
 }
 
-fn check_av1_support() -> bool {
-    let mut ffmpeg_cmd = Command::new("ffmpeg");
-    ffmpeg_cmd.args(["-hide_banner", "-encoders"]);
-    #[cfg(target_os = "windows")]
-    ffmpeg_cmd.creation_flags(CREATE_NO_WINDOW);
-    ffmpeg_cmd
-        .output()
-        .map(|out| {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            stdout.contains("av1_nvenc") || stdout.contains("av1_amf") || stdout.contains("av1_qsv") || stdout.contains("libsvtav1")
+/// Cached verdict so the (potentially slow) AV1 probe runs at most once per
+/// app session. Without a cache, every remount (e.g. ErrorBoundary "Try
+/// Again") would re-run up to four ffmpeg subprocesses and could stall
+/// rendering startup for tens of seconds.
+static AV1_SUPPORT_CACHE: OnceLock<bool> = OnceLock::new();
+
+async fn check_av1_support(app: &tauri::AppHandle) -> bool {
+    if let Some(v) = AV1_SUPPORT_CACHE.get() {
+        return *v;
+    }
+    let probe_timeout = std::time::Duration::from_secs(8);
+
+    // Probe the three vendor hardware encoders CONCURRENTLY and run the
+    // software (libsvtav1) scan in parallel too. The previous sequential
+    // loop could stall app startup for up to 3× the probe timeout (24 s)
+    // plus the fallback scan (8 s) on a machine where an encoder exists
+    // but initialises slowly. Parallelising bounds the worst case to a
+    // single probe timeout while keeping the accuracy of actually testing
+    // each encoder.
+    let hw_fut = futures::future::join_all(
+        ["av1_nvenc", "av1_amf", "av1_qsv"]
+            .iter()
+            .map(|&encoder| probe_hw_encoder(app, encoder, probe_timeout)),
+    );
+    let svt_fut = scan_encoders_for_svt_av1(app, probe_timeout);
+    let (hw_results, has_svt) = tokio::join!(hw_fut, svt_fut);
+
+    let supported = hw_results.into_iter().any(|r| r) || has_svt;
+    let _ = AV1_SUPPORT_CACHE.set(supported);
+    supported
+}
+
+async fn run_probe(
+    command: ShellCommand,
+    timeout: std::time::Duration,
+) -> Option<(Option<i32>, Vec<u8>)> {
+    let (mut rx, child) = command.spawn().ok()?;
+    let mut child = Some(child);
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut stdout = Vec::new();
+
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep_until(deadline) => {
+                let _ = child.take().map(|process| process.kill());
+                return None;
+            }
+            event = rx.recv() => match event {
+                Some(CommandEvent::Stdout(bytes)) => stdout.extend(bytes),
+                Some(CommandEvent::Terminated(status)) => {
+                    return Some((status.code, stdout));
+                }
+                Some(CommandEvent::Error(_)) => {}
+                Some(_) => {}
+                None => {
+                    let _ = child.take().map(|process| process.kill());
+                    return None;
+                }
+            }
+        }
+    }
+}
+
+/// Run one ffmpeg hardware-encode probe. Returns `true` when the encoder
+/// produced a frame successfully within `probe_timeout`.
+async fn probe_hw_encoder(
+    app: &tauri::AppHandle,
+    encoder: &str,
+    probe_timeout: std::time::Duration,
+) -> bool {
+    let Ok(sidecar_command) = app.shell().sidecar("ffmpeg") else {
+        return false;
+    };
+    let sidecar_command = sidecar_command.args([
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=black:s=256x256",
+        "-vframes",
+        "1",
+        "-c:v",
+        encoder,
+        "-f",
+        "null",
+        "-",
+    ]);
+    run_probe(sidecar_command, probe_timeout)
+        .await
+        .is_some_and(|(code, _)| code == Some(0))
+}
+
+/// Cheap fallback: check whether the bundled ffmpeg lists `libsvtav1`
+/// among its compiled encoders.
+async fn scan_encoders_for_svt_av1(
+    app: &tauri::AppHandle,
+    probe_timeout: std::time::Duration,
+) -> bool {
+    let Ok(sidecar_command) = app.shell().sidecar("ffmpeg") else {
+        return false;
+    };
+    let sidecar_command = sidecar_command.args(["-hide_banner", "-encoders"]);
+    run_probe(sidecar_command, probe_timeout)
+        .await
+        .is_some_and(|(code, stdout)| {
+            code == Some(0) && String::from_utf8_lossy(&stdout).contains("libsvtav1")
         })
-        .unwrap_or(false)
 }

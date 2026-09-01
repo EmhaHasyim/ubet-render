@@ -1,175 +1,141 @@
-import { createSignal, createEffect } from 'solid-js';
-import { DEFAULT_CONFIG } from '../core/config';
-import type { MediaSource } from '../core/types';
+import { createEffect, onCleanup } from 'solid-js';
+import { createStore } from 'solid-js/store';
+import {
+  STORAGE_KEY,
+  STORAGE_VERSION,
+  loadPersistedConfig,
+  type PersistedConfig,
+} from '../core/persisted';
+import { safeSetStorageItem } from '../core/storage';
+import {
+  CONFIG_SCHEMA,
+  snapshotFromState,
+  type SchemaState,
+} from '../core/schema';
 
-const STORAGE_KEY = 'ubetrender-paths';
+// ── State interface ────────────────────────────────────────────────────
+// Derived from the single-source schema: one field descriptor in
+// `core/schema.ts` covers store shape, snapshot, coercion and clamping.
+// ── Persistence helpers ────────────────────────────────────────────────
 
-function isMediaSource(value: unknown): value is MediaSource {
-  if (!value || typeof value !== 'object') return false;
-  const source = value as Partial<MediaSource>;
-  return (
-    source.type === 'files' &&
-    Array.isArray(source.paths) &&
-    source.paths.every((path) => typeof path === 'string')
-  );
+/**
+ * Persist a snapshot to localStorage, swallowing quota/storage errors.
+ * Module-level so the debounced writer isn't recreated on every render.
+ */
+function writeSnapshot(snapshot: PersistedConfig): void {
+  safeSetStorageItem(STORAGE_KEY, JSON.stringify(snapshot));
 }
 
-function stringOr(value: unknown, fallback: string) {
-  return typeof value === 'string' ? value : fallback;
-}
-
-function numberOr(value: unknown, fallback: number, min: number) {
-  return typeof value === 'number' && Number.isFinite(value) && value >= min
-    ? value
-    : fallback;
-}
-
-function booleanOr(value: unknown, fallback: boolean) {
-  return typeof value === 'boolean' ? value : fallback;
-}
+// ── Hook ───────────────────────────────────────────────────────────────
 
 export function usePersistedConfig() {
-  let initial = {
-    videoSource: null as MediaSource | null,
-    audioSource: null as MediaSource | null,
-    outputPath: '',
-    outputPrefix: DEFAULT_CONFIG.metadata.channelPrefix,
-    maxrate: '4000k',
-    usePingpong: true,
-    youtubeTimestamps: true,
-    songsPerPlaylist: DEFAULT_CONFIG.audio.songsPerPlaylist,
-    minDurationHours: DEFAULT_CONFIG.target.minDurationSec / 3600,
-    codec: 'av1',
-    maxConcurrentJobs: 1,
-    watermarkPath: undefined as string | undefined,
-    watermarkOpacity: 0.8,
-  };
+  const initial = loadPersistedConfig();
 
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      initial = {
-        videoSource: isMediaSource(parsed.videoSource)
-          ? parsed.videoSource
-          : null,
-        audioSource: isMediaSource(parsed.audioSource)
-          ? parsed.audioSource
-          : null,
-        outputPath: stringOr(parsed.outputPath, ''),
-        outputPrefix: stringOr(
-          parsed.outputPrefix,
-          DEFAULT_CONFIG.metadata.channelPrefix,
-        ),
-        maxrate: stringOr(parsed.maxrate, '4000k'),
-        usePingpong: booleanOr(parsed.usePingpong, true),
-        youtubeTimestamps: booleanOr(parsed.youtubeTimestamps, true),
-        songsPerPlaylist: numberOr(
-          parsed.songsPerPlaylist,
-          DEFAULT_CONFIG.audio.songsPerPlaylist,
-          1,
-        ),
-        minDurationHours: numberOr(
-          parsed.minDurationHours,
-          DEFAULT_CONFIG.target.minDurationSec / 3600,
-          0.1,
-        ),
-        codec: ['h264', 'h265', 'av1'].includes(String(parsed.codec))
-          ? String(parsed.codec)
-          : 'av1',
-        maxConcurrentJobs: numberOr(parsed.maxConcurrentJobs, 1, 1),
-        watermarkPath:
-          typeof parsed.watermarkPath === 'string'
-            ? parsed.watermarkPath
-            : undefined,
-        watermarkOpacity: numberOr(parsed.watermarkOpacity, 0.8, 0.1),
-      };
-    }
-  } catch (err) {
-    console.error('Failed to load persisted config:', err);
-  }
-
-  const [videoSource, setVideoSource] = createSignal<MediaSource | null>(
-    initial.videoSource,
-  );
-  const [audioSource, setAudioSource] = createSignal<MediaSource | null>(
-    initial.audioSource,
-  );
-  const [outputPath, setOutputPath] = createSignal<string>(initial.outputPath);
-  const [outputPrefix, setOutputPrefix] = createSignal<string>(
-    initial.outputPrefix,
-  );
-  const [maxrate, setMaxrate] = createSignal<string>(initial.maxrate);
-  const [usePingpong, setUsePingpong] = createSignal<boolean>(
-    initial.usePingpong,
-  );
-  const [youtubeTimestamps, setYoutubeTimestamps] = createSignal<boolean>(
-    initial.youtubeTimestamps,
-  );
-  const [songsPerPlaylist, setSongsPerPlaylist] = createSignal(
-    initial.songsPerPlaylist,
-  );
-  const [minDurationHours, setMinDurationHours] = createSignal(
-    initial.minDurationHours,
-  );
-  const [codec, setCodec] = createSignal(initial.codec);
-  const [maxConcurrentJobs, setMaxConcurrentJobs] = createSignal(
-    initial.maxConcurrentJobs,
-  );
-  const [watermarkPath, setWatermarkPath] = createSignal(initial.watermarkPath);
-  const [watermarkOpacity, setWatermarkOpacity] = createSignal(
-    initial.watermarkOpacity,
-  );
-
-  createEffect(() => {
-    try {
-      localStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify({
-          videoSource: videoSource(),
-          audioSource: audioSource(),
-          outputPath: outputPath(),
-          outputPrefix: outputPrefix(),
-          maxrate: maxrate(),
-          usePingpong: usePingpong(),
-          youtubeTimestamps: youtubeTimestamps(),
-          songsPerPlaylist: songsPerPlaylist(),
-          minDurationHours: minDurationHours(),
-          codec: codec(),
-          maxConcurrentJobs: maxConcurrentJobs(),
-          watermarkPath: watermarkPath(),
-          watermarkOpacity: watermarkOpacity(),
-        }),
-      );
-    } catch {}
+  // Single reactive store instead of 17 individual createSignal calls.
+  // All fields share one reactive root, which means SolidJS tracks a single
+  // dependency in effects that read multiple fields, reducing bookkeeping.
+  const [state, setState] = createStore<SchemaState>({
+    videoSource: initial.videoSource,
+    audioSource: initial.audioSource,
+    outputPath: initial.outputPath,
+    outputPrefix: initial.outputPrefix,
+    maxrate: initial.maxrate,
+    usePingpong: initial.usePingpong,
+    audioMode: initial.audioMode,
+    embedChapters: initial.embedChapters,
+    outputFormat: initial.outputFormat,
+    songsPerPlaylist: initial.songsPerPlaylist,
+    minDurationHours: initial.minDurationHours,
+    loopMode: initial.loopMode,
+    loopCount: initial.loopCount,
+    codec: initial.codec,
+    skipIntermediateOnCodecMatch: initial.skipIntermediateOnCodecMatch,
   });
 
+  // Debounced persist to localStorage whenever any field changes.
+  // Reads from `state` directly — SolidJS's store tracks individual key
+  // access so this effect only re-runs when a field actually used below
+  // has changed (not when ANY field changes).
+  let persistTimer: ReturnType<typeof setTimeout> | null = null;
+  // Latest snapshot, kept so the pending debounced write can be flushed
+  // synchronously if the hook unmounts before the timer fires (otherwise
+  // the most recent field change would be silently lost).
+  let latestSnapshot: PersistedConfig | null = null;
+
+  createEffect(() => {
+    const snapshot: PersistedConfig = snapshotFromState(state, STORAGE_VERSION);
+    latestSnapshot = snapshot;
+    // Clear any pending timer before setting a new one — avoids creating
+    // N timers when the user changes N fields rapidly.
+    if (persistTimer !== null) clearTimeout(persistTimer);
+    persistTimer = setTimeout(() => {
+      persistTimer = null;
+      writeSnapshot(snapshot);
+    }, 300);
+  });
+
+  // Flush any pending debounced write on unmount so the last field change
+  // isn't lost (e.g. when the ErrorBoundary remounts the pipeline).
+  onCleanup(() => {
+    if (persistTimer !== null) {
+      clearTimeout(persistTimer);
+      persistTimer = null;
+    }
+    if (latestSnapshot !== null) {
+      writeSnapshot(latestSnapshot);
+    }
+  });
+
+  // ── Setters ──────────────────────────────────────────────────────────
+  // Numeric setters clamp via the schema bounds; the rest write directly.
+  const clampSetter = (name: string) => (v: number) => {
+    const field: import('../core/schema').FieldDescriptor | undefined =
+      CONFIG_SCHEMA.find((f) => f.name === name);
+    let value = v;
+    if (field?.integer) value = Math.round(value) || (field.min ?? 1);
+    if (field?.min !== undefined) value = Math.max(field.min, value);
+    if (field?.max !== undefined) value = Math.min(field.max, value);
+    if (name === 'songsPerPlaylist') setState('songsPerPlaylist', value);
+    else if (name === 'minDurationHours') setState('minDurationHours', value);
+    else if (name === 'loopCount') setState('loopCount', value);
+  };
+
   return {
-    videoSource,
-    audioSource,
-    outputPath,
-    outputPrefix,
-    maxrate,
-    usePingpong,
-    youtubeTimestamps,
-    songsPerPlaylist,
-    minDurationHours,
-    codec,
-    maxConcurrentJobs,
-    watermarkPath,
-    watermarkOpacity,
-    setVideoSource,
-    setAudioSource,
-    setOutputPath,
-    setOutputPrefix,
-    setMaxrate,
-    setUsePingpong,
-    setYoutubeTimestamps,
-    setSongsPerPlaylist,
-    setMinDurationHours,
-    setCodec,
-    setMaxConcurrentJobs,
-    setWatermarkPath,
-    setWatermarkOpacity,
+    // ---- Getters ----
+    videoSource: () => state.videoSource,
+    audioSource: () => state.audioSource,
+    outputPath: () => state.outputPath,
+    outputPrefix: () => state.outputPrefix,
+    maxrate: () => state.maxrate,
+    usePingpong: () => state.usePingpong,
+    songsPerPlaylist: () => state.songsPerPlaylist,
+    minDurationHours: () => state.minDurationHours,
+    loopMode: () => state.loopMode,
+    loopCount: () => state.loopCount,
+    codec: () => state.codec,
+    audioMode: () => state.audioMode,
+    embedChapters: () => state.embedChapters,
+    outputFormat: () => state.outputFormat,
+    skipIntermediateOnCodecMatch: () => state.skipIntermediateOnCodecMatch,
+
+    // ---- Setters (numeric ones clamp to schema bounds = backend limits) ----
+    setVideoSource: (v: import('../core/types').MediaSource | null) =>
+      setState('videoSource', v),
+    setAudioSource: (v: import('../core/types').MediaSource | null) =>
+      setState('audioSource', v),
+    setOutputPath: (v: string) => setState('outputPath', v),
+    setOutputPrefix: (v: string) => setState('outputPrefix', v),
+    setMaxrate: (v: string) => setState('maxrate', v),
+    setUsePingpong: (v: boolean) => setState('usePingpong', v),
+    setSongsPerPlaylist: clampSetter('songsPerPlaylist'),
+    setMinDurationHours: clampSetter('minDurationHours'),
+    setLoopMode: (v: 'duration' | 'count') => setState('loopMode', v),
+    setLoopCount: clampSetter('loopCount'),
+    setCodec: (v: string) => setState('codec', v),
+    setAudioMode: (v: 'original' | 'normalize') => setState('audioMode', v),
+    setEmbedChapters: (v: boolean) => setState('embedChapters', v),
+    setOutputFormat: (v: 'mp4' | 'mkv') => setState('outputFormat', v),
+    setSkipIntermediateOnCodecMatch: (v: boolean) =>
+      setState('skipIntermediateOnCodecMatch', v),
   };
 }

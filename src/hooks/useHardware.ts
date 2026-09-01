@@ -1,12 +1,9 @@
 import { createSignal, onMount } from 'solid-js';
 import { invoke } from '@tauri-apps/api/core';
+import type { HardwareInfo } from '../core/types';
+import { CODECS } from '../core/config';
 
-export interface HardwareInfo {
-  cpuModel: string;
-  gpuModel: string;
-  totalRamGB: number;
-  av1Supported: boolean;
-}
+export type { HardwareInfo } from '../core/types';
 
 export function useHardware(
   currentCodec: () => string,
@@ -17,31 +14,35 @@ export function useHardware(
   );
 
   onMount(() => {
+    // Read the codec again when the async probe resolves. The user may
+    // change it while the IPC call is in flight; a stale captured value must
+    // never overwrite a newer selection.
+
     invoke<{
-      cpu_name: string;
-      gpu_name: string;
-      ram_gb: number;
-      av1_supported: boolean;
+      cpuName: string;
+      gpuName: string;
+      ramGb: number;
+      av1Supported: boolean;
     }>('detect_hardware')
       .then((info) => {
         setHardwareInfo({
-          cpuModel: info.cpu_name,
-          gpuModel: info.gpu_name,
-          totalRamGB: info.ram_gb,
-          av1Supported: info.av1_supported,
+          cpuModel: info.cpuName,
+          gpuModel: info.gpuName,
+          totalRamGB: info.ramGb,
+          av1Supported: info.av1Supported,
         });
 
-        if (!info.av1_supported && currentCodec() === 'av1') {
-          setCodec('h265');
+        if (!info.av1Supported && currentCodec() === CODECS.av1) {
+          setCodec(CODECS.h265);
         }
       })
       .catch(() => {
-        if (currentCodec() === 'av1') {
-          setCodec('h265');
+        if (currentCodec() === CODECS.av1) {
+          setCodec(CODECS.h265);
         }
         setHardwareInfo({
-          cpuModel: 'Tidak diketahui',
-          gpuModel: 'Tidak diketahui',
+          cpuModel: 'Unknown',
+          gpuModel: 'Unknown',
           totalRamGB: 0,
           av1Supported: false,
         });
@@ -51,18 +52,18 @@ export function useHardware(
   const resolveEncoder = (codec: string): string => {
     const gpu = hardwareInfo()?.gpuModel.toLowerCase() || '';
     switch (codec) {
-      case 'h264':
+      case CODECS.h264:
         if (gpu.includes('nvidia')) return 'h264_nvenc';
         if (gpu.includes('amd') || gpu.includes('radeon')) return 'h264_amf';
         if (gpu.includes('intel') || gpu.includes('arc')) return 'h264_qsv';
         return 'libx264';
-      case 'h265':
+      case CODECS.h265:
         if (gpu.includes('nvidia')) return 'hevc_nvenc';
         if (gpu.includes('amd') || gpu.includes('radeon')) return 'hevc_amf';
         if (gpu.includes('intel') || gpu.includes('arc')) return 'hevc_qsv';
         return 'libx265';
-      case 'av1':
-        if (!hardwareInfo()?.av1Supported) return resolveEncoder('h265');
+      case CODECS.av1:
+        if (!hardwareInfo()?.av1Supported) return resolveEncoder(CODECS.h265);
         if (gpu.includes('nvidia')) return 'av1_nvenc';
         if (gpu.includes('amd') || gpu.includes('radeon')) return 'av1_amf';
         if (gpu.includes('intel') || gpu.includes('arc')) return 'av1_qsv';

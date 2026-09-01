@@ -1,44 +1,30 @@
-import { Show } from 'solid-js';
 import { Icon } from '@iconify-icon/solid';
 import { open } from '@tauri-apps/plugin-dialog';
-import { AUDIO_EXTENSIONS, VIDEO_EXTENSIONS } from '../../core/config';
-import type { MediaSource } from '../../core/types';
+import { invoke } from '@tauri-apps/api/core';
+import {
+  AUDIO_EXTENSIONS,
+  VIDEO_EXTENSIONS,
+  getSourcePaths,
+} from '../../core/config';
 import { SourceSelector } from '../media/SourceSelector';
+import { TAURI_COMMANDS } from '../../core/constants';
+import { usePipelineContext } from '../../context/pipeline';
+import { normalizeBitrate } from '../../core/estimate';
+import { createLogger } from '../../core/logger';
+import { OutputFolderSelector } from './OutputFolderSelector';
+import { AudioSection } from './AudioSection';
+import { VideoEncodingSection } from './VideoEncodingSection';
+import { LoopingSection } from './LoopingSection';
+import { FeaturesSection } from './FeaturesSection';
 
-interface SettingsCardProps {
-  videoSource: MediaSource | null;
-  audioSource: MediaSource | null;
-  outputPath: string;
-  songsPerPlaylist: number;
-  minDurationHours: number;
-  codec: string;
-  av1Supported: boolean;
-  outputPrefix: string;
-  maxrate: string;
-  usePingpong: boolean;
-  youtubeTimestamps: boolean;
-  onVideoChange: (src: MediaSource | null) => void;
-  onAudioChange: (src: MediaSource | null) => void;
-  onOutputChange: (path: string) => void;
-  onSongsPerPlaylistChange: (val: number) => void;
-  onMinDurationHoursChange: (val: number) => void;
-  onCodecChange: (codec: string) => void;
-  onOutputPrefixChange: (prefix: string) => void;
-  onMaxrateChange: (val: string) => void;
-  onUsePingpongChange: (val: boolean) => void;
-  onYoutubeTimestampsChange: (val: boolean) => void;
-  maxConcurrentJobs: number;
-  watermarkPath?: string;
-  watermarkOpacity: number;
-  onMaxConcurrentJobsChange: (val: number) => void;
-  onWatermarkPathChange: (path?: string) => void;
-  onWatermarkOpacityChange: (val: number) => void;
-  dragHover?: 'video' | 'audio' | 'output' | null;
-}
+// Replaces 1 ad-hoc console.error call; see `src/core/logger.ts`.
+const log = createLogger('SettingsCard');
 
-export function SettingsCard(props: SettingsCardProps) {
+export function SettingsCard() {
+  const pipeline = usePipelineContext();
+
   const dropState = (target: 'video' | 'audio' | 'output') =>
-    props.dragHover === target
+    pipeline.dragHover() === target
       ? 'ring-2 ring-primary ring-offset-2 ring-offset-base-200'
       : '';
 
@@ -46,310 +32,135 @@ export function SettingsCard(props: SettingsCardProps) {
     const selected = await open({
       directory: true,
       multiple: false,
-      defaultPath: props.outputPath || undefined,
+      defaultPath: pipeline.outputPath() || undefined,
     });
-    if (selected) props.onOutputChange(selected as string);
+    if (selected) pipeline.setOutputPath(selected as string);
+  };
+
+  const revealFile = async () => {
+    try {
+      const path = pipeline.outputPath();
+      if (path) await invoke(TAURI_COMMANDS.revealInExplorer, { path });
+    } catch (e) {
+      log.error('Failed to reveal folder:', e);
+    }
+  };
+
+  const handleMaxrateBlur = (raw: string) => {
+    const normalized = normalizeBitrate(raw);
+    if (normalized !== raw) {
+      pipeline.setMaxrate(normalized);
+    }
   };
 
   return (
-    <section class="panel overflow-hidden">
-      <div class="border-b border-base-300 px-4 py-4 sm:px-5">
-        <div class="flex flex-col gap-1">
-          <h3 class="text-base font-semibold">Sources and output</h3>
-          <p class="text-sm text-base-content/60">
-            Video, audio, and destination.
-          </p>
+    <div class="flex flex-col gap-3">
+      {/* ---- Step 01: Sources — its own panel card ---- */}
+      <section class="panel overflow-hidden">
+        <div class="flex items-center gap-3 border-b border-base-300/70 px-4 py-3.5 sm:px-5">
+          <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-base-300/80 bg-base-200 font-mono text-[11px] font-semibold text-base-content/55">
+            01
+          </span>
+          <div class="flex flex-col gap-0.5">
+            <h3 class="text-sm font-semibold">Sources and output</h3>
+            <p class="text-[13px] text-base-content/50">
+              Video, audio, and destination.
+            </p>
+          </div>
         </div>
+
+        {/* ---- Source selectors ---- */}
+        <div class="grid grid-cols-1 gap-4 p-4 sm:p-5 lg:grid-cols-3">
+          <div id="video-dropzone" class={`rounded-xl ${dropState('video')}`}>
+            <SourceSelector
+              label="Master video"
+              allowedExtensions={VIDEO_EXTENSIONS}
+              value={getSourcePaths(pipeline.videoSource())}
+              onChange={(paths) =>
+                pipeline.setVideoSource(paths ? { type: 'files', paths } : null)
+              }
+              icon="lucide:video"
+              themeColor="primary"
+            />
+          </div>
+
+          <div id="audio-dropzone" class={`rounded-xl ${dropState('audio')}`}>
+            <SourceSelector
+              label="Audio tracks"
+              allowedExtensions={AUDIO_EXTENSIONS}
+              value={getSourcePaths(pipeline.audioSource())}
+              onChange={(paths) =>
+                pipeline.setAudioSource(paths ? { type: 'files', paths } : null)
+              }
+              icon="lucide:music-2"
+              themeColor="secondary"
+            />
+          </div>
+
+          <div id="output-dropzone">
+            <OutputFolderSelector
+              outputPath={pipeline.outputPath}
+              dropClass={dropState('output')}
+              onChooseFolder={chooseOutput}
+              onReveal={revealFile}
+            />
+          </div>
+        </div>
+      </section>
+
+      {/* ---- Steps 02–05: render options pipeline ---- */}
+      <div class="flex items-center gap-2 px-1 pt-1">
+        <Icon
+          icon="lucide:sliders-horizontal"
+          class="text-base-content/45"
+          width="15"
+          height="15"
+        />
+        <h3 class="text-sm font-semibold">Render options</h3>
       </div>
 
-      <div class="grid grid-cols-1 gap-4 p-4 sm:p-5 lg:grid-cols-3">
-        <div id="video-dropzone" class={`rounded-lg ${dropState('video')}`}>
-          <SourceSelector
-            label="Master video"
-            allowedExtensions={VIDEO_EXTENSIONS}
-            value={props.videoSource?.paths || []}
-            onChange={(paths) =>
-              props.onVideoChange(paths ? { type: 'files', paths } : null)
-            }
-            icon="lucide:video"
-            themeColor="primary"
-          />
-        </div>
+      <div class="flex flex-col gap-3">
+        <AudioSection
+          songsPerPlaylist={pipeline.songsPerPlaylist}
+          audioMode={pipeline.audioMode}
+          onSongsChange={(v) => pipeline.setSongsPerPlaylist(v)}
+          onModeChange={(v) => pipeline.setAudioMode(v)}
+        />
 
-        <div id="audio-dropzone" class={`rounded-lg ${dropState('audio')}`}>
-          <SourceSelector
-            label="Audio tracks"
-            allowedExtensions={AUDIO_EXTENSIONS}
-            value={props.audioSource?.paths || []}
-            onChange={(paths) =>
-              props.onAudioChange(paths ? { type: 'files', paths } : null)
-            }
-            icon="lucide:music-2"
-            themeColor="secondary"
-          />
-        </div>
+        <VideoEncodingSection
+          codec={pipeline.codec}
+          av1Supported={pipeline.av1Supported}
+          maxrate={pipeline.maxrate}
+          maxrateValid={pipeline.maxrateValid}
+          outputFormat={pipeline.outputFormat}
+          outputPrefix={pipeline.outputPrefix}
+          onCodecChange={(v) => pipeline.setCodec(v)}
+          onMaxrateChange={(v) => pipeline.setMaxrate(v)}
+          onMaxrateBlur={handleMaxrateBlur}
+          onFormatChange={(v) => pipeline.setOutputFormat(v)}
+          onPrefixChange={(v) => pipeline.setOutputPrefix(v)}
+        />
 
-        <div
-          id="output-dropzone"
-          class={`flex min-h-full flex-col gap-3 rounded-lg ${dropState('output')}`}
-        >
-          <button
-            type="button"
-            class="flex min-h-36 w-full flex-col items-start justify-between rounded-lg border border-dashed border-accent/35 bg-accent/5 p-4 text-left text-accent transition-colors hover:border-accent"
-            onClick={chooseOutput}
-          >
-            <span class="flex h-10 w-10 items-center justify-center rounded-lg bg-base-100 text-current shadow-sm">
-              <Icon icon="lucide:folder-output" width="20" height="20" />
-            </span>
+        <LoopingSection
+          loopMode={pipeline.loopMode}
+          minDurationHours={pipeline.minDurationHours}
+          loopCount={pipeline.loopCount}
+          onModeChange={(v) => pipeline.setLoopMode(v)}
+          onDurationChange={(v) => pipeline.setMinDurationHours(v)}
+          onCountChange={(v) => pipeline.setLoopCount(v)}
+        />
 
-            <span class="mt-4 block">
-              <span class="block text-sm font-semibold text-base-content">
-                Output folder
-              </span>
-              <span class="mt-1 block text-xs text-base-content/60">
-                {props.outputPath ? 'Destination selected' : 'Choose folder'}
-              </span>
-            </span>
-          </button>
-
-          <Show
-            when={props.outputPath}
-            fallback={
-              <div class="rounded-lg border border-base-300 bg-base-100 px-3 py-2 text-xs text-base-content/55">
-                No folder selected.
-              </div>
-            }
-          >
-            <div class="rounded-lg border border-base-300 bg-base-100 p-3">
-              <p class="mb-1 text-xs font-medium text-base-content/70">
-                Selected folder
-              </p>
-              <p
-                class="truncate text-xs text-base-content/80"
-                title={props.outputPath}
-              >
-                {props.outputPath}
-              </p>
-            </div>
-          </Show>
-        </div>
+        <FeaturesSection
+          usePingpong={pipeline.usePingpong}
+          embedChapters={pipeline.embedChapters}
+          skipIntermediateOnCodecMatch={pipeline.skipIntermediateOnCodecMatch}
+          onPingpongChange={(v) => pipeline.setUsePingpong(v)}
+          onChaptersChange={(v) => pipeline.setEmbedChapters(v)}
+          onSkipReencodeChange={(v) =>
+            pipeline.setSkipIntermediateOnCodecMatch(v)
+          }
+        />
       </div>
-
-      <div class="border-t border-base-300 bg-base-100/60 p-4 sm:p-5">
-        <div class="mb-4 flex items-center gap-2">
-          <Icon
-            icon="lucide:sliders-horizontal"
-            class="text-primary"
-            width="18"
-            height="18"
-          />
-          <h3 class="text-base font-semibold">Render options</h3>
-        </div>
-
-        <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          <label class="form-control">
-            <span class="label py-1">
-              <span class="label-text font-medium">Songs per video</span>
-            </span>
-            <input
-              type="number"
-              class="input input-bordered w-full bg-base-100"
-              min="1"
-              max="50"
-              value={props.songsPerPlaylist}
-              onInput={(e) =>
-                props.onSongsPerPlaylistChange(
-                  Math.max(1, parseInt(e.currentTarget.value) || 1),
-                )
-              }
-            />
-          </label>
-
-          <label class="form-control">
-            <span class="label py-1">
-              <span class="label-text font-medium">Minimum duration</span>
-            </span>
-            <label class="input input-bordered flex items-center gap-2 bg-base-100">
-              <input
-                type="number"
-                class="grow"
-                min="0.1"
-                step="0.1"
-                value={props.minDurationHours}
-                onInput={(e) =>
-                  props.onMinDurationHoursChange(
-                    Math.max(0.1, parseFloat(e.currentTarget.value) || 0.1),
-                  )
-                }
-              />
-              <span class="text-sm text-base-content/55">hours</span>
-            </label>
-          </label>
-
-          <label class="form-control">
-            <span class="label py-1">
-              <span class="label-text font-medium">Video codec</span>
-            </span>
-            <select
-              class="select select-bordered w-full bg-base-100"
-              value={props.codec}
-              onChange={(e) => props.onCodecChange(e.currentTarget.value)}
-            >
-              <option value="h264">H.264</option>
-              <option value="h265">H.265</option>
-              <option value="av1" disabled={!props.av1Supported}>
-                AV1 {!props.av1Supported ? '(unsupported)' : ''}
-              </option>
-            </select>
-          </label>
-
-          <label class="form-control">
-            <span class="label py-1">
-              <span class="label-text font-medium">Max bitrate</span>
-            </span>
-            <input
-              type="text"
-              class="input input-bordered w-full bg-base-100"
-              placeholder="4000k"
-              value={props.maxrate}
-              onInput={(e) => props.onMaxrateChange(e.currentTarget.value)}
-            />
-          </label>
-
-          <label class="form-control">
-            <span class="label py-1">
-              <span class="label-text font-medium">Output prefix</span>
-            </span>
-            <input
-              type="text"
-              class="input input-bordered w-full bg-base-100"
-              placeholder="Ubet Render"
-              value={props.outputPrefix}
-              onInput={(e) => props.onOutputPrefixChange(e.currentTarget.value)}
-            />
-          </label>
-
-          <label class="flex min-h-20 items-center justify-between gap-4 rounded-lg border border-base-300 bg-base-100 px-4 py-3">
-            <span>
-              <span class="block text-sm font-medium">Ping-pong effect</span>
-              <span class="block text-xs text-base-content/55">
-                Mirrored loop
-              </span>
-            </span>
-            <input
-              type="checkbox"
-              class="toggle toggle-primary"
-              checked={props.usePingpong}
-              onChange={(e) =>
-                props.onUsePingpongChange(e.currentTarget.checked)
-              }
-            />
-          </label>
-
-          <label class="flex min-h-20 items-center justify-between gap-4 rounded-lg border border-base-300 bg-base-100 px-4 py-3">
-            <span>
-              <span class="block text-sm font-medium">YouTube Timestamps</span>
-              <span class="block text-xs text-base-content/55">
-                Looping disatukan
-              </span>
-            </span>
-            <input
-              type="checkbox"
-              class="toggle toggle-primary"
-              checked={props.youtubeTimestamps}
-              onChange={(e) =>
-                props.onYoutubeTimestampsChange(e.currentTarget.checked)
-              }
-            />
-          </label>
-        </div>
-
-        <div class="mt-6 mb-4 flex items-center gap-2">
-          <Icon icon="lucide:cpu" class="text-primary" width="18" height="18" />
-          <h3 class="text-base font-semibold">Advanced</h3>
-        </div>
-
-        <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          <label class="form-control">
-            <span class="label py-1">
-              <span class="label-text font-medium">Max Concurrent Jobs</span>
-            </span>
-            <input
-              type="number"
-              class="input input-bordered w-full bg-base-100"
-              min="1"
-              max="16"
-              value={props.maxConcurrentJobs}
-              onInput={(e) =>
-                props.onMaxConcurrentJobsChange(
-                  Math.max(1, parseInt(e.currentTarget.value) || 1),
-                )
-              }
-            />
-          </label>
-
-          <label class="form-control">
-            <span class="label py-1">
-              <span class="label-text font-medium">Watermark Path (PNG)</span>
-            </span>
-            <div class="flex gap-2">
-              <input
-                type="text"
-                class="input input-bordered w-full bg-base-100"
-                placeholder="Optional watermark..."
-                value={props.watermarkPath || ''}
-                readOnly
-              />
-              <button
-                type="button"
-                class="btn btn-outline"
-                onClick={async () => {
-                  const selected = await open({
-                    filters: [{ name: 'Image', extensions: ['png'] }],
-                    multiple: false,
-                  });
-                  if (selected) props.onWatermarkPathChange(selected as string);
-                }}
-              >
-                Browse
-              </button>
-              <Show when={props.watermarkPath}>
-                <button
-                  type="button"
-                  class="btn btn-ghost px-2 text-error"
-                  onClick={() => props.onWatermarkPathChange(undefined)}
-                >
-                  <Icon icon="lucide:x" width="18" height="18" />
-                </button>
-              </Show>
-            </div>
-          </label>
-
-          <label class="form-control">
-            <span class="label py-1">
-              <span class="label-text font-medium">Watermark Opacity</span>
-            </span>
-            <label class="input input-bordered flex items-center gap-2 bg-base-100">
-              <input
-                type="number"
-                class="grow"
-                min="0.1"
-                max="1.0"
-                step="0.1"
-                value={props.watermarkOpacity}
-                onInput={(e) =>
-                  props.onWatermarkOpacityChange(
-                    Math.max(
-                      0.1,
-                      Math.min(1.0, parseFloat(e.currentTarget.value) || 0.8),
-                    ),
-                  )
-                }
-              />
-            </label>
-          </label>
-        </div>
-      </div>
-    </section>
+    </div>
   );
 }

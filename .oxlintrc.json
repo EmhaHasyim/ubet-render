@@ -2,11 +2,26 @@
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "plugins": ["typescript", "unicorn", "oxc"],
   "categories": {
-    "correctness": "error"
+    "correctness": "error",
+    // Surface likely-bugs without breaking the build. Review warnings in
+    // CI before merging.
+    "suspicious": "warn",
+    // Performance hints — informational, never blocking.
+    "perf": "warn"
   },
   "rules": {
     "no-unassigned-vars": "off",
-    "no-unused-expressions": "off"
+    // SolidJS uses bare reactive reads (e.g. `props.logs;`) and the
+    // `void [...]` pattern to declare signal dependencies inside
+    // `createEffect`/`createMemo`. The expression IS used at the
+    // reactive-graph level; oxlint cannot see that, so we keep this
+    // rule disabled project-wide.
+    "no-unused-expressions": "off",
+    // Many `catch (e) { /* noop */ }` paths exist for defensive error
+    // swallowing (e.g. async best-effort operations). Letting oxlint
+    // surface these at `error` level would block the build; `warn` is
+    // also too noisy. Accepting them as an explicit project convention.
+    "no-empty": "off"
   },
   "env": {
     "builtin": true

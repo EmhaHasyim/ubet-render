@@ -15,7 +15,6 @@ export interface AppConfig {
   video: {
     bitrateTarget: string;
     bitrateMax: string;
-    fps: number;
     encoder: string;
     preset: string;
   };
@@ -25,11 +24,9 @@ export interface AppConfig {
     bitrate: string;
     sampleRate: number;
     loudnormParams: string;
+    audioMode: string;
   };
-  youtubeTimestamps: boolean;
-  maxConcurrentJobs: number;
-  watermarkPath?: string;
-  watermarkOpacity: number;
+  embedChapters: boolean;
 }
 
 export interface RenderJob {
@@ -43,19 +40,44 @@ export interface RenderJob {
   progressPercent: number;
   currentStep: string;
   error?: string;
+  timestamps: string[];
 }
 
-export type MediaSource = { type: 'files'; paths: string[] };
+export type MediaSource =
+  | { type: 'folder'; path: string }
+  | { type: 'files'; paths: string[] };
+
+export interface HardwareInfo {
+  cpuModel: string;
+  gpuModel: string;
+  totalRamGB: number;
+  av1Supported: boolean;
+}
+
+export interface JobProgress {
+  index: number;
+  state: 'pending' | 'processing' | 'done' | 'error';
+  progressPercent: number;
+  currentStep: string;
+  name: string;
+  outputPath: string;
+  thumbnailPath: string | null;
+}
+
+export interface PipelineStats {
+  speed: number;
+  bitrateKbps: number;
+  fps: number;
+}
 
 export interface PipelineProgress {
   total: number;
   completed: number;
-  current_video: string;
-  jobs: RenderJob[];
+  jobs: JobProgress[];
 }
 
 export interface PipelineLog {
-  level: 'info' | 'error' | 'success';
+  level: 'info' | 'warn' | 'error' | 'success';
   message: string;
 }
 
@@ -70,4 +92,6 @@ export type PipelineEvent =
   | { type: 'Log'; data: PipelineLog }
   | { type: 'Done'; data: PipelineDone }
   | { type: 'Cancelled'; data: string }
-  | { type: 'FatalError'; data: string };
+  | { type: 'Paused'; data?: undefined }
+  | { type: 'FatalError'; data: string }
+  | { type: 'Stats'; data: PipelineStats };

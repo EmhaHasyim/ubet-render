@@ -1,28 +1,53 @@
 pub mod audio_pool;
+pub mod estimator;
+pub mod job_processor;
+pub mod loop_control;
 pub mod muxer;
+pub mod roots;
+pub mod source_scanner;
+pub mod state;
+pub mod thumbnailer;
 pub mod video_loop;
+pub mod workspace_guard;
 
 use crate::config::AppConfig;
 use crate::error::AppError;
-use crate::ffmpeg;
-use crate::models::job::{JobState, PipelineEvent, RenderJob};
-use crate::models::media::{ProcessedAudio, VideoFile};
-use crate::models::settings::{MediaSource, OverrideConfig};
+use crate::models::job::{JobState, PipelineEvent, RenderJob, RenderStats};
+use crate::models::media::VideoFile;
+use crate::models::settings::OverrideConfig;
 use crate::utils::event;
 use crate::utils::fs;
-use futures::StreamExt;
-use std::path::{Path, PathBuf};
+use estimator::{
+    available_space_for, estimate_total_output_bytes, human_bytes, parse_bitrate_to_kbps,
+    sanitize_filename_component,
+};
+pub use job_processor::{JobContext, JobParams};
+use roots::ResolvedRoots;
+use std::path::Path;
 use std::sync::Arc;
 use tauri::AppHandle;
+use workspace_guard::{WorkspaceGuard, quarantine_state_file};
+
+// `TempDirGuard` was removed: thumbnails are intentionally kept after a
+// render so the results dashboard can display them. They are purged on cancel
+// (see the cancel branch below) and at the start of the next non-resume run
+// (which calls `remove_dir_all(&thumb_dir)`).
+//
+// `WorkspaceGuard` lives in `pipeline/workspace_guard.rs`.
 
 pub struct Pipeline {
     config: AppConfig,
     app: AppHandle,
+    state_manager: state::StateManager,
 }
 
 impl Pipeline {
     pub fn new(app: AppHandle, config: AppConfig) -> Self {
-        Self { app, config }
+        Self {
+            app,
+            config,
+            state_manager: state::StateManager::new(),
+        }
     }
 
     pub async fn execute(
@@ -31,13 +56,23 @@ impl Pipeline {
         resume: bool,
         control: Arc<crate::RenderControl>,
     ) -> Result<(), AppError> {
-        let output_dir = fs::to_absolute(&self.resolve_output_dir(&overrides));
-        let cache_dir = std::env::temp_dir().join("ubet-render").join("cache");
-        let thumb_dir = std::env::temp_dir().join("ubet-render").join("thumbnails");
-        let state_path = output_dir.join("ubet_render_state.json");
+        let ResolvedRoots {
+            output_dir,
+            input_roots,
+            allowed_roots: _allowed_roots,
+            cache_dir,
+            thumb_dir,
+            state_path,
+        } = roots::resolve_roots(&self.config, &overrides)?;
+
+        let mut workspace =
+            WorkspaceGuard::new(cache_dir.clone(), thumb_dir.clone(), state_path.clone());
 
         if !resume {
             let _ = tokio::fs::remove_dir_all(&thumb_dir).await;
+            // Only the app-owned render namespace is disposable; never remove
+            // the configured cache root itself because it may contain unrelated
+            // user files (or even be the same directory as the output root).
             let _ = tokio::fs::remove_dir_all(&cache_dir).await;
         }
 
@@ -47,26 +82,52 @@ impl Pipeline {
 
         let render_timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+            .map(|d| d.as_secs())
+            .unwrap_or_else(|_| {
+                // System clock is before Unix epoch (extremely rare).  Log a
+                // warning and use a stable fallback so file names are still unique.
+                crate::utils::logger::log_line(
+                    "WARNING: System clock reported a time before Unix epoch. Using fallback timestamp.",
+                );
+                // chrono::Utc handles pre-epoch times correctly, which this
+                // SystemTime path does not.  Use chrono directly as fallback.
+                chrono::Utc::now().timestamp().max(0) as u64
+            });
 
-        if control.is_cancelled() || control.is_paused() {
-            return Err(AppError::Cancelled("Render dibatalkan/dipause oleh pengguna".into()));
+        if control.is_cancelled() {
+            return Err(AppError::Cancelled("Render cancelled by user".into()));
+        }
+        if control.is_paused() {
+            // Pause is a graceful stop. Do not wait indefinitely before the
+            // first scan/probe; return so the task can persist/quiesce and the
+            // next resume starts from the durable state file.
+            control.mark_terminated();
+            return Err(AppError::Paused("Render paused by user".into()));
         }
 
-        let video_files = self
-            .scan_source_files(&overrides, Path::new(&self.config.directories.video), "video")
-            .await?;
-        let audio_files = self
-            .scan_source_files(&overrides, Path::new(&self.config.directories.audio), "audio")
-            .await?;
+        let video_files = source_scanner::scan_source_files(
+            &self.app,
+            &overrides,
+            Path::new(&self.config.directories.video),
+            "video",
+            &input_roots,
+        )
+        .await?;
+        let audio_files = source_scanner::scan_source_files(
+            &self.app,
+            &overrides,
+            Path::new(&self.config.directories.audio),
+            "audio",
+            &input_roots,
+        )
+        .await?;
 
         if video_files.is_empty() {
             event::emit(
                 &self.app,
                 PipelineEvent::Log {
                     level: "error".into(),
-                    message: "Tidak ada file video yang dipilih atau ditemukan".into(),
+                    message: "No video files selected or found".into(),
                 },
             );
             return Err(AppError::NoVideo);
@@ -76,27 +137,76 @@ impl Pipeline {
                 &self.app,
                 PipelineEvent::Log {
                     level: "error".into(),
-                    message: "Tidak ada file audio yang dipilih atau ditemukan".into(),
+                    message: "No audio files selected or found".into(),
                 },
             );
             return Err(AppError::NoAudio);
         }
 
-        let use_pingpong = overrides.as_ref().and_then(|ov| ov.use_pingpong).unwrap_or(true);
-        let youtube_timestamps = overrides.as_ref().and_then(|ov| ov.youtube_timestamps).unwrap_or(self.config.youtube_timestamps);
-        let max_concurrent_jobs = overrides.as_ref().and_then(|ov| ov.max_concurrent_jobs).unwrap_or(self.config.max_concurrent_jobs).max(1);
-        let watermark_path = overrides.as_ref().and_then(|ov| ov.watermark_path.clone()).or(self.config.watermark_path.clone());
-        let watermark_opacity = overrides.as_ref().and_then(|ov| ov.watermark_opacity).unwrap_or(self.config.watermark_opacity);
-        
-        let songs_per_playlist = overrides.as_ref().and_then(|ov| ov.songs_per_playlist).unwrap_or(self.config.audio.songs_per_playlist).max(1);
-        let min_duration_sec = overrides.as_ref().and_then(|ov| ov.min_duration_hours).map(|h| (h * 3600.0) as u64).unwrap_or(self.config.target.min_duration_sec);
-        
-        let encoder_selected = overrides.as_ref().and_then(|ov| ov.encoder.clone());
-        let prefix = overrides.as_ref().and_then(|ov| ov.output_prefix.as_deref()).unwrap_or(&self.config.metadata.channel_prefix);
+        // Extract overrides reference once to avoid repeated .as_ref() calls
+        let ov = overrides.as_ref();
+        let use_pingpong = ov.and_then(|o| o.use_pingpong).unwrap_or(true);
+        let audio_mode = ov
+            .and_then(|o| o.audio_mode.clone())
+            .unwrap_or_else(|| self.config.audio.audio_mode.clone());
+        let embed_chapters = ov
+            .and_then(|o| o.embed_chapters)
+            .unwrap_or(self.config.embed_chapters);
+
+        let songs_per_playlist = ov
+            .and_then(|o| o.songs_per_playlist)
+            .unwrap_or(self.config.audio.songs_per_playlist)
+            .max(1);
+        let min_duration_sec = ov
+            .and_then(|o| o.min_duration_hours)
+            .map(|h| (h * 3600.0) as u64)
+            .unwrap_or(self.config.target.min_duration_sec);
+        let loop_count = ov.and_then(|o| o.loop_count);
+
+        let encoder_selected = ov.and_then(|o| o.encoder.clone());
+        let prefix = ov
+            .and_then(|o| o.output_prefix.as_deref())
+            .unwrap_or(&self.config.metadata.channel_prefix);
         let safe_prefix = sanitize_filename_component(prefix);
 
-        let maxrate_str = overrides.as_ref().and_then(|ov| ov.maxrate.clone()).unwrap_or_else(|| self.config.video.bitrate_target.clone());
-        let maxrate_k = parse_bitrate_k(&maxrate_str).unwrap_or(4000).max(1);
+        // Stream-copy is an explicit opt-in. Keeping it disabled by default
+        // preserves the normal encode/filter pipeline (including ping-pong)
+        // and avoids surprising failures when source and target codecs differ.
+        let skip_intermediate_on_codec_match = ov
+            .and_then(|o| o.skip_intermediate_on_codec_match)
+            .unwrap_or(false);
+
+        // Output container chosen by the user (MP4 or MKV). This decouples the
+        // final file extension from the input file's extension, so e.g. a
+        // `.webm`/`.avi` source can still be encoded to a universally supported
+        // container (previously the container followed the input extension).
+        let output_format = ov
+            .and_then(|o| o.output_format.clone())
+            .unwrap_or_else(|| "mp4".to_string());
+        let output_ext = if output_format.eq_ignore_ascii_case("mkv") {
+            "mkv"
+        } else {
+            "mp4"
+        };
+
+        let maxrate_str = ov
+            .and_then(|o| o.maxrate.clone())
+            .unwrap_or_else(|| self.config.video.bitrate_target.clone());
+        let maxrate_k = parse_bitrate_to_kbps(&maxrate_str)
+            .unwrap_or_else(|| {
+                event::emit(
+                    &self.app,
+                    PipelineEvent::Log {
+                        level: "warn".into(),
+                        message: format!(
+                            "Invalid bitrate '{}', falling back to 4000k",
+                            maxrate_str
+                        ),
+                    },
+                );
+                4000
+            })
+            .max(1);
         let target_k = (maxrate_k as f64 * 0.7).ceil() as u32;
 
         let mut video_cfg = self.config.video.clone();
@@ -107,161 +217,442 @@ impl Pipeline {
             video_cfg.encoder = enc.to_string();
         }
 
-        event::emit(&self.app, PipelineEvent::Log { level: "info".into(), message: "Membangun Master Audio Pool...".into() });
+        event::emit(
+            &self.app,
+            PipelineEvent::Log {
+                level: "info".into(),
+                message: "Building master audio pool...".into(),
+            },
+        );
 
-        let master_pool = audio_pool::build_master_audio_pool(
+        let master_pool = match audio_pool::build_master_audio_pool(
             &self.app,
             &cache_dir,
             &audio_files,
             &self.config.audio,
+            &audio_mode,
             Some(control.clone()),
         )
-        .await?;
+        .await
+        {
+            Ok(pool) => pool,
+            Err(AppError::Paused(message)) => {
+                workspace.pause();
+                // The pipeline has committed to exiting; a concurrent resume
+                // must restart from the durable state instead of reviving this
+                // task after its FFmpeg child has already stopped.
+                control.mark_terminated();
+                return Err(AppError::Paused(message));
+            }
+            Err(AppError::Cancelled(message)) => {
+                workspace.cancel();
+                return Err(AppError::Cancelled(message));
+            }
+            Err(error) => return Err(error),
+        };
 
         if master_pool.is_empty() {
             return Err(AppError::NoAudio);
         }
 
-        event::emit(&self.app, PipelineEvent::Log { level: "info".into(), message: format!("{} lagu siap digunakan.", master_pool.len()) });
+        event::emit(
+            &self.app,
+            PipelineEvent::Log {
+                level: "info".into(),
+                message: format!("{} songs ready.", master_pool.len()),
+            },
+        );
+
+        if resume
+            && state_path.exists()
+            && let Ok(metadata) = tokio::fs::metadata(&state_path).await
+            && metadata.len() > crate::validation::MAX_RESUME_STATE_BYTES
+        {
+            event::emit(
+                &self.app,
+                PipelineEvent::Log {
+                    level: "warn".into(),
+                    message: format!(
+                        "Saved render state is too large ({} bytes); quarantining it and starting a fresh batch.",
+                        metadata.len()
+                    ),
+                },
+            );
+            if !quarantine_state_file(&state_path, render_timestamp) {
+                workspace.cancel();
+                return Err(AppError::Pipeline(
+                    "Oversized render state could not be quarantined".into(),
+                ));
+            }
+        }
 
         let mut initial_jobs = if resume && state_path.exists() {
             match tokio::fs::read_to_string(&state_path).await {
                 Ok(content) => match serde_json::from_str::<Vec<RenderJob>>(&content) {
                     Ok(mut saved_jobs) => {
-                        for j in &mut saved_jobs {
-                            if j.state != JobState::Done {
-                                j.state = JobState::Pending;
-                                j.progress_percent = 0;
-                                j.current_step = "Pending".into();
-                                j.error = None;
+                        match crate::validation::validate_resumed_jobs(
+                            &saved_jobs,
+                            &output_dir,
+                            &input_roots,
+                            &thumb_dir,
+                        ) {
+                            Ok(()) => {
+                                for j in &mut saved_jobs {
+                                    if j.state != JobState::Done {
+                                        j.state = JobState::Pending;
+                                        j.progress_percent = 0;
+                                        j.current_step = "Pending".into();
+                                        j.error = None;
+                                    }
+                                }
+                                event::emit(
+                                    &self.app,
+                                    PipelineEvent::Log {
+                                        level: "info".into(),
+                                        message: "Resuming previous render state...".into(),
+                                    },
+                                );
+                                saved_jobs
+                            }
+                            Err(error) => {
+                                event::emit(
+                                    &self.app,
+                                    PipelineEvent::Log {
+                                        level: "warn".into(),
+                                        message: format!(
+                                            "Saved render state failed validation ({}); quarantining it and starting a fresh batch.",
+                                            error
+                                        ),
+                                    },
+                                );
+                                if !quarantine_state_file(&state_path, render_timestamp) {
+                                    workspace.cancel();
+                                    return Err(AppError::Pipeline(
+                                        "Invalid render state could not be quarantined".into(),
+                                    ));
+                                }
+                                self.create_initial_jobs(
+                                    &video_files,
+                                    &safe_prefix,
+                                    &output_dir,
+                                    output_ext,
+                                )
                             }
                         }
-                        event::emit(&self.app, PipelineEvent::Log { level: "info".into(), message: "Melanjutkan state render sebelumnya...".into() });
-                        saved_jobs
                     }
-                    Err(_) => self.create_initial_jobs(&video_files, &safe_prefix, &output_dir),
+                    Err(error) => {
+                        event::emit(
+                            &self.app,
+                            PipelineEvent::Log {
+                                level: "warn".into(),
+                                message: format!(
+                                    "Saved render state is invalid ({}); quarantining it and starting a fresh batch.",
+                                    error
+                                ),
+                            },
+                        );
+                        if !quarantine_state_file(&state_path, render_timestamp) {
+                            workspace.cancel();
+                            return Err(AppError::Pipeline(
+                                "Invalid render state could not be quarantined".into(),
+                            ));
+                        }
+                        self.create_initial_jobs(
+                            &video_files,
+                            &safe_prefix,
+                            &output_dir,
+                            output_ext,
+                        )
+                    }
                 },
-                Err(_) => self.create_initial_jobs(&video_files, &safe_prefix, &output_dir),
+                Err(error) => {
+                    event::emit(
+                        &self.app,
+                        PipelineEvent::Log {
+                            level: "warn".into(),
+                            message: format!("Unable to read saved render state: {}", error),
+                        },
+                    );
+                    self.create_initial_jobs(&video_files, &safe_prefix, &output_dir, output_ext)
+                }
             }
         } else {
-            self.create_initial_jobs(&video_files, &safe_prefix, &output_dir)
+            self.create_initial_jobs(&video_files, &safe_prefix, &output_dir, output_ext)
         };
 
         if !resume {
-            event::emit(&self.app, PipelineEvent::Log { level: "info".into(), message: "Generating thumbnails...".into() });
-            self.generate_thumbnails(&mut initial_jobs, &thumb_dir, render_timestamp, control.clone()).await;
+            event::emit(
+                &self.app,
+                PipelineEvent::Log {
+                    level: "info".into(),
+                    message: "Generating thumbnails...".into(),
+                },
+            );
+            thumbnailer::generate_thumbnails(
+                &self.app,
+                &mut initial_jobs,
+                &thumb_dir,
+                control.clone(),
+            )
+            .await;
         }
 
-        if control.is_cancelled() || control.is_paused() {
-            let _ = self.save_state(&state_path, &initial_jobs).await;
-            return Err(AppError::Cancelled("Render dibatalkan/dipause oleh pengguna".into()));
+        if control.is_cancelled() {
+            let _ = self
+                .state_manager
+                .save_state(&state_path, &initial_jobs)
+                .await;
+            workspace.cancel();
+            return Err(AppError::Cancelled("Render cancelled by user".into()));
+        }
+        if control.is_paused() {
+            let _ = self
+                .state_manager
+                .save_state(&state_path, &initial_jobs)
+                .await;
+            workspace.pause();
+            control.mark_terminated();
+            return Err(AppError::Paused("Render paused by user".into()));
         }
 
         let jobs_arc = Arc::new(tokio::sync::Mutex::new(initial_jobs));
-        self.emit_progress_from_arc(&jobs_arc).await;
+        self.state_manager
+            .emit_progress_from_arc(&self.app, &jobs_arc)
+            .await;
 
         let total_jobs = jobs_arc.lock().await.len();
         let pipeline_arc = Arc::new(self);
         let encoder_arc = encoder_selected.map(Arc::new);
 
-        let indices: Vec<usize> = (0..total_jobs).collect();
-        let stream = futures::stream::iter(indices);
-
-        stream.for_each_concurrent(max_concurrent_jobs, |i| {
-            let p_arc = Arc::clone(&pipeline_arc);
-            let j_arc = Arc::clone(&jobs_arc);
-            let cache_clone = cache_dir.clone();
-            let c_clone = control.clone();
-            let vcfg_clone = video_cfg.clone();
-            let e_arc = encoder_arc.clone();
-            let m_pool = master_pool.clone();
-            let s_path = state_path.clone();
-            let w_path = watermark_path.clone();
-
-            async move {
-                if c_clone.is_cancelled() || c_clone.is_paused() {
-                    return;
-                }
-
-                let skip = {
-                    let mut lock = j_arc.lock().await;
-                    if Path::new(&lock[i].video.output_path).exists() && lock[i].state == JobState::Done {
-                        true
-                    } else if Path::new(&lock[i].video.output_path).exists() && !resume {
-                        lock[i].state = JobState::Done;
-                        lock[i].progress_percent = 100;
-                        lock[i].current_step = "Skipped".into();
-                        event::emit(
-                            &p_arc.app,
-                            PipelineEvent::Log { level: "info".into(), message: format!("Melewati {} (sudah ada)", lock[i].video.name) },
-                        );
-                        true
-                    } else {
-                        false
-                    }
-                };
-
-                if skip {
-                    p_arc.emit_progress_from_arc(&j_arc).await;
-                    let _ = p_arc.save_state_from_arc(&s_path, &j_arc).await;
-                    return;
-                }
-
-                let e_str = e_arc.as_deref().map(|s| s.as_ref());
-
-                let result = p_arc.process_single_job(
-                    i,
-                    &j_arc,
-                    &cache_clone,
-                    render_timestamp,
-                    use_pingpong,
-                    &vcfg_clone,
-                    e_str,
-                    &m_pool,
-                    songs_per_playlist,
-                    min_duration_sec,
-                    youtube_timestamps,
-                    w_path.as_ref(),
-                    watermark_opacity,
-                    c_clone.clone(),
-                ).await;
-
-                match result {
-                    Ok(()) => {
-                        event::emit(
-                            &p_arc.app,
-                            PipelineEvent::Log { level: "success".into(), message: format!("Job {} selesai", i) },
-                        );
-                    }
-                    Err(AppError::Cancelled(_)) => {}
-                    Err(e) => {
-                        {
-                            let mut lock = j_arc.lock().await;
-                            lock[i].state = JobState::Error;
-                            lock[i].error = Some(e.to_string());
-                        }
-                        p_arc.emit_progress_from_arc(&j_arc).await;
-                    }
-                }
-                
-                let _ = p_arc.save_state_from_arc(&s_path, &j_arc).await;
+        // --- Live render-stats channel -------------------------------------
+        // ffmpeg prints speed=/bitrate=/fps= on stderr; the encoder tasks send
+        // parsed RenderStats here and this forwarder re-emits them as
+        // PipelineEvent::Stats so the UI can show a real-time render readout.
+        // A single channel serves every job (jobs run sequentially).
+        let (stats_tx, mut stats_rx) = tokio::sync::mpsc::channel::<RenderStats>(64);
+        let stats_app = pipeline_arc.app.clone();
+        let stats_handle = tokio::spawn(async move {
+            while let Some(s) = stats_rx.recv().await {
+                event::emit(
+                    &stats_app,
+                    PipelineEvent::Stats {
+                        speed: s.speed,
+                        bitrate_kbps: s.bitrate_kbps,
+                        fps: s.fps,
+                    },
+                );
             }
-        }).await;
+        });
 
-        if control.is_paused() {
-            return Err(AppError::Cancelled("Render dipause oleh pengguna".into()));
-        } else if control.is_cancelled() {
-            let _ = tokio::fs::remove_file(&state_path).await;
-            return Err(AppError::Cancelled("Render dibatalkan oleh pengguna".into()));
+        // --- Disk-space pre-check ------------------------------------------
+        // Warn (non-fatally) if the estimated total output size exceeds the
+        // free space on the output drive, so the user isn't surprised by a
+        // mid-render failure.
+        let num_jobs = total_jobs;
+        let avg_song_sec =
+            master_pool.iter().map(|s| s.duration).sum::<f64>() / (master_pool.len().max(1) as f64);
+        let est_bytes = estimate_total_output_bytes(
+            num_jobs,
+            maxrate_k,
+            avg_song_sec,
+            songs_per_playlist,
+            min_duration_sec,
+            loop_count,
+        );
+        let avail = available_space_for(&output_dir);
+        if avail > 0 && est_bytes > avail {
+            event::emit(
+                &pipeline_arc.app,
+                PipelineEvent::Log {
+                    level: "warn".into(),
+                    message: format!(
+                        "Estimated output size ({}) exceeds free space on the output drive ({}). The render may fail due to insufficient space.",
+                        human_bytes(est_bytes),
+                        human_bytes(avail)
+                    ),
+                },
+            );
         }
 
-        let _ = tokio::fs::remove_dir_all(&cache_dir).await;
-        let _ = tokio::fs::remove_file(&state_path).await;
+        let stats_tx_for_stream = stats_tx.clone();
+
+        // Process jobs sequentially in an explicit loop. A plain loop (instead
+        // of `futures::stream::iter().for_each()`) lets us *retry the current
+        // job in place*: if a pause is acknowledged mid-job but the user has
+        // already resumed, the pipeline is still alive and we re-run the
+        // interrupted job instead of leaving it as a zombie `processing` row
+        // (or terminating the whole batch). If the pipeline is still paused
+        // we persist state and terminate — a later resume starts a fresh
+        // pipeline from the state file.
+        let mut idx = 0usize;
+        let mut pause_exit = false;
+        let milestone_step = if total_jobs <= 20 {
+            (total_jobs / 4).max(1)
+        } else {
+            10usize
+        };
+        let mut completed: usize = 0;
+        let mut last_milestone: usize = 0;
+        while idx < total_jobs {
+            if control.is_cancelled() {
+                break;
+            }
+            if control.is_paused() {
+                // Persist and terminate — resume restarts from the state file.
+                let _ = pipeline_arc
+                    .state_manager
+                    .save_state_from_arc(&state_path, &jobs_arc)
+                    .await;
+                pause_exit = true;
+                control.mark_terminated();
+                break;
+            }
+
+            let skip = {
+                let lock = jobs_arc.lock().await;
+                loop_control::should_skip_job(&lock[idx])
+            };
+
+            if skip {
+                pipeline_arc
+                    .state_manager
+                    .emit_progress_from_arc(&pipeline_arc.app, &jobs_arc)
+                    .await;
+                let _ = pipeline_arc
+                    .state_manager
+                    .save_state_from_arc(&state_path, &jobs_arc)
+                    .await;
+                completed += 1;
+                let band = completed / milestone_step;
+                if band > last_milestone || completed == total_jobs {
+                    event::emit(
+                        &pipeline_arc.app,
+                        PipelineEvent::Log {
+                            level: "success".into(),
+                            message: format!("Videos: {}/{} done", completed, total_jobs),
+                        },
+                    );
+                    last_milestone = band;
+                }
+                idx += 1;
+                continue;
+            }
+
+            let ctx = JobContext {
+                index: idx,
+                jobs_arc: &jobs_arc,
+                cache_dir: &cache_dir,
+                render_timestamp,
+                control: control.clone(),
+                stats_tx: Some(stats_tx_for_stream.clone()),
+            };
+            let params = JobParams {
+                use_pingpong,
+                skip_intermediate_on_codec_match,
+                video_cfg: video_cfg.clone(),
+                encoder_selected: encoder_arc.as_deref().map(|s| s.to_string()),
+                master_pool: master_pool.clone(),
+                songs_per_playlist,
+                min_duration_sec,
+                loop_count,
+                embed_chapters,
+            };
+
+            let result = job_processor::process_single_job(
+                &pipeline_arc.app,
+                &pipeline_arc.state_manager,
+                pipeline_arc.config.target.padding_sec,
+                ctx,
+                params,
+            )
+            .await;
+
+            let action = loop_control::decide_next_action(&result, control.is_paused());
+            match action {
+                loop_control::LoopAction::Advance => {
+                    if let Err(ref e) = result {
+                        {
+                            let mut lock = jobs_arc.lock().await;
+                            lock[idx].state = JobState::Error;
+                            lock[idx].error = Some(e.to_string());
+                        }
+                        pipeline_arc
+                            .state_manager
+                            .emit_progress_from_arc(&pipeline_arc.app, &jobs_arc)
+                            .await;
+                        let _ = pipeline_arc
+                            .state_manager
+                            .save_state_from_arc(&state_path, &jobs_arc)
+                            .await;
+                    }
+                    completed += 1;
+                    let band = completed / milestone_step;
+                    if band > last_milestone || completed == total_jobs {
+                        event::emit(
+                            &pipeline_arc.app,
+                            PipelineEvent::Log {
+                                level: "success".into(),
+                                message: format!("Videos: {}/{} done", completed, total_jobs),
+                            },
+                        );
+                        last_milestone = band;
+                    }
+                    idx += 1;
+                }
+                loop_control::LoopAction::Retry => {
+                    // Pause→quick-resume race: retry the same job immediately
+                    // so the batch continues cleanly.
+                    continue;
+                }
+                loop_control::LoopAction::Break => {
+                    // Cancelled or paused mid-job: persist what we have
+                    // and terminate.
+                    let _ = pipeline_arc
+                        .state_manager
+                        .save_state_from_arc(&state_path, &jobs_arc)
+                        .await;
+                    if matches!(result, Err(AppError::Paused(_))) {
+                        pause_exit = true;
+                        control.mark_terminated();
+                    }
+                    break;
+                }
+            }
+        }
+
+        // All jobs finished: drop the last stats senders so the forwarder task
+        // drains and exits, then wait for it to finish.
+        // `stats_tx_for_stream` is still alive after the loop (each job only
+        // cloned it), so we must drop it explicitly here.  If we skip this,
+        // the channel stays open and `stats_handle.await` hangs forever,
+        // preventing the `Done` event from ever reaching the frontend.
+        drop(stats_tx_for_stream);
+        drop(stats_tx);
+        let _ = stats_handle.await;
+
+        if pause_exit || control.is_paused() {
+            // Flush state immediately (bypassing the 2s throttle) so the most
+            // recently finished job isn't lost when the next resume reloads it.
+            {
+                let jobs = jobs_arc.lock().await.clone();
+                let _ = pipeline_arc
+                    .state_manager
+                    .save_state(&state_path, &jobs)
+                    .await;
+            }
+            workspace.pause();
+            control.mark_terminated();
+            return Err(AppError::Paused("Render paused by user".into()));
+        } else if control.is_cancelled() {
+            workspace.cancel();
+            return Err(AppError::Cancelled("Render cancelled by user".into()));
+        }
+
+        workspace.complete();
 
         let final_jobs = jobs_arc.lock().await.clone();
 
-        let youtube_timestamps = overrides.as_ref().and_then(|ov| ov.youtube_timestamps).unwrap_or(pipeline_arc.config.youtube_timestamps);
-        if youtube_timestamps && !final_jobs.is_empty() {
+        if !final_jobs.is_empty() {
             let mut all_timestamps = Vec::new();
             for job in &final_jobs {
                 if !job.timestamps.is_empty() {
@@ -269,352 +660,111 @@ impl Pipeline {
                     all_timestamps.push("".into());
                 }
             }
-            let parent_opt = final_jobs.first().map(|j| &j.video.output_path).and_then(|p| Path::new(p).parent());
+            let parent_opt = final_jobs
+                .first()
+                .map(|j| &j.video.output_path)
+                .and_then(|p| Path::new(p).parent());
             if let Some(parent) = parent_opt.filter(|_| !all_timestamps.is_empty()) {
                 let combined_path = parent.join("all_timestamps.txt");
-                let _ = tokio::fs::write(&combined_path, all_timestamps.join("\n")).await;
+                let contents = all_timestamps.join("\n").into_bytes();
+                if let Err(error) = fs::atomic_write(&combined_path, contents).await {
+                    event::emit(
+                        &pipeline_arc.app,
+                        PipelineEvent::Log {
+                            level: "warn".into(),
+                            message: format!(
+                                "Render completed, but all_timestamps.txt could not be written: {}",
+                                error
+                            ),
+                        },
+                    );
+                    crate::utils::logger::log_line(&format!(
+                        "Timestamp artifact write failed for '{}': {}",
+                        combined_path.display(),
+                        error
+                    ));
+                }
             }
         }
-        let failed = final_jobs.iter().filter(|j| j.state == JobState::Error).count();
-        let completed = final_jobs.iter().filter(|j| j.state == JobState::Done).count();
+        let failed = final_jobs
+            .iter()
+            .filter(|j| j.state == JobState::Error)
+            .count();
+        let completed = final_jobs
+            .iter()
+            .filter(|j| j.state == JobState::Done)
+            .count();
 
         event::emit(
             &pipeline_arc.app,
             PipelineEvent::Log {
                 level: "info".into(),
-                message: format!("Render selesai: {}/{} sukses, {} gagal", completed, total_jobs, failed),
+                message: format!(
+                    "Render finished: {}/{} completed, {} failed",
+                    completed, total_jobs, failed
+                ),
             },
         );
-        event::emit(&pipeline_arc.app, PipelineEvent::Done { completed, total: total_jobs, failed });
+        event::emit(
+            &pipeline_arc.app,
+            PipelineEvent::Done {
+                completed,
+                total: total_jobs,
+                failed,
+            },
+        );
         Ok(())
     }
 
-    async fn save_state(&self, state_path: &Path, jobs: &[RenderJob]) -> Result<(), AppError> {
-        let json = serde_json::to_string_pretty(jobs).unwrap_or_default();
-        tokio::fs::write(state_path, json).await.map_err(|e| AppError::Pipeline(e.to_string()))
-    }
-
-    async fn save_state_from_arc(&self, state_path: &Path, jobs_arc: &Arc<tokio::sync::Mutex<Vec<RenderJob>>>) -> Result<(), AppError> {
-        let jobs = jobs_arc.lock().await.clone();
-        self.save_state(state_path, &jobs).await
-    }
-
-    async fn emit_progress_from_arc(&self, jobs_arc: &Arc<tokio::sync::Mutex<Vec<RenderJob>>>) {
-        let jobs = jobs_arc.lock().await.clone();
-        let total = jobs.len();
-        let completed = jobs.iter().filter(|j| j.state == JobState::Done).count();
-        let current_video = jobs.iter().find(|j| j.state == JobState::Processing).map(|j| j.video.name.clone()).unwrap_or_default();
-        event::emit(
-            &self.app,
-            PipelineEvent::Progress { total, completed, current_video, jobs },
-        );
-    }
-
-    fn create_initial_jobs(&self, video_files: &[String], safe_prefix: &str, output_dir: &Path) -> Vec<RenderJob> {
+    fn create_initial_jobs(
+        &self,
+        video_files: &[String],
+        safe_prefix: &str,
+        output_dir: &Path,
+        output_ext: &str,
+    ) -> Vec<RenderJob> {
         let mut jobs = Vec::new();
-        for path_str in video_files {
+        // Include a process-local high-resolution nonce in every fresh batch
+        // name. Second-level timestamps alone collide when a user starts a
+        // second render immediately after the first one finishes.
+        let wall_clock = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        let ts = format!("{}_{}_{}", wall_clock, std::process::id(), nonce);
+        for (idx, path_str) in video_files.iter().enumerate() {
             let input_path = Path::new(path_str);
-            let name = input_path.file_name().unwrap_or_default().to_string_lossy().to_string();
-            let output_name = if safe_prefix.is_empty() { name.clone() } else { format!("{}_{}", safe_prefix, name) };
+            let name = input_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let stem = Path::new(&name)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown");
+            let ext = output_ext;
+            let unique_name = format!("{}_{}_{}.{}", stem, ts, idx, ext);
+            let output_name = if safe_prefix.is_empty() {
+                unique_name
+            } else {
+                format!("{}_{}", safe_prefix, unique_name)
+            };
             jobs.push(RenderJob {
                 video: VideoFile {
-                    name: name.clone(),
+                    name,
                     input_path: path_str.clone(),
                     output_path: output_dir.join(&output_name).to_string_lossy().to_string(),
                     thumbnail_path: None,
                 },
                 state: JobState::Pending,
                 progress_percent: 0,
-                current_step: "Menunggu giliran".into(),
+                current_step: "Waiting for turn".into(),
                 error: None,
                 timestamps: Vec::new(),
             });
         }
         jobs
     }
-
-    async fn generate_thumbnails(&self, jobs: &mut [RenderJob], thumb_dir: &Path, render_timestamp: u64, control: Arc<crate::RenderControl>) {
-        let indices_and_paths: Vec<(usize, String)> = jobs.iter().enumerate().map(|(i, j)| (i, j.video.input_path.clone())).collect();
-        let stream = futures::stream::iter(indices_and_paths);
-        
-        stream.for_each_concurrent(4, |(i, input_path)| {
-            let thumb_path = thumb_dir.join(format!("thumb_{}_{}.jpg", render_timestamp, i));
-            let control_clone = control.clone();
-            async move {
-                if !thumb_path.exists() {
-                    let args = vec![
-                        "-y".into(), "-ss".into(), "00:00:01".into(), "-i".into(), input_path,
-                        "-vframes".into(), "1".into(), "-vf".into(), "scale=320:-1".into(),
-                        thumb_path.to_string_lossy().to_string(),
-                    ];
-                    let _ = ffmpeg::run(&args, None, Some(control_clone)).await;
-                }
-            }
-        }).await;
-
-        for (i, job) in jobs.iter_mut().enumerate() {
-            let thumb_path = thumb_dir.join(format!("thumb_{}_{}.jpg", render_timestamp, i));
-            if thumb_path.exists() {
-                job.video.thumbnail_path = Some(thumb_path.to_string_lossy().to_string());
-            }
-        }
-    }
-
-    async fn process_single_job(
-        &self,
-        i: usize,
-        jobs_arc: &Arc<tokio::sync::Mutex<Vec<RenderJob>>>,
-        cache_dir: &Path,
-        render_timestamp: u64,
-        use_pingpong: bool,
-        video_cfg: &crate::config::VideoSettings,
-        encoder_selected: Option<&str>,
-        master_pool: &[ProcessedAudio],
-        songs_per_playlist: usize,
-        min_duration_sec: u64,
-        youtube_timestamps: bool,
-        watermark_path: Option<&String>,
-        watermark_opacity: f32,
-        control: Arc<crate::RenderControl>,
-    ) -> Result<(), AppError> {
-        {
-            let mut lock = jobs_arc.lock().await;
-            lock[i].state = JobState::Processing;
-            lock[i].current_step = "Preparing".into();
-        }
-        self.emit_progress_from_arc(jobs_arc).await;
-
-        let timestamp = format!("{}_{}", render_timestamp, i);
-        let input_path = {
-            let lock = jobs_arc.lock().await;
-            lock[i].video.input_path.clone()
-        };
-        let output_path = {
-            let lock = jobs_arc.lock().await;
-            lock[i].video.output_path.clone()
-        };
-        let name = {
-            let lock = jobs_arc.lock().await;
-            lock[i].video.name.clone()
-        };
-
-        let input_codec = ffmpeg::get_video_codec(Path::new(&input_path)).await.ok();
-
-        let need_reencode = match (&input_codec, encoder_selected) {
-            (Some(in_codec), Some(enc)) => {
-                let mapped_enc = match enc {
-                    "libx264" | "h264_nvenc" | "h264_amf" | "h264_qsv" => "h264",
-                    "libx265" | "hevc_nvenc" | "hevc_amf" | "hevc_qsv" => "hevc",
-                    "av1_nvenc" | "av1_amf" | "av1_qsv" | "libsvtav1" => "av1",
-                    _ => enc,
-                };
-                in_codec != mapped_enc
-            }
-            _ => true,
-        };
-
-        let ping_pong_path;
-        let created_intermediate;
-        let target_dur = ffmpeg::get_duration(Path::new(&input_path)).await.unwrap_or(1.0).max(0.001) * if use_pingpong { 2.0 } else { 1.0 };
-
-        if use_pingpong || need_reencode || watermark_path.is_some() {
-            {
-                let mut lock = jobs_arc.lock().await;
-                lock[i].current_step = if use_pingpong { "1/2 Upscaling & Ping-Pong".into() } else { "1/2 Re-encode video".into() };
-            }
-            self.emit_progress_from_arc(jobs_arc).await;
-
-            ping_pong_path = cache_dir.join(format!("intermediate_{}.mp4", timestamp));
-            created_intermediate = true;
-
-            let (tx, mut rx) = tokio::sync::mpsc::channel::<f64>(100);
-
-            let ffmpeg_task = tokio::spawn({
-                let input_clone = input_path.clone();
-                let ping_pong_path_clone = ping_pong_path.clone();
-                let video_cfg_clone = video_cfg.clone();
-                let control_clone = control.clone();
-                let wm_clone = watermark_path.cloned();
-                async move {
-                    video_loop::create_ping_pong_video(video_loop::PingPongVideoParams {
-                        input: &input_clone,
-                        output: &ping_pong_path_clone,
-                        video_settings: &video_cfg_clone,
-                        use_pingpong,
-                        watermark_path: wm_clone.as_ref(),
-                        watermark_opacity,
-                        tx_progress: Some(tx),
-                        cancel_control: Some(control_clone),
-                    }).await
-                }
-            });
-
-            while let Some(progress_sec) = rx.recv().await {
-                let pct = (progress_sec / target_dur * 100.0).clamp(0.0, 100.0) as u8;
-                {
-                    let mut lock = jobs_arc.lock().await;
-                    lock[i].progress_percent = pct / 2;
-                }
-                self.emit_progress_from_arc(jobs_arc).await;
-            }
-
-            match ffmpeg_task.await.unwrap_or_else(|e| Err(AppError::Pipeline(format!("Task panic: {}", e)))) {
-                Ok(()) => {}
-                Err(e) => {
-                    let _ = fs::safe_delete(&ping_pong_path).await;
-                    return Err(e);
-                }
-            }
-        } else {
-            {
-                let mut lock = jobs_arc.lock().await;
-                lock[i].current_step = "1/2 Menggunakan video asli".into();
-            }
-            self.emit_progress_from_arc(jobs_arc).await;
-            ping_pong_path = PathBuf::from(&input_path);
-            created_intermediate = false;
-        }
-
-        {
-            let mut lock = jobs_arc.lock().await;
-            lock[i].current_step = "2/2 Smart Loop & Muxing".into();
-            lock[i].progress_percent = if created_intermediate { 50 } else { 0 };
-        }
-        self.emit_progress_from_arc(jobs_arc).await;
-
-        use rand::SeedableRng;
-        let mut rng = rand::rngs::StdRng::from_entropy();
-        let mut shuffled = master_pool.to_vec();
-        use rand::seq::SliceRandom;
-        shuffled.shuffle(&mut rng);
-        let take_count = songs_per_playlist.min(shuffled.len()).max(1);
-        let selected_songs: Vec<ProcessedAudio> = shuffled.into_iter().take(take_count).collect();
-
-        let target_override = crate::config::Target {
-            min_duration_sec,
-            padding_sec: self.config.target.padding_sec,
-        };
-        let (audio_content, video_content, timestamps, total_duration) =
-            video_loop::generate_loop_playlists(
-                &selected_songs,
-                &ping_pong_path,
-                target_dur,
-                &target_override,
-                youtube_timestamps,
-            )
-            .await?;
-
-        {
-            let mut lock = jobs_arc.lock().await;
-            lock[i].timestamps = timestamps.clone();
-        }
-
-        event::emit(&self.app, PipelineEvent::Log { level: "info".into(), message: format!("=== Timestamps untuk {} ===", name) });
-        for ts in &timestamps {
-            event::emit(&self.app, PipelineEvent::Log { level: "info".into(), message: ts.clone() });
-        }
-
-        let audio_list_path = cache_dir.join(format!("audio_list_{}.txt", timestamp));
-        let video_list_path = cache_dir.join(format!("video_list_{}.txt", timestamp));
-        tokio::fs::write(&audio_list_path, &audio_content).await?;
-        tokio::fs::write(&video_list_path, &video_content).await?;
-
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<f64>(100);
-        let ffmpeg_task = tokio::spawn({
-            let audio_list_path_clone = audio_list_path.clone();
-            let video_list_path_clone = video_list_path.clone();
-            let output_path_clone = output_path.clone();
-            let control_clone = control.clone();
-            async move {
-                muxer::mux_final_video(
-                    &audio_list_path_clone,
-                    &video_list_path_clone,
-                    &output_path_clone,
-                    total_duration,
-                    Some(tx),
-                    Some(control_clone),
-                ).await
-            }
-        });
-
-        while let Some(progress_sec) = rx.recv().await {
-            let pct = (progress_sec / total_duration * 100.0).clamp(0.0, 100.0) as u8;
-            {
-                let mut lock = jobs_arc.lock().await;
-                lock[i].progress_percent = if created_intermediate { 50 + (pct / 2) } else { pct };
-            }
-            self.emit_progress_from_arc(jobs_arc).await;
-        }
-
-        let res = ffmpeg_task.await.unwrap_or_else(|e| Err(AppError::Pipeline(format!("Task panic: {}", e))));
-
-        if created_intermediate { let _ = fs::safe_delete(&ping_pong_path).await; }
-        let _ = fs::safe_delete(&audio_list_path).await;
-        let _ = fs::safe_delete(&video_list_path).await;
-
-        match res {
-            Ok(()) => {
-                {
-                    let mut lock = jobs_arc.lock().await;
-                    lock[i].state = JobState::Done;
-                    lock[i].progress_percent = 100;
-                }
-                self.emit_progress_from_arc(jobs_arc).await;
-                Ok(())
-            }
-            Err(e) => Err(e),
-        }
-    }
-
-    fn resolve_output_dir(&self, overrides: &Option<OverrideConfig>) -> PathBuf {
-        if let Some(path) = overrides.as_ref().and_then(|ov| ov.output_path.as_ref()) {
-            return PathBuf::from(path);
-        }
-        PathBuf::from(&self.config.directories.output)
-    }
-
-    async fn scan_source_files(&self, overrides: &Option<OverrideConfig>, default_dir: &Path, media_type: &str) -> Result<Vec<String>, AppError> {
-        let extensions: &[&str] = match media_type {
-            "video" => &[".mp4", ".mkv", ".mov", ".webm", ".avi", ".flv", ".wmv"],
-            "audio" => &[".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac", ".wma"],
-            _ => &[],
-        };
-        let source = match (media_type, overrides.as_ref()) {
-            ("video", Some(ov)) => ov.video_source.as_ref(),
-            ("audio", Some(ov)) => ov.audio_source.as_ref(),
-            _ => None,
-        };
-        let mut files = match source {
-            Some(MediaSource::Folder { path }) => fs::scan_files(&fs::to_absolute(Path::new(path)), extensions).await,
-            Some(MediaSource::Files { paths }) => {
-                let mut all_files = Vec::new();
-                for p_str in paths {
-                    let p = fs::to_absolute(Path::new(p_str));
-                    if p.is_dir() { all_files.extend(fs::scan_files(&p, extensions).await); }
-                    else if p.is_file() {
-                        let lower = p_str.to_lowercase();
-                        if extensions.iter().any(|ext| lower.ends_with(ext)) { all_files.push(p.to_string_lossy().to_string()); }
-                    }
-                }
-                all_files
-            }
-            None => fs::scan_files(&fs::to_absolute(Path::new(default_dir)), extensions).await,
-        };
-        files.sort_by(|a, b| fs::compare_natural(a, b));
-        files.dedup();
-        Ok(files)
-    }
-}
-
-fn parse_bitrate_k(value: &str) -> Option<u32> {
-    let normalized = value.trim().to_ascii_lowercase();
-    let number = normalized.strip_suffix('k').unwrap_or(&normalized);
-    number.parse::<u32>().ok()
-}
-
-fn sanitize_filename_component(value: &str) -> String {
-    value.chars().filter(|c| !c.is_control()).map(|c| match c {
-        '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
-        _ => c,
-    }).collect::<String>().trim().trim_matches('.').to_string()
 }
