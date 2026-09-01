@@ -165,8 +165,6 @@ pub(crate) async fn process_single_job(
     let needs_intermediate =
         requires_intermediate(params.use_pingpong, skip_match, should_reencode);
 
-
-
     if needs_intermediate {
         {
             let mut lock = ctx.jobs_arc.lock().await;
@@ -312,8 +310,6 @@ pub(crate) async fn process_single_job(
         let mut lock = ctx.jobs_arc.lock().await;
         lock[ctx.index].timestamps = timestamps.clone();
     }
-
-
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<f64>(100);
     let stats_tx_mux = ctx.stats_tx.clone();

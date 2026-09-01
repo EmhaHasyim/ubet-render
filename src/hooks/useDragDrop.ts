@@ -90,7 +90,8 @@ export function useDragDrop(
         updateAudioSource({ type: 'files', paths: filtered });
       }
     } else if (zone === 'output') {
-      updateOutputPath(paths[0]);
+      const firstPath = paths[0];
+      if (firstPath) updateOutputPath(firstPath);
     }
   };
 
@@ -138,7 +139,8 @@ export function useDragDrop(
                 updateAudioSource({ type: 'files', paths: filtered });
               }
             } else if (zone === 'output') {
-              updateOutputPath(paths[0]);
+              const firstPath = paths[0];
+              if (firstPath) updateOutputPath(firstPath);
             }
           }
         } catch (err) {

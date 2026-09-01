@@ -106,7 +106,8 @@ describe('AppHeader', () => {
       name: /cancel render/i,
     });
     const confirmBtn = confirmBtns[confirmBtns.length - 1];
-    confirmBtn.click();
+    expect(confirmBtn).toBeDefined();
+    confirmBtn!.click();
 
     expect(props.onCancel).toHaveBeenCalled();
   });

@@ -4,6 +4,27 @@ All notable changes to Ubet Render are documented in this file.
 
 ---
 
+## [0.3.0] — 2026-09-01
+
+### Added
+
+- Unified frontend configuration schema, persistence, validation limits, and golden contract checks.
+- Focused render lifecycle, logging, filtering, virtualization, and dashboard panel modules.
+- Cross-platform CI gates for formatting, typechecking, linting, tests, builds, clippy, and dependency audits.
+
+### Changed
+
+- Refactored the Rust pipeline workspace lifecycle and validation facade into focused modules.
+- Enabled TypeScript `noUncheckedIndexedAccess` for safer array and map access.
+- Kept persisted configuration migrations independent from the application version.
+
+### Fixed
+
+- Hardened path validation, resume-state validation, lifecycle cleanup, and configuration persistence.
+- Removed strict clippy blockers and eliminated production `as never` casts.
+
+---
+
 ## [0.2.8] — 2026-09-01
 
 ### Added

@@ -3,9 +3,9 @@
  * Kept separate from the SolidJS hook so they can be unit-tested without Tauri.
  */
 
-// Bitrate range constants, kept in sync with src-tauri/src/validation.rs
-const MIN_BITRATE_K = 100;
-const MAX_BITRATE_K = 50000;
+import { CONFIG_LIMITS } from './schema';
+
+const { min: MIN_BITRATE_K, max: MAX_BITRATE_K } = CONFIG_LIMITS.bitrateK;
 
 /**
  * Normalize a bitrate value to the "4000k" format used throughout the app.
@@ -16,7 +16,8 @@ export function normalizeBitrate(value: string): string {
   const trimmed = value.trim();
   const match = trimmed.match(/^(\d+)(?:[kK].*)?$/);
   if (!match) return value;
-  return `${match[1]}k`;
+  const digits = match[1];
+  return digits === undefined ? value : `${digits}k`;
 }
 
 /**
@@ -29,7 +30,9 @@ export function isMaxrateValid(value: string): boolean {
   const trimmed = value.trim();
   const match = trimmed.match(/^(\d+)(?:k|K)?$/);
   if (!match) return false;
-  const k = parseInt(match[1], 10);
+  const digits = match[1];
+  if (digits === undefined) return false;
+  const k = parseInt(digits, 10);
   return Number.isFinite(k) && k >= MIN_BITRATE_K && k <= MAX_BITRATE_K;
 }
 

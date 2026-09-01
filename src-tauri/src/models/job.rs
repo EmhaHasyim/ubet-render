@@ -92,7 +92,7 @@ mod contract_tests {
 
     #[test]
     fn pipeline_events_match_golden_wire_contract() {
-        let events = vec![
+        let events = [
             PipelineEvent::Progress {
                 total: 2,
                 completed: 1,

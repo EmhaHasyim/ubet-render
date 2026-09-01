@@ -11,6 +11,13 @@ import type { AppTabId } from '../../hooks/useAppShortcuts';
  * the rail anchors Render and Activity with an amber active pill and a
  * keyboard-friendly roving tabindex.
  */
+const navItemClass = (active: boolean) =>
+  `relative flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors duration-150 ${
+    active
+      ? 'bg-primary/12 text-primary'
+      : 'text-base-content/55 hover:bg-base-content/5 hover:text-base-content'
+  }`;
+
 export function Sidebar(props: {
   activeTab: Accessor<AppTabId>;
   setActiveTab: Setter<AppTabId>;
@@ -31,13 +38,6 @@ export function Sidebar(props: {
       });
     }
   };
-
-  const navItemClass = (active: boolean) =>
-    `relative flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors duration-150 ${
-      active
-        ? 'bg-primary/12 text-primary'
-        : 'text-base-content/55 hover:bg-base-content/5 hover:text-base-content'
-    }`;
 
   return (
     <nav

@@ -41,10 +41,7 @@ pub(crate) fn should_skip_job(job: &RenderJob) -> bool {
 /// - `Err(AppError::Paused)` when still paused → [`LoopAction::Break`]
 /// - `Err(AppError::Paused)` when resumed (race) → [`LoopAction::Retry`]
 /// - Any other error → [`LoopAction::Advance`] (error is written to the job before calling this)
-pub(crate) fn decide_next_action(
-    result: &Result<(), AppError>,
-    is_paused: bool,
-) -> LoopAction {
+pub(crate) fn decide_next_action(result: &Result<(), AppError>, is_paused: bool) -> LoopAction {
     match result {
         Ok(()) => LoopAction::Advance,
         Err(AppError::Cancelled(_)) => LoopAction::Break,
@@ -176,10 +173,7 @@ mod tests {
     #[test]
     fn cancelled_result_breaks() {
         assert_eq!(
-            decide_next_action(
-                &Err(AppError::Cancelled("cancelled".into())),
-                false,
-            ),
+            decide_next_action(&Err(AppError::Cancelled("cancelled".into())), false,),
             LoopAction::Break,
         );
     }
@@ -205,10 +199,7 @@ mod tests {
     #[test]
     fn generic_error_advances() {
         assert_eq!(
-            decide_next_action(
-                &Err(AppError::Pipeline("oops".into())),
-                false,
-            ),
+            decide_next_action(&Err(AppError::Pipeline("oops".into())), false,),
             LoopAction::Advance,
         );
     }
@@ -233,17 +224,9 @@ mod tests {
     }
 
     impl JobLoopRunner for MockRunner {
-        async fn run_job(
-            &self,
-            _job: &mut RenderJob,
-            idx: usize,
-        ) -> Result<(), AppError> {
+        async fn run_job(&self, _job: &mut RenderJob, idx: usize) -> Result<(), AppError> {
             self.called.lock().unwrap().push(idx);
-            self.results
-                .lock()
-                .unwrap()
-                .next()
-                .unwrap_or(Ok(()))
+            self.results.lock().unwrap().next().unwrap_or(Ok(()))
         }
     }
 
@@ -324,8 +307,7 @@ mod tests {
             make_job("c.mp4", JobState::Pending),
         ];
 
-        let (completed, errors, reason) =
-            simulate_loop(&runner, &mut jobs, |_| false).await;
+        let (completed, errors, reason) = simulate_loop(&runner, &mut jobs, |_| false).await;
 
         assert_eq!(completed, 3);
         assert_eq!(errors, 0);
@@ -348,8 +330,7 @@ mod tests {
             make_job("c.mp4", JobState::Pending),
         ];
 
-        let (completed, errors, reason) =
-            simulate_loop(&runner, &mut jobs, |_| false).await;
+        let (completed, errors, reason) = simulate_loop(&runner, &mut jobs, |_| false).await;
 
         assert_eq!(completed, 1); // only first job finished
         assert_eq!(errors, 0);
@@ -373,8 +354,7 @@ mod tests {
             make_job("c.mp4", JobState::Pending),
         ];
 
-        let (completed, errors, reason) =
-            simulate_loop(&runner, &mut jobs, |_| false).await;
+        let (completed, errors, reason) = simulate_loop(&runner, &mut jobs, |_| false).await;
 
         assert_eq!(completed, 2);
         assert_eq!(errors, 1);
@@ -387,18 +367,13 @@ mod tests {
     #[tokio::test]
     async fn loop_retries_on_pause_race() {
         // First call: Paused (but already resumed). Second call: OK.
-        let runner = MockRunner::new(vec![
-            Err(AppError::Paused("paused".into())),
-            Ok(()),
-            Ok(()),
-        ]);
+        let runner = MockRunner::new(vec![Err(AppError::Paused("paused".into())), Ok(()), Ok(())]);
         let mut jobs = vec![
             make_job("a.mp4", JobState::Pending),
             make_job("b.mp4", JobState::Pending),
         ];
 
-        let (completed, errors, reason) =
-            simulate_loop(&runner, &mut jobs, |_| false).await;
+        let (completed, errors, reason) = simulate_loop(&runner, &mut jobs, |_| false).await;
 
         assert_eq!(completed, 2);
         assert_eq!(errors, 0);

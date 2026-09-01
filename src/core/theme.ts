@@ -60,5 +60,5 @@ export function applyTheme(theme: Theme): void {
 /** Cycle to the next theme. With `['business', 'light']` this just toggles. */
 export function toggleTheme(current: Theme): Theme {
   const idx = CYCLE.indexOf(current);
-  return CYCLE[(idx + 1) % CYCLE.length];
+  return CYCLE[(idx + 1) % CYCLE.length] ?? 'business';
 }

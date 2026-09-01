@@ -12,14 +12,25 @@
  * every intermediate version until the current one.
  *
  * This allows users to upgrade the app without losing their saved settings.
+ *
+ * # Single-source field schema (v0.3.0)
+ *
+ * Field names, defaults, and coercion rules now live in `core/schema.ts`
+ * ({@link CONFIG_SCHEMA}).  This module keeps the versioned-storage concerns
+ * (key, version, migrations) and delegates all per-field coercion to the
+ * schema, so a new field needs no edit here at all.
  */
-import { DEFAULT_CONFIG, CODECS, ALL_CODECS } from './config';
 import type { MediaSource } from './types';
 import { safeSetStorageItem } from './storage';
+import { coerceFromRecord, defaultConfigRecord } from './schema';
 
 export const STORAGE_KEY = 'ubetrender-paths';
-export const STORAGE_VERSION = 2;
+export const STORAGE_VERSION = 3;
 
+/** The persisted config shape. Field list, defaults, and coercion rules
+ *  live in `core/schema.ts` ({@link CONFIG_SCHEMA}); the golden contract test
+ *  (`schema.test.ts` + `config-contract.json`) pins this interface to the
+ *  schema so they cannot drift. */
 export interface PersistedConfig {
   version: number;
   videoSource: MediaSource | null;
@@ -36,9 +47,9 @@ export interface PersistedConfig {
   audioMode: 'original' | 'normalize';
   embedChapters: boolean;
   outputFormat: 'mp4' | 'mkv';
-  /// When true, the intermediate re-encode step is bypassed entirely —
-  /// the source video is fed directly to the concat demuxer via stream-copy,
-  /// regardless of codec. Disabled by default.
+  /** When true, the intermediate re-encode step is bypassed entirely —
+   *  the source video is fed directly to the concat demuxer via stream-copy,
+   *  regardless of codec. Disabled by default. */
   skipIntermediateOnCodecMatch: boolean;
 }
 
@@ -103,75 +114,54 @@ export function booleanOr(value: unknown, fallback: boolean): boolean {
 }
 
 export function getDefaultInitial(): PersistedConfig {
+  const defaults = defaultConfigRecord();
   return {
     version: STORAGE_VERSION,
-    videoSource: null,
-    audioSource: null,
-    outputPath: '',
-    outputPrefix: DEFAULT_CONFIG.metadata.channelPrefix,
-    maxrate: '4000k',
-    usePingpong: true,
-    songsPerPlaylist: DEFAULT_CONFIG.audio.songsPerPlaylist,
-    minDurationHours: DEFAULT_CONFIG.target.minDurationSec / 3600,
-    loopMode: 'duration',
-    loopCount: 1,
-    codec: CODECS.av1,
-    audioMode: 'original',
-    embedChapters: true,
-    outputFormat: 'mp4',
-    skipIntermediateOnCodecMatch: false,
+    videoSource: defaults.videoSource as MediaSource | null,
+    audioSource: defaults.audioSource as MediaSource | null,
+    outputPath: defaults.outputPath as string,
+    outputPrefix: defaults.outputPrefix as string,
+    maxrate: defaults.maxrate as string,
+    usePingpong: defaults.usePingpong as boolean,
+    songsPerPlaylist: defaults.songsPerPlaylist as number,
+    minDurationHours: defaults.minDurationHours as number,
+    loopMode: defaults.loopMode as 'duration' | 'count',
+    loopCount: defaults.loopCount as number,
+    codec: defaults.codec as string,
+    audioMode: defaults.audioMode as 'original' | 'normalize',
+    embedChapters: defaults.embedChapters as boolean,
+    outputFormat: defaults.outputFormat as 'mp4' | 'mkv',
+    skipIntermediateOnCodecMatch:
+      defaults.skipIntermediateOnCodecMatch as boolean,
   };
 }
 
 /**
  * Safely coerce a parsed JSON value into a {@link PersistedConfig}.
- * Each field is validated individually and falls back to a sensible default
- * when the stored value is missing, wrong type, or out of range.
+ * Each field is validated individually by the schema and falls back to a
+ * sensible default when the stored value is missing, wrong type, or out of
+ * range.
  */
 function coerceConfig(raw: Record<string, unknown>): PersistedConfig {
+  const values = coerceFromRecord(raw);
   return {
     version: STORAGE_VERSION,
-    videoSource: isMediaSource(raw.videoSource) ? raw.videoSource : null,
-    audioSource: isMediaSource(raw.audioSource) ? raw.audioSource : null,
-    outputPath: stringOr(raw.outputPath, ''),
-    outputPrefix: stringOr(
-      raw.outputPrefix,
-      DEFAULT_CONFIG.metadata.channelPrefix,
-    ),
-    maxrate: stringOr(raw.maxrate, '4000k'),
-    usePingpong: booleanOr(raw.usePingpong, true),
-    songsPerPlaylist: numberOr(
-      raw.songsPerPlaylist,
-      DEFAULT_CONFIG.audio.songsPerPlaylist,
-      1,
-    ),
-    // Clamp to the same 0.1–24h range the backend validates, so a corrupted
-    // or hand-edited stored value can never produce a render that fails
-    // validation on the Rust side.
-    minDurationHours: Math.min(
-      24,
-      numberOr(
-        raw.minDurationHours,
-        DEFAULT_CONFIG.target.minDurationSec / 3600,
-        0.1,
-      ),
-    ),
-    loopMode: raw.loopMode === 'count' ? 'count' : 'duration',
-    loopCount: numberOr(raw.loopCount, 1, 1),
-    audioMode: (raw.audioMode === 'normalize' ? 'normalize' : 'original') as
-      | 'original'
-      | 'normalize',
-    embedChapters: booleanOr(raw.embedChapters, true),
-    outputFormat: raw.outputFormat === 'mkv' ? 'mkv' : 'mp4',
-    codec: ALL_CODECS.includes(String(raw.codec))
-      ? String(raw.codec)
-      : CODECS.av1,
-    // Default OFF so codec conversion and ping-pong remain safe when the
-    // stored config omits the field (e.g. corrupted or pre-migration).
-    skipIntermediateOnCodecMatch: booleanOr(
-      raw.skipIntermediateOnCodecMatch,
-      false,
-    ),
+    videoSource: values.videoSource as MediaSource | null,
+    audioSource: values.audioSource as MediaSource | null,
+    outputPath: values.outputPath as string,
+    outputPrefix: values.outputPrefix as string,
+    maxrate: values.maxrate as string,
+    usePingpong: values.usePingpong as boolean,
+    songsPerPlaylist: values.songsPerPlaylist as number,
+    minDurationHours: values.minDurationHours as number,
+    loopMode: values.loopMode as 'duration' | 'count',
+    loopCount: values.loopCount as number,
+    codec: values.codec as string,
+    audioMode: values.audioMode as 'original' | 'normalize',
+    embedChapters: values.embedChapters as boolean,
+    outputFormat: values.outputFormat as 'mp4' | 'mkv',
+    skipIntermediateOnCodecMatch:
+      values.skipIntermediateOnCodecMatch as boolean,
   };
 }
 

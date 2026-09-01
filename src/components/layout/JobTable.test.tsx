@@ -83,7 +83,7 @@ describe('JobTable', () => {
   });
 
   it('renders progress element with aria attributes', () => {
-    render(() => <JobTable jobs={[sampleJobs[1]]} />);
+    render(() => <JobTable jobs={[sampleJobs[1]!]} />);
     const bar = screen.getByRole('progressbar', { name: /loop.mp4 progress/i });
     expect(bar).toBeTruthy();
     expect((bar as HTMLProgressElement).value).toBe(55);
@@ -91,14 +91,14 @@ describe('JobTable', () => {
   });
 
   it('shows file-video placeholder when thumbnailPath is null', () => {
-    const { container } = render(() => <JobTable jobs={[sampleJobs[0]]} />);
+    const { container } = render(() => <JobTable jobs={[sampleJobs[0]!]} />);
     // sampleJobs[0] has a null thumbnailPath → shows placeholder
     const imgs = container.querySelectorAll('img');
     expect(imgs.length).toBe(0);
   });
 
   it('renders an img when thumbnailPath exists', () => {
-    const { container } = render(() => <JobTable jobs={[sampleJobs[1]]} />);
+    const { container } = render(() => <JobTable jobs={[sampleJobs[1]!]} />);
     const img = container.querySelector('img') as HTMLImageElement;
     expect(img).toBeTruthy();
     expect(img.src).toContain('asset://localhost/');
@@ -128,7 +128,7 @@ describe('JobTable', () => {
 
     // Simulate the next Progress event: a brand-new jobs array (new object
     // identity) carrying the same thumbnail path.
-    setJobs([{ ...withThumb[0], progressPercent: 20 }]);
+    setJobs([{ ...withThumb[0]!, progressPercent: 20 }]);
 
     // The broken image must stay replaced by the placeholder icon.
     expect(container.querySelectorAll('img').length).toBe(0);

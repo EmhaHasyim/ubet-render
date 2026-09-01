@@ -92,7 +92,11 @@ pub async fn build_master_audio_pool(
     let emitted_milestone = Arc::new(AtomicUsize::new(0));
     // Milestone granularity: every 10 tracks for large pools, every 25% for
     // small ones (≤20 tracks). Minimum step of 1 so the division never panics.
-    let milestone_step = if total <= 20 { (total / 4).max(1) } else { 10usize };
+    let milestone_step = if total <= 20 {
+        (total / 4).max(1)
+    } else {
+        10usize
+    };
     let cache_dir_arc = Arc::new(cache_dir.to_path_buf());
 
     let loudnorm_params = settings.loudnorm_params.clone();

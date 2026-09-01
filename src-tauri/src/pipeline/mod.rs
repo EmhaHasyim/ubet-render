@@ -8,6 +8,7 @@ pub mod source_scanner;
 pub mod state;
 pub mod thumbnailer;
 pub mod video_loop;
+pub mod workspace_guard;
 
 use crate::config::AppConfig;
 use crate::error::AppError;
@@ -22,112 +23,17 @@ use estimator::{
 };
 pub use job_processor::{JobContext, JobParams};
 use roots::ResolvedRoots;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use tauri::AppHandle;
+use workspace_guard::{WorkspaceGuard, quarantine_state_file};
 
 // `TempDirGuard` was removed: thumbnails are intentionally kept after a
 // render so the results dashboard can display them. They are purged on cancel
 // (see the cancel branch below) and at the start of the next non-resume run
 // (which calls `remove_dir_all(&thumb_dir)`).
-
-struct WorkspaceGuard {
-    cache_dir: PathBuf,
-    thumbnail_dir: PathBuf,
-    state_path: PathBuf,
-    keep_cache: bool,
-    keep_thumbnails: bool,
-    keep_state: bool,
-}
-
-impl WorkspaceGuard {
-    fn new(cache_dir: PathBuf, thumbnail_dir: PathBuf, state_path: PathBuf) -> Self {
-        Self {
-            cache_dir,
-            thumbnail_dir,
-            state_path,
-            // Cache is disposable by default. Pause explicitly opts into
-            // retaining it so a resume can reuse prepared audio.
-            keep_cache: false,
-            // Thumbnails are user-visible after a successful render and are
-            // retained unless the user cancels.
-            keep_thumbnails: true,
-            // Keep state on unexpected failure so retry/resume remains useful.
-            keep_state: true,
-        }
-    }
-
-    fn pause(&mut self) {
-        self.keep_cache = true;
-        self.keep_thumbnails = true;
-        self.keep_state = true;
-    }
-
-    fn cancel(&mut self) {
-        self.keep_cache = false;
-        self.keep_thumbnails = false;
-        self.keep_state = false;
-    }
-
-    fn complete(&mut self) {
-        self.keep_cache = false;
-        self.keep_thumbnails = true;
-        self.keep_state = false;
-    }
-}
-
-impl Drop for WorkspaceGuard {
-    fn drop(&mut self) {
-        let remove_dir = |path: &Path, keep: bool| {
-            if !keep
-                && let Err(error) = std::fs::remove_dir_all(path)
-                && error.kind() != std::io::ErrorKind::NotFound
-            {
-                crate::utils::logger::log_line(&format!(
-                    "Workspace cleanup failed for '{}': {}",
-                    path.display(),
-                    error
-                ));
-            }
-        };
-        let remove_file = |path: &Path, keep: bool| {
-            if !keep
-                && let Err(error) = std::fs::remove_file(path)
-                && error.kind() != std::io::ErrorKind::NotFound
-            {
-                crate::utils::logger::log_line(&format!(
-                    "Workspace cleanup failed for '{}': {}",
-                    path.display(),
-                    error
-                ));
-            }
-        };
-        remove_dir(&self.cache_dir, self.keep_cache);
-        remove_dir(&self.thumbnail_dir, self.keep_thumbnails);
-        remove_file(&self.state_path, self.keep_state);
-    }
-}
-fn quarantine_state_file(path: &Path, timestamp: u64) -> bool {
-    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
-        return false;
-    };
-    let nonce = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(timestamp as u128);
-    let quarantine = path.with_file_name(format!("{}.invalid-{}-{}", file_name, timestamp, nonce));
-    match std::fs::rename(path, &quarantine) {
-        Ok(()) => true,
-        Err(error) => {
-            crate::utils::logger::log_line(&format!(
-                "Unable to quarantine invalid render state '{}': {}",
-                path.display(),
-                error
-            ));
-            false
-        }
-    }
-}
+//
+// `WorkspaceGuard` lives in `pipeline/workspace_guard.rs`.
 
 pub struct Pipeline {
     config: AppConfig,
@@ -580,7 +486,11 @@ impl Pipeline {
         // pipeline from the state file.
         let mut idx = 0usize;
         let mut pause_exit = false;
-        let milestone_step = if total_jobs <= 20 { (total_jobs / 4).max(1) } else { 10usize };
+        let milestone_step = if total_jobs <= 20 {
+            (total_jobs / 4).max(1)
+        } else {
+            10usize
+        };
         let mut completed: usize = 0;
         let mut last_milestone: usize = 0;
         while idx < total_jobs {
@@ -857,5 +767,4 @@ impl Pipeline {
         }
         jobs
     }
-
 }

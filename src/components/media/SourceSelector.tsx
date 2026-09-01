@@ -38,7 +38,8 @@ export function SourceSelector(props: SourceSelectorProps) {
     let currentDefault = lastDir();
     if (!currentDefault && props.value.length > 0) {
       try {
-        currentDefault = await dirname(props.value[0]);
+        const firstPath = props.value[0];
+        if (firstPath) currentDefault = await dirname(firstPath);
       } catch (e) {
         log.warn('Could not get dirname', e);
       }
@@ -63,7 +64,8 @@ export function SourceSelector(props: SourceSelectorProps) {
     if (files.length === 0) return;
 
     try {
-      setLastDir(await dirname(files[0]));
+      const firstFile = files[0];
+      if (firstFile) setLastDir(await dirname(firstFile));
     } catch {}
 
     props.onChange(files);

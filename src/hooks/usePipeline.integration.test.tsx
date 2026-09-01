@@ -251,9 +251,9 @@ describe('usePipeline — integration (end-to-end render lifecycle)', () => {
     });
 
     expect(p.jobs().length).toBe(2);
-    expect(p.jobs()[0].name).toBe('intro.mp4');
-    expect(p.jobs()[0].progressPercent).toBe(100);
-    expect(p.jobs()[1].progressPercent).toBe(45);
+    expect(p.jobs()[0]!.name).toBe('intro.mp4');
+    expect(p.jobs()[0]!.progressPercent).toBe(100);
+    expect(p.jobs()[1]!.progressPercent).toBe(45);
     // Overall progress = (100 + 45) / 2 = 72.5
     expect(p.overallProgress()).toBeGreaterThan(70);
     expect(p.overallProgress()).toBeLessThan(75);

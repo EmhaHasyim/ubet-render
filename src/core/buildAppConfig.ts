@@ -12,15 +12,17 @@ import { DEFAULT_CONFIG } from './config';
  * lives in {@link PersistedConfig} in `core/persisted.ts`).
  */
 export interface BackendConfigSnapshot {
-  outputPath: () => string;
-  outputPrefix: () => string;
-  minDurationHours: () => number;
-  maxrate: () => string;
-  codec: () => string;
-  songsPerPlaylist: () => number;
-  audioMode: () => 'original' | 'normalize';
-  embedChapters: () => boolean;
+  readonly outputPath: () => string;
+  readonly outputPrefix: () => string;
+  readonly minDurationHours: () => number;
+  readonly maxrate: () => string;
+  readonly codec: () => string;
+  readonly songsPerPlaylist: () => number;
+  readonly audioMode: () => 'original' | 'normalize';
+  readonly embedChapters: () => boolean;
 }
+
+export type BackendConfigAccessors = BackendConfigSnapshot;
 
 export function buildAppConfig(
   config: BackendConfigSnapshot,

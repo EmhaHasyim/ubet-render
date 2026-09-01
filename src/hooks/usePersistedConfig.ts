@@ -1,6 +1,5 @@
 import { createEffect, onCleanup } from 'solid-js';
 import { createStore } from 'solid-js/store';
-import type { MediaSource } from '../core/types';
 import {
   STORAGE_KEY,
   STORAGE_VERSION,
@@ -8,63 +7,15 @@ import {
   type PersistedConfig,
 } from '../core/persisted';
 import { safeSetStorageItem } from '../core/storage';
-
-// ── Field registry ─────────────────────────────────────────────────────
-// Adding a new config field requires updating only this list, the
-// PersistedState interface, and the PipelineApi context contract.
-const CONFIG_FIELDS = [
-  'videoSource',
-  'audioSource',
-  'outputPath',
-  'outputPrefix',
-  'maxrate',
-  'usePingpong',
-  'audioMode',
-  'embedChapters',
-  'outputFormat',
-  'songsPerPlaylist',
-  'minDurationHours',
-  'loopMode',
-  'loopCount',
-  'codec',
-  'skipIntermediateOnCodecMatch',
-] as const;
+import {
+  CONFIG_SCHEMA,
+  snapshotFromState,
+  type SchemaState,
+} from '../core/schema';
 
 // ── State interface ────────────────────────────────────────────────────
-
-interface PersistedState {
-  videoSource: MediaSource | null;
-  audioSource: MediaSource | null;
-  outputPath: string;
-  outputPrefix: string;
-  maxrate: string;
-  usePingpong: boolean;
-  audioMode: 'original' | 'normalize';
-  embedChapters: boolean;
-  outputFormat: 'mp4' | 'mkv';
-  songsPerPlaylist: number;
-  minDurationHours: number;
-  loopMode: 'duration' | 'count';
-  loopCount: number;
-  codec: string;
-  skipIntermediateOnCodecMatch: boolean;
-}
-
-// ── Derived helpers ────────────────────────────────────────────────────
-
-/** Build a PersistedConfig snapshot from the current store state.
- *  Adding a field to CONFIG_FIELDS automatically includes it here. */
-function buildSnapshot(
-  state: PersistedState,
-  version: number,
-): Record<string, unknown> {
-  const base: Record<string, unknown> = { version };
-  for (const field of CONFIG_FIELDS) {
-    base[field] = state[field];
-  }
-  return base;
-}
-
+// Derived from the single-source schema: one field descriptor in
+// `core/schema.ts` covers store shape, snapshot, coercion and clamping.
 // ── Persistence helpers ────────────────────────────────────────────────
 
 /**
@@ -83,7 +34,7 @@ export function usePersistedConfig() {
   // Single reactive store instead of 17 individual createSignal calls.
   // All fields share one reactive root, which means SolidJS tracks a single
   // dependency in effects that read multiple fields, reducing bookkeeping.
-  const [state, setState] = createStore<PersistedState>({
+  const [state, setState] = createStore<SchemaState>({
     videoSource: initial.videoSource,
     audioSource: initial.audioSource,
     outputPath: initial.outputPath,
@@ -112,10 +63,7 @@ export function usePersistedConfig() {
   let latestSnapshot: PersistedConfig | null = null;
 
   createEffect(() => {
-    const snapshot = buildSnapshot(
-      state,
-      STORAGE_VERSION,
-    ) as unknown as PersistedConfig;
+    const snapshot: PersistedConfig = snapshotFromState(state, STORAGE_VERSION);
     latestSnapshot = snapshot;
     // Clear any pending timer before setting a new one — avoids creating
     // N timers when the user changes N fields rapidly.
@@ -138,6 +86,20 @@ export function usePersistedConfig() {
     }
   });
 
+  // ── Setters ──────────────────────────────────────────────────────────
+  // Numeric setters clamp via the schema bounds; the rest write directly.
+  const clampSetter = (name: string) => (v: number) => {
+    const field: import('../core/schema').FieldDescriptor | undefined =
+      CONFIG_SCHEMA.find((f) => f.name === name);
+    let value = v;
+    if (field?.integer) value = Math.round(value) || (field.min ?? 1);
+    if (field?.min !== undefined) value = Math.max(field.min, value);
+    if (field?.max !== undefined) value = Math.min(field.max, value);
+    if (name === 'songsPerPlaylist') setState('songsPerPlaylist', value);
+    else if (name === 'minDurationHours') setState('minDurationHours', value);
+    else if (name === 'loopCount') setState('loopCount', value);
+  };
+
   return {
     // ---- Getters ----
     videoSource: () => state.videoSource,
@@ -156,26 +118,19 @@ export function usePersistedConfig() {
     outputFormat: () => state.outputFormat,
     skipIntermediateOnCodecMatch: () => state.skipIntermediateOnCodecMatch,
 
-    // ---- Setters (explicit — several have clamping logic) ----
-    setVideoSource: (v: MediaSource | null) => setState('videoSource', v),
-    setAudioSource: (v: MediaSource | null) => setState('audioSource', v),
+    // ---- Setters (numeric ones clamp to schema bounds = backend limits) ----
+    setVideoSource: (v: import('../core/types').MediaSource | null) =>
+      setState('videoSource', v),
+    setAudioSource: (v: import('../core/types').MediaSource | null) =>
+      setState('audioSource', v),
     setOutputPath: (v: string) => setState('outputPath', v),
     setOutputPrefix: (v: string) => setState('outputPrefix', v),
     setMaxrate: (v: string) => setState('maxrate', v),
     setUsePingpong: (v: boolean) => setState('usePingpong', v),
-    setSongsPerPlaylist: (v: number) =>
-      setState(
-        'songsPerPlaylist',
-        Math.max(1, Math.min(100, Math.round(v)) || 1),
-      ),
-    // Clamped to 0.1–24h to match the backend's validation range
-    // (MIN_DURATION_HOURS..=MAX_DURATION_HOURS in validation.rs). Without the
-    // upper bound a value like 30 would pass the UI but hard-fail start_render.
-    setMinDurationHours: (v: number) =>
-      setState('minDurationHours', Math.min(24, Math.max(0.1, v || 0.1))),
+    setSongsPerPlaylist: clampSetter('songsPerPlaylist'),
+    setMinDurationHours: clampSetter('minDurationHours'),
     setLoopMode: (v: 'duration' | 'count') => setState('loopMode', v),
-    setLoopCount: (v: number) =>
-      setState('loopCount', Math.max(1, Math.min(100, Math.round(v)) || 1)),
+    setLoopCount: clampSetter('loopCount'),
     setCodec: (v: string) => setState('codec', v),
     setAudioMode: (v: 'original' | 'normalize') => setState('audioMode', v),
     setEmbedChapters: (v: boolean) => setState('embedChapters', v),

@@ -27,22 +27,22 @@ jobs:
         run: bun audit --audit-level=high
 
       - name: TypeScript check
-        run: bunx tsc --noEmit
+        run: bun run typecheck
 
       - name: Run tests
-        run: bunx vitest run
+        run: bun run test
 
       - name: Lint
-        run: bunx oxlint
+        run: bun run lint
 
       - name: Format check
-        run: bunx oxfmt --check
+        run: bun run format:check
 
       - name: Build
         run: bun run build
 
   backend:
-    name: Backend (cargo check + clippy)
+    name: Backend (check + clippy + tests)
     runs-on: ubuntu-latest
 
     steps:
@@ -67,10 +67,10 @@ jobs:
         run: cargo check --manifest-path src-tauri/Cargo.toml
 
       - name: Clippy
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
 
       - name: Run tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --manifest-path src-tauri/Cargo.toml --all-features
 
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
@@ -98,7 +98,7 @@ jobs:
         run: cargo check --manifest-path src-tauri/Cargo.toml
 
       - name: Clippy
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
 
       - name: Run tests
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --manifest-path src-tauri/Cargo.toml --all-features
