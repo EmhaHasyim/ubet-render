@@ -4,6 +4,29 @@ All notable changes to Ubet Render are documented in this file.
 
 ---
 
+## [0.2.8] — 2026-09-01
+
+### Added
+
+- **Sidebar navigation** (`Sidebar.tsx`) — Render/Activity nav with active-state pill, job-count badge, and a keyboard-shortcut footer (Ctrl+↵ Start, Ctrl+P, Ctrl+1/2, F1), replacing the tab row in the titlebar.
+- **Inspector rail** (≥1280 px) — Start controls, overall progress, hardware info and a mini log live in a fixed right-hand column that never scrolls away; below 1280 px it becomes a bottom drawer capped at 40 vh.
+- **Numbered pipeline steps (01–05)** — Media, Audio, Video, Looping, Extra cards now carry step numbers so the render flow reads in order.
+- **Progress-event throttling** — per-frame ffmpeg progress events are now coalesced on the Rust side (max one emission per 120 ms via `emit_progress_throttled`) instead of cloning + serializing the job list dozens of times per second.
+
+### Changed
+
+- **True dark theme** — the "dark" option is now a real dark theme (near-black surfaces, low-chroma accents) instead of an inverted light; contrast of text/borders swept to WCAG AA against the new surfaces.
+- **App shell** — the main window is now a sidebar + inspector-rail layout; the old tab row and stacked dashboard are gone.
+- **Titlebar simplification** — drag region and window controls only; tab switching moved into the sidebar.
+
+### Fixed
+
+- **Collapse buttons did nothing:** `CollapsibleSection` rendered its content outside the toggleable wrapper, so clicking the section header (01–05 cards) never expanded/collapsed anything. Content is now inside the wrapper and the reactive signal drives `open`/`aria-expanded`.
+- **Drag region swallowed clicks:** the fullscreen titlebar drag-region covered the window buttons, making minimize/maximize/close unclickable in some builds.
+- Version bump: 0.2.7 → 0.2.8 across `package.json`, `Cargo.toml`, `Cargo.lock`, `tauri.conf.json` (fixes stale 0.2.6 drift there), and `README.md`.
+
+---
+
 ## [0.2.7] — 2026-08-23
 
 ### Fixed
