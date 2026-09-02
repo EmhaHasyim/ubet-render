@@ -1,5 +1,10 @@
 use std::path::{Path, PathBuf};
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 /// Opens the OS file manager with `path` revealed / selected.
 ///
 /// This mirrors the behaviour of Tauri's `opener` plugin `revealItemInDir`,
@@ -55,13 +60,15 @@ pub fn reveal_in_explorer(path: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
+        let mut command = std::process::Command::new("explorer.exe");
+        command.creation_flags(CREATE_NO_WINDOW);
         let status = if p.is_dir() {
-            std::process::Command::new("explorer.exe").arg(p).spawn()
+            command.arg(p).spawn()
         } else {
             // `/select,` must be a single argument with the quoted path.
             // Rust `\"` inside a string literal produces a literal `"` character.
             let arg = format!("/select,\"{}\"", path);
-            std::process::Command::new("explorer.exe").arg(&arg).spawn()
+            command.arg(&arg).spawn()
         };
         status
             .map(|_| ())

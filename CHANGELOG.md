@@ -4,6 +4,15 @@ All notable changes to Ubet Render are documented in this file.
 
 ---
 
+## [0.3.1] — 2026-09-02
+
+### Fixed
+
+- Prevented Windows console windows from appearing during application, render cancellation, and Explorer process launches.
+- Applied the Windows GUI subsystem to debug and release builds.
+
+---
+
 ## [0.3.0] — 2026-09-01
 
 ### Added

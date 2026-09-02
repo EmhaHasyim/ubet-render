@@ -22,6 +22,11 @@ use tauri::async_runtime::Receiver;
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 use crate::error::AppError;
 use crate::models::job::RenderStats;
 use crate::models::media::{AudioInfo, LoudnormMeasurement};
@@ -61,8 +66,10 @@ fn terminate_child(child: CommandChild) {
             .map(std::path::PathBuf::from)
             .map(|root| root.join("System32").join("taskkill.exe"))
             .unwrap_or_else(|| std::path::PathBuf::from("taskkill.exe"));
-        let tree_killed = std::process::Command::new(taskkill)
-            .args(["/PID", &pid, "/T", "/F"])
+        let mut taskkill_command = std::process::Command::new(taskkill);
+        taskkill_command.args(["/PID", &pid, "/T", "/F"]);
+        taskkill_command.creation_flags(CREATE_NO_WINDOW);
+        let tree_killed = taskkill_command
             .status()
             .is_ok_and(|status| status.success());
         if !tree_killed {

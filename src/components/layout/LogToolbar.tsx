@@ -1,6 +1,7 @@
 import { For, Show } from 'solid-js';
 import { Icon } from '@iconify-icon/solid';
 import type { LogLevel } from '../../core/logLevels';
+import { showToast } from '../../core/toast';
 
 export interface LogFilterControls {
   enabledLevels: () => Set<LogLevel>;
@@ -52,6 +53,7 @@ export function LogToolbar(props: {
     const text = props.logs.join('\n');
     try {
       await navigator.clipboard.writeText(text);
+      showToast('Logs copied to clipboard', { variant: 'success' });
     } catch {
       const textarea = document.createElement('textarea');
       textarea.value = text;
@@ -61,6 +63,7 @@ export function LogToolbar(props: {
       textarea.select();
       document.execCommand('copy');
       document.body.removeChild(textarea);
+      showToast('Logs copied to clipboard', { variant: 'success' });
     }
   };
 
