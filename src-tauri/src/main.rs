@@ -64,19 +64,6 @@ impl RenderControl {
         self.terminated_notify.notify_waiters();
     }
 
-    /// Wait until the pipeline task has committed to exiting.
-    /// The atomic check plus a notification future avoids the check/subscribe
-    /// race: a termination that happens between the two is still observed.
-    pub async fn wait_for_terminated(&self) {
-        loop {
-            let notified = self.terminated_notify.notified();
-            if self.is_terminated() {
-                return;
-            }
-            notified.await;
-        }
-    }
-
     /// Marks the control as fully cleaned up after `RenderState.control` has
     /// been cleared by `ControlGuard`. This is deliberately separate from
     /// `terminated`: callers that need to start a new render must wait for
@@ -152,27 +139,24 @@ impl RenderControl {
         *self.pause_rx.borrow()
     }
 
-    /// Waits until the pipeline is either resumed (paused becomes false) or
-    /// cancelled (cancelled becomes true). Uses `watch::Receiver::changed()`
-    /// which only resolves on actual value transitions — unlike `Notify` it
-    /// cannot spuriously resolve from a stale prior notification.
-    pub async fn wait_for_resume(&self) {
-        let mut cancel_rx = self.cancel_rx.clone();
-        let mut pause_rx = self.pause_rx.clone();
-        loop {
-            if *cancel_rx.borrow() {
-                return;
-            }
-            if !*pause_rx.borrow() {
-                return;
-            }
-            // Wait for either cancel or pause to change value
-            tokio::select! {
-                _ = cancel_rx.changed() => {}
-                _ = pause_rx.changed() => {}
-            }
+    /// Shared cancel/pause preflight. Cancel takes precedence over pause,
+    /// matching the pipeline's terminate-on-pause design. Replaces ~10
+    /// duplicated `is_cancelled/is_paused` blocks across ffmpeg, audio_pool
+    /// and pipeline.
+    pub fn ensure_running(&self) -> Result<(), crate::error::AppError> {
+        if self.is_cancelled() {
+            return Err(crate::error::AppError::Cancelled(
+                "Render cancelled by user".into(),
+            ));
         }
+        if self.is_paused() {
+            return Err(crate::error::AppError::Paused(
+                "Render paused by user".into(),
+            ));
+        }
+        Ok(())
     }
+
 }
 
 impl Default for RenderControl {
@@ -260,22 +244,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_render_control_waits_for_termination() {
-        let rc = Arc::new(RenderControl::new());
-        let waiter = {
-            let rc = Arc::clone(&rc);
-            tokio::spawn(async move {
-                rc.wait_for_terminated().await;
-                true
-            })
-        };
-        tokio::task::yield_now().await;
-        assert!(!waiter.is_finished());
-        rc.mark_terminated();
-        assert!(waiter.await.unwrap());
-    }
-
-    #[tokio::test]
     async fn test_render_control_cleanup_is_distinct_from_termination() {
         let rc = Arc::new(RenderControl::new());
         rc.mark_terminated();
@@ -313,6 +281,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             app.manage(RenderState {
                 control: Mutex::new(None),
@@ -361,17 +330,9 @@ fn main() {
             utils::logger::init_logger();
             utils::logger::log_line("=== Application started ===");
 
-            let loaded_config = config::AppConfig::load();
-            let config = match validation::validate_app_config(&loaded_config) {
-                Ok(()) => loaded_config,
-                Err(error) => {
-                    utils::logger::log_line(&format!(
-                        "Persisted config failed validation: {}. Using safe defaults.",
-                        error
-                    ));
-                    config::AppConfig::default()
-                }
-            };
+            // `AppConfig::load()` already validates internally and falls back
+            // to (valid) defaults, so no re-validation is needed here.
+            let config = config::AppConfig::load();
 
             for (name, path) in [
                 ("cache", &config.directories.cache),

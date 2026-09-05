@@ -1,5 +1,4 @@
-import { createSignal, onMount, Show, type JSX } from 'solid-js';
-import { Icon } from '@iconify-icon/solid';
+import { createSignal, onMount, type JSX } from 'solid-js';
 import { safeSetStorageItem } from '../../core/storage';
 
 /**
@@ -38,8 +37,6 @@ const STORAGE_PREFIX = 'section.collapsed.';
  * expanded when no stored preference exists.
  */
 export function CollapsibleSection(props: {
-  /** Icon shown when the section has no step number (legacy usage). */
-  icon?: string;
   title: string;
   /**
    * Render-pipeline step number (01, 02, …). When set, a numbered badge
@@ -88,19 +85,10 @@ export function CollapsibleSection(props: {
         aria-label={`Toggle ${props.title} section`}
       />
       <div class={collapseTitleClass}>
-        {props.step !== undefined ? (
+        {props.step !== undefined && (
           <span class={stepBadgeClass}>
             {String(props.step).padStart(2, '0')}
           </span>
-        ) : (
-          <Show when={props.icon}>
-            <Icon
-              icon={props.icon!}
-              class="text-base-content/45"
-              width="15"
-              height="15"
-            />
-          </Show>
         )}
         {props.title}
       </div>

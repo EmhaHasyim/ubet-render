@@ -1,4 +1,4 @@
-import { Icon } from '@iconify-icon/solid';
+import { Icon } from './Icon';
 
 export function FatalScreen(props: { error: unknown; reset: () => void }) {
   const message =

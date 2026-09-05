@@ -231,13 +231,6 @@
     }
   }
 
-  /* Reset entry animation for elements opted out via attribute.
-     (Unused by default, available for debugging.) */
-  .tab-content[data-no-animate] {
-    animation: none !important;
-    opacity: 1 !important;
-  }
-
   /* Ensure the renderer tab's grid always has at least a visible footprint
      so empty-states from conditional components don't collapse to zero height. */
   .tab-content:empty {

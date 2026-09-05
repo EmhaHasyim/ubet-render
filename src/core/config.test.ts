@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_CONFIG,
@@ -75,49 +76,6 @@ describe('AUDIO_EXTENSIONS', () => {
     for (const ext of AUDIO_EXTENSIONS) {
       expect(ext).toMatch(/^\./);
     }
-  });
-});
-
-/**
- * Drift-detection sentinels.
- *
- * These `EXPECTED_*` arrays are the **machine-enforced mirror** of the
- * canonical list in `docs/MEDIA_EXTENSIONS.md`. If a contributor changes
- * `VIDEO_EXTENSIONS` / `AUDIO_EXTENSIONS` above without also updating the
- * matching Rust sentinel in `src-tauri/src/validation.rs::tests`, one of the
- * two sides will fail this test in CI.
- *
- * Bump both sentinels together when adding a new format.
- */
-const EXPECTED_VIDEO_EXTENSIONS = [
-  '.mp4',
-  '.mkv',
-  '.mov',
-  '.webm',
-  '.avi',
-  '.flv',
-  '.wmv',
-];
-const EXPECTED_AUDIO_EXTENSIONS = [
-  '.mp3',
-  '.wav',
-  '.m4a',
-  '.flac',
-  '.ogg',
-  '.aac',
-  '.wma',
-  '.opus',
-  '.aiff',
-  '.aif',
-];
-
-describe('drift detection: extensions match docs/MEDIA_EXTENSIONS.md', () => {
-  it('VIDEO_EXTENSIONS equals the canonical list', () => {
-    expect(VIDEO_EXTENSIONS).toEqual(EXPECTED_VIDEO_EXTENSIONS);
-  });
-
-  it('AUDIO_EXTENSIONS equals the canonical list', () => {
-    expect(AUDIO_EXTENSIONS).toEqual(EXPECTED_AUDIO_EXTENSIONS);
   });
 });
 

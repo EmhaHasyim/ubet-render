@@ -90,13 +90,8 @@ pub async fn build_master_audio_pool(
     // Track the last milestone band we emitted so concurrent completions
     // don't produce duplicate progress lines.
     let emitted_milestone = Arc::new(AtomicUsize::new(0));
-    // Milestone granularity: every 10 tracks for large pools, every 25% for
-    // small ones (≤20 tracks). Minimum step of 1 so the division never panics.
-    let milestone_step = if total <= 20 {
-        (total / 4).max(1)
-    } else {
-        10usize
-    };
+    // Shared milestone granularity (see `loop_control::milestone_step`).
+    let milestone_step = crate::pipeline::loop_control::milestone_step(total);
     let cache_dir_arc = Arc::new(cache_dir.to_path_buf());
 
     let loudnorm_params = settings.loudnorm_params.clone();
@@ -115,12 +110,7 @@ pub async fn build_master_audio_pool(
         async move {
             // Pre-flight cancel before spawning any heavyweight probe.
             if let Some(c) = cancel_control.as_ref() {
-                if c.is_cancelled() {
-                    return Err(AppError::Cancelled("Render cancelled by user".into()));
-                }
-                if c.is_paused() {
-                    return Err(AppError::Paused("Render paused by user".into()));
-                }
+                c.ensure_running()?;
             }
 
             let original_path = PathBuf::from(&song);
@@ -202,11 +192,11 @@ pub async fn build_master_audio_pool(
                 _ => None,
             };
 
-            // Single-stat cache check: zero-byte (incomplete from a prior
-            // cancel) is treated as a miss; racing removal collapses into
-            // the default `false` result.
-            let cache_is_usable = cache_path
-                .metadata()
+            // Single-stat cache check (async so the executor is not blocked
+            // per track): zero-byte (incomplete from a prior cancel) is
+            // treated as a miss; racing removal collapses into `false`.
+            let cache_is_usable = tokio::fs::metadata(&cache_path)
+                .await
                 .map(|m| m.len() > 0)
                 .unwrap_or(false);
 
@@ -464,7 +454,7 @@ async fn get_or_compute_loudnorm_measurement(
     let meas_path = cache_dir.join(format!("loudnorm_p1_{:032x}.json", hash));
     let meas_tmp = cache_dir.join(format!("loudnorm_p1_{:032x}.json.tmp", hash));
 
-    if let Ok(text) = std::fs::read_to_string(&meas_path)
+    if let Ok(text) = tokio::fs::read_to_string(&meas_path).await
         && let Ok(m) = serde_json::from_str::<LoudnormMeasurement>(&text)
     {
         return Ok(m);
@@ -478,7 +468,7 @@ async fn get_or_compute_loudnorm_measurement(
             format!("loudnorm measurement serialize: {}", e),
         ))
     })?;
-    if let Err(e) = std::fs::write(&meas_tmp, json.as_bytes()) {
+    if let Err(e) = tokio::fs::write(&meas_tmp, json.as_bytes()).await {
         cleanup_temp_file_sync(&meas_tmp);
         return Err(AppError::Io(e));
     }

@@ -3,16 +3,6 @@ import { render, screen, fireEvent } from '@solidjs/testing-library';
 import { createSignal } from 'solid-js';
 import { ShortcutsDialog } from './ShortcutsDialog';
 
-/**
- * Stub @iconify-icon/solid so the test suite doesn't depend on the
- * iconify runtime (network SVG fetching + jsdom-SVG quirks). Every
- * assertion below targets text content, button roles, or DOM
- * attributes, so a no-op Icon stub is sufficient.
- */
-vi.mock('@iconify-icon/solid', () => ({
-  Icon: () => null,
-}));
-
 function ShortcutsDialogTestWrapper() {
   const [open, setOpen] = createSignal(false);
   return (

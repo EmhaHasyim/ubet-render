@@ -51,20 +51,14 @@ describe('usePipelinePersistence', () => {
     dispose();
   });
 
-  it('retries transient save failures before reporting success', async () => {
-    vi.useFakeTimers();
-    vi.mocked(invoke)
-      .mockRejectedValueOnce(new Error('temporary failure'))
-      .mockResolvedValueOnce(undefined);
+  it('reports a failed save without retrying', async () => {
+    vi.mocked(invoke).mockRejectedValueOnce(new Error('disk full'));
     const { persistence, dispose } = mountPersistence();
 
-    const flushPromise = persistence.flush();
-    await vi.advanceTimersByTimeAsync(250);
-    await expect(flushPromise).resolves.toBe(true);
+    await expect(persistence.flush()).resolves.toBe(false);
+    expect(invoke).toHaveBeenCalledTimes(1);
 
-    expect(invoke).toHaveBeenCalledTimes(2);
     dispose();
-    vi.useRealTimers();
   });
 
   it('persists a newer snapshot after a debounced save finishes in flight', async () => {

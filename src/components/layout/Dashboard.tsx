@@ -8,13 +8,19 @@ import {
   type JSX,
   type Setter,
 } from 'solid-js';
-import { Icon } from '@iconify-icon/solid';
+import { Icon } from '../ui/Icon';
 import { ProgressBarStatus } from '@tauri-apps/api/window';
 import { confirm } from '@tauri-apps/plugin-dialog';
+import { createLogger } from '../../core/logger';
 import { getSourcePaths } from '../../core/config';
+
+const log = createLogger('Dashboard');
 import { getSafeWindow } from '../../core/window';
 import { usePipeline } from '../../hooks/usePipeline';
-import { SettingsCard, Sidebar, StatsStrip, Titlebar } from '../index';
+import { SettingsCard } from './SettingsCard';
+import { Sidebar } from './Sidebar';
+import { StatsStrip } from './StatsStrip';
+import { Titlebar } from './Titlebar';
 import { PipelineProvider, type Pipeline } from '../../context/pipeline';
 import { type AppTabId } from '../../hooks/useAppShortcuts';
 import { ActivityView, InspectorRail } from './DashboardPanels';
@@ -91,7 +97,9 @@ export function Dashboard(props: {
     });
     onCleanup(() => {
       window.removeEventListener('keydown', handleKeyDown);
-      unlistenClose.then((fn) => fn()).catch(() => {});
+      unlistenClose
+        .then((fn) => fn())
+        .catch((err) => log.warn('unlisten close failed:', err));
     });
   });
 
@@ -134,7 +142,7 @@ export function Dashboard(props: {
     }
     if (key === lastSentTaskbar) return;
     lastSentTaskbar = key;
-    call().catch(() => {});
+    call().catch((err) => log.warn('setProgressBar failed:', err));
   });
 
   return (

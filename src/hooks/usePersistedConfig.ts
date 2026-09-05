@@ -8,7 +8,7 @@ import {
 } from '../core/persisted';
 import { safeSetStorageItem } from '../core/storage';
 import {
-  CONFIG_SCHEMA,
+  CONFIG_LIMITS,
   snapshotFromState,
   type SchemaState,
 } from '../core/schema';
@@ -25,6 +25,12 @@ import {
 function writeSnapshot(snapshot: PersistedConfig): void {
   safeSetStorageItem(STORAGE_KEY, JSON.stringify(snapshot));
 }
+
+/** Clamp to an inclusive [min, max] range, rounding to an integer first. */
+const clampInt = (v: number, limits: { min: number; max: number }) =>
+  Math.max(limits.min, Math.min(limits.max, Math.round(v) || limits.min));
+const clampNum = (v: number, limits: { min: number; max: number }) =>
+  Math.max(limits.min, Math.min(limits.max, v));
 
 // ── Hook ───────────────────────────────────────────────────────────────
 
@@ -87,18 +93,7 @@ export function usePersistedConfig() {
   });
 
   // ── Setters ──────────────────────────────────────────────────────────
-  // Numeric setters clamp via the schema bounds; the rest write directly.
-  const clampSetter = (name: string) => (v: number) => {
-    const field: import('../core/schema').FieldDescriptor | undefined =
-      CONFIG_SCHEMA.find((f) => f.name === name);
-    let value = v;
-    if (field?.integer) value = Math.round(value) || (field.min ?? 1);
-    if (field?.min !== undefined) value = Math.max(field.min, value);
-    if (field?.max !== undefined) value = Math.min(field.max, value);
-    if (name === 'songsPerPlaylist') setState('songsPerPlaylist', value);
-    else if (name === 'minDurationHours') setState('minDurationHours', value);
-    else if (name === 'loopCount') setState('loopCount', value);
-  };
+  // Numeric setters clamp to the backend validation ranges.
 
   return {
     // ---- Getters ----
@@ -127,10 +122,13 @@ export function usePersistedConfig() {
     setOutputPrefix: (v: string) => setState('outputPrefix', v),
     setMaxrate: (v: string) => setState('maxrate', v),
     setUsePingpong: (v: boolean) => setState('usePingpong', v),
-    setSongsPerPlaylist: clampSetter('songsPerPlaylist'),
-    setMinDurationHours: clampSetter('minDurationHours'),
+    setSongsPerPlaylist: (v: number) =>
+      setState('songsPerPlaylist', clampInt(v, CONFIG_LIMITS.songsPerPlaylist)),
+    setMinDurationHours: (v: number) =>
+      setState('minDurationHours', clampNum(v, CONFIG_LIMITS.durationHours)),
     setLoopMode: (v: 'duration' | 'count') => setState('loopMode', v),
-    setLoopCount: clampSetter('loopCount'),
+    setLoopCount: (v: number) =>
+      setState('loopCount', clampInt(v, CONFIG_LIMITS.loopCount)),
     setCodec: (v: string) => setState('codec', v),
     setAudioMode: (v: 'original' | 'normalize') => setState('audioMode', v),
     setEmbedChapters: (v: boolean) => setState('embedChapters', v),

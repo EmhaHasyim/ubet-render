@@ -1,10 +1,13 @@
 node_modules/
 /dist/
 /dist-ssr/
+/build/
 *.local
 .cache/
 .vite/
 .bun/
+# Legacy binary lockfile (repo uses text `bun.lock` since Bun 1.x).
+# Kept ignored so stale local copies never get committed.
 bun.lockb
 /.zed/
 
@@ -66,3 +69,6 @@ ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 nul
+
+# Stray build artifacts (e.g. ffmpeg binary bundles) dropped at repo root
+_ffmpeg_pin.zip

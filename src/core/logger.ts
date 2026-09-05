@@ -56,7 +56,11 @@ const flushBatch = (): void => {
   // Fire-and-forget: a failed IPC call must NOT abort the user-facing
   // console dispatch that already happened synchronously above this
   // function. The IP / WebView will surface the line regardless.
-  invoke(TAURI_COMMANDS.logToFile, { entries: batch }).catch(() => {});
+  invoke(TAURI_COMMANDS.logToFile, { entries: batch }).catch((err) => {
+    // Best-effort sink — console already shows the lines. Debug-level only
+    // to avoid infinite recursion (log.error here would re-enqueue).
+    console.debug('[logger] log_to_file IPC failed:', err);
+  });
 };
 
 const scheduleFlush = (): void => {
@@ -72,7 +76,10 @@ const dispatchToFile = (
   context: string,
   message: string,
 ): void => {
-  logBatch.push({ level, context, message });
+  // Mirror the backend cap: strip newlines (log-forgery) + truncate
+  // pathological lines so one hot loop cannot bloat the batch.
+  const safeMessage = message.replace(/[\r\n]+/g, ' ').slice(0, 10_000);
+  logBatch.push({ level, context, message: safeMessage });
   if (logBatch.length >= BATCH_MAX_SIZE) {
     flushBatch();
   } else {

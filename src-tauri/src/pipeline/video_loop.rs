@@ -10,6 +10,29 @@ use tauri::AppHandle;
 /// Escape a value for FFmpeg's FFMETADATA1 key/value format.
 /// Metadata values are not shell arguments here; FFmpeg parses reserved
 /// separators after receiving the argument, so they must be escaped in-band.
+/// Escape a file path for the FFmpeg concat demuxer's single-quoted `file`
+/// lines (`-safe 0`): backslashes become forward slashes (Windows paths),
+/// single quotes are escaped per the demuxer's `'\\''` convention, and
+/// newlines/carriage returns are replaced with a space.
+fn escape_concat_path(path: &str) -> String {
+    let mut result = String::with_capacity(path.len() + 4);
+    for c in path.chars() {
+        match c {
+            '\'' => {
+                // FFmpeg concat escapes single quotes as: '\\'' (end quote, escaped quote, reopen)
+                result.push_str("'\\''");
+            }
+            '\n' | '\r' => {
+                // Newlines cannot appear in concat file paths; replace with space
+                result.push(' ');
+            }
+            '\\' => result.push('/'),
+            _ => result.push(c),
+        }
+    }
+    result
+}
+
 fn escape_ffmetadata_value(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for character in value.chars() {
@@ -181,29 +204,6 @@ pub async fn generate_loop_playlists(
     let single_loop_duration: f64 = songs.iter().map(|s| s.duration).sum();
     if single_loop_duration <= 0.0 {
         return Err(AppError::Pipeline("Audio loop duration is zero".into()));
-    }
-    fn escape_concat_path(path: &str) -> String {
-        // FFmpeg concat demuxer uses single-quoted file paths with -safe 0.
-        // File paths with special chars must be escaped:
-        // - Backslashes: converted to forward slashes (Windows path compat)
-        // - Single quotes: escaped by ending quote, inserting escaped quote, reopening
-        // - Newlines/carriage returns: replaced with space (cannot appear in paths)
-        let mut result = String::with_capacity(path.len() + 4);
-        for c in path.chars() {
-            match c {
-                '\'' => {
-                    // FFmpeg concat escapes single quotes as: '\\'' (end quote, escaped quote, reopen)
-                    result.push_str("'\\''");
-                }
-                '\n' | '\r' => {
-                    // Newlines cannot appear in concat file paths; replace with space
-                    result.push(' ');
-                }
-                '\\' => result.push('/'),
-                _ => result.push(c),
-            }
-        }
-        result
     }
     // Bound total playlist/chapter entries, not only repeat iterations. With
     // 100 selected songs, a 10 000-repeat cap would still create one million
@@ -435,32 +435,6 @@ mod tests {
     #[test]
     fn test_format_timestamp_large_value() {
         assert_eq!(format_timestamp(90061.0, false), "25:01:01");
-    }
-
-    // -----------------------------------------------------------------------
-    // escape_concat_path (delegates to the module-level function)
-    // -----------------------------------------------------------------------
-
-    // The module-level `escape_concat_path` is defined inside `generate_loop_playlists`.
-    // We test it through the public API by calling `generate_loop_playlists` in
-    // integration tests, and here we validate the escaping logic via the generated
-    // concat playlist output.  For unit-testing the escaping directly, we define a
-    // local helper that mirrors the module implementation.
-    fn escape_concat_path(path: &str) -> String {
-        // Duplicates the logic in generate_loop_playlists::escape_concat_path.
-        // This is intentional: the inner function is not `pub`, and keeping a
-        // local copy ensures the tests don't silently break if the escaping
-        // changes without updating the test expectations.
-        let mut result = String::with_capacity(path.len() + 4);
-        for c in path.chars() {
-            match c {
-                '\'' => result.push_str("'\\''"),
-                '\n' | '\r' => result.push(' '),
-                '\\' => result.push('/'),
-                _ => result.push(c),
-            }
-        }
-        result
     }
 
     #[test]

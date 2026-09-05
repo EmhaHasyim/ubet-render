@@ -1,5 +1,5 @@
 import { Show } from 'solid-js';
-import { Icon } from '@iconify-icon/solid';
+import { Icon } from '../ui/Icon';
 import type { Accessor } from 'solid-js';
 
 /**

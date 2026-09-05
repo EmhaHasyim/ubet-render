@@ -103,14 +103,28 @@ pub async fn scan_source_files(
         )));
     }
     files.sort_by(|a, b| fs::compare_natural(a, b));
+    // Dedupe by canonical path off the async executor: `canonicalize` is
+    // blocking I/O and this runs over up to 10k files.
+    let canonical: Vec<Option<PathBuf>> = {
+        let files_clone = files.clone();
+        tokio::task::spawn_blocking(move || {
+            files_clone
+                .iter()
+                .map(|f| std::path::Path::new(f).canonicalize().ok())
+                .collect::<Vec<_>>()
+        })
+        .await
+        .unwrap_or_default()
+    };
     let mut seen = HashSet::new();
-    files.retain(|f| {
-        std::path::Path::new(f)
-            .canonicalize()
-            .ok()
-            .is_some_and(|p| seen.insert(p))
-    });
-    Ok(files)
+    let mut deduped = Vec::with_capacity(files.len());
+    for (original, canon) in files.into_iter().zip(canonical) {
+        let key = canon.unwrap_or_else(|| PathBuf::from(&original));
+        if seen.insert(key) {
+            deduped.push(original);
+        }
+    }
+    Ok(deduped)
 }
 
 async fn scan_and_validate_dir(

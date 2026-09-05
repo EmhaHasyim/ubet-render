@@ -11,10 +11,7 @@ pub(crate) use super::limits::MAX_PATH_LEN;
 /// and causes the function to return `None` rather than loop indefinitely.
 const MAX_CANONICALIZE_DEPTH: usize = 256;
 
-const WINDOWS_RESERVED: &[&str] = &[
-    "CON", "NUL", "PRN", "AUX", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
-    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
-];
+use super::limits::WINDOWS_RESERVED_NAMES;
 
 /// Unicode characters that can be used to bypass `..` detection
 const TRAVERSAL_UNICODE_VARIANTS: &[char] = &[
@@ -107,7 +104,7 @@ pub(crate) fn sanitize_path(path: &str) -> Result<PathBuf, AppError> {
                 .and_then(|s| s.to_str())
                 .unwrap_or(name)
                 .to_ascii_uppercase();
-            WINDOWS_RESERVED.contains(&stem.as_str())
+            WINDOWS_RESERVED_NAMES.contains(&stem.as_str())
         } {
             return Err(AppError::Pipeline(format!(
                 "Windows reserved filename: {}",

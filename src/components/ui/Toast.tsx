@@ -1,6 +1,6 @@
 import { For } from 'solid-js';
 import { Portal } from 'solid-js/web';
-import { Icon } from '@iconify-icon/solid';
+import { Icon } from './Icon';
 import { dismissToast, type ToastVariant, useToasts } from '../../core/toast';
 
 /**

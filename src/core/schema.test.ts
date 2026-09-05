@@ -1,39 +1,9 @@
-// Golden contract test: the single-source config schema must match the
-// checked-in contract file that the Rust side cross-checks against
-// `OverrideConfig` (see src-tauri/src/validation.rs sentinel test).
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import {
-  CONFIG_SCHEMA,
-  CONFIG_FIELD_NAMES,
-  coerceFromRecord,
-  defaultConfigRecord,
-  coerceField,
-} from './schema';
+import { coerceFromRecord, defaultConfigRecord } from './schema';
 
-// The contract file is read via Vite's raw import so the test stays
-// isomorphic (no node typings needed in the browser-oriented tsconfig).
-import contractJson from './config-contract.json';
-
-const contract = contractJson as {
-  fields: { name: string; kind: string; default: unknown }[];
-  version: number;
-};
-
-describe('config schema contract', () => {
-  it('field list matches the checked-in contract file', () => {
-    expect(contract.fields.map((f) => f.name)).toEqual([...CONFIG_FIELD_NAMES]);
-    expect(contract.version).toBe(3);
-  });
-
-  it('contract defaults match schema defaults', () => {
-    for (const f of contract.fields) {
-      const desc = CONFIG_SCHEMA.find((d) => d.name === f.name);
-      expect(desc, `schema missing field ${f.name}`).toBeDefined();
-      expect(desc!.default, `default drift on ${f.name}`).toEqual(f.default);
-    }
-  });
-
-  it('schema defaults are the canonical defaults', () => {
+describe('defaultConfigRecord', () => {
+  it('returns the canonical defaults', () => {
     const defaults = defaultConfigRecord();
     expect(defaults.outputPrefix).toBe('Ubet Render');
     expect(defaults.maxrate).toBe('4000k');
@@ -43,7 +13,9 @@ describe('config schema contract', () => {
     expect(defaults.loopMode).toBe('duration');
     expect(defaults.skipIntermediateOnCodecMatch).toBe(false);
   });
+});
 
+describe('coerceFromRecord', () => {
   it('coerces wrong-typed fields to defaults', () => {
     const coerced = coerceFromRecord({
       videoSource: 'garbage',
@@ -72,20 +44,25 @@ describe('config schema contract', () => {
   });
 
   it('clamps numeric fields into the backend validation ranges', () => {
-    expect(
-      coerceField(
-        CONFIG_SCHEMA.find((f) => f.name === 'songsPerPlaylist')!,
-        1000,
-      ),
-    ).toBe(100);
-    expect(
-      coerceField(
-        CONFIG_SCHEMA.find((f) => f.name === 'minDurationHours')!,
-        0.01,
-      ),
-    ).toBe(0.1);
-    expect(
-      coerceField(CONFIG_SCHEMA.find((f) => f.name === 'loopCount')!, 3.7),
-    ).toBe(4);
+    expect(coerceFromRecord({ songsPerPlaylist: 1000 }).songsPerPlaylist).toBe(
+      100,
+    );
+    expect(coerceFromRecord({ minDurationHours: 0.01 }).minDurationHours).toBe(
+      0.1,
+    );
+    expect(coerceFromRecord({ loopCount: 3.7 }).loopCount).toBe(4);
+  });
+
+  it('preserves valid values', () => {
+    const coerced = coerceFromRecord({
+      videoSource: { type: 'files', paths: ['a.mp4'] },
+      maxrate: '8000k',
+      codec: 'h265',
+      loopCount: 3,
+    });
+    expect(coerced.videoSource).toEqual({ type: 'files', paths: ['a.mp4'] });
+    expect(coerced.maxrate).toBe('8000k');
+    expect(coerced.codec).toBe('h265');
+    expect(coerced.loopCount).toBe(3);
   });
 });

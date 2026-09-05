@@ -1,9 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
-  isMediaSource,
-  stringOr,
-  numberOr,
-  booleanOr,
   getDefaultInitial,
   loadPersistedConfig,
   STORAGE_KEY,
@@ -13,99 +9,6 @@ import { DEFAULT_CONFIG } from './config';
 
 beforeEach(() => {
   localStorage.clear();
-});
-
-// ---------------------------------------------------------------------------
-// isMediaSource
-// ---------------------------------------------------------------------------
-describe('isMediaSource', () => {
-  it('returns true for a valid "files" source', () => {
-    expect(isMediaSource({ type: 'files', paths: ['a.mp4', 'b.mp4'] })).toBe(
-      true,
-    );
-  });
-
-  it('returns true for a valid "folder" source', () => {
-    expect(isMediaSource({ type: 'folder', path: '/videos' })).toBe(true);
-  });
-
-  it('rejects null / undefined / non-object', () => {
-    expect(isMediaSource(null)).toBe(false);
-    expect(isMediaSource(undefined)).toBe(false);
-    expect(isMediaSource('string')).toBe(false);
-    expect(isMediaSource(42)).toBe(false);
-  });
-
-  it('rejects an object with unknown type', () => {
-    expect(isMediaSource({ type: 'unknown' })).toBe(false);
-  });
-
-  it('rejects "files" without paths array', () => {
-    expect(isMediaSource({ type: 'files' })).toBe(false);
-    expect(isMediaSource({ type: 'files', paths: 'not-array' })).toBe(false);
-  });
-
-  it('rejects "folder" without a string path', () => {
-    expect(isMediaSource({ type: 'folder' })).toBe(false);
-    expect(isMediaSource({ type: 'folder', path: 123 })).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// stringOr
-// ---------------------------------------------------------------------------
-describe('stringOr', () => {
-  it('returns the value when it is a string', () => {
-    expect(stringOr('hello', 'fallback')).toBe('hello');
-  });
-
-  it('returns fallback when value is not a string', () => {
-    expect(stringOr(123, 'fallback')).toBe('fallback');
-    expect(stringOr(null, 'fallback')).toBe('fallback');
-    expect(stringOr(undefined, 'fallback')).toBe('fallback');
-    expect(stringOr(true, 'fallback')).toBe('fallback');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// numberOr
-// ---------------------------------------------------------------------------
-describe('numberOr', () => {
-  it('returns the value when it is a finite number >= min', () => {
-    expect(numberOr(10, 1, 1)).toBe(10);
-    expect(numberOr(0, 1, 0)).toBe(0);
-  });
-
-  it('returns fallback when value is NaN or Infinity', () => {
-    expect(numberOr(NaN, 5, 1)).toBe(5);
-    expect(numberOr(Infinity, 5, 1)).toBe(5);
-  });
-
-  it('returns fallback when value is below min', () => {
-    expect(numberOr(0, 5, 1)).toBe(5);
-    expect(numberOr(-5, 5, 0)).toBe(5);
-  });
-
-  it('returns fallback for non-number types', () => {
-    expect(numberOr('10', 5, 1)).toBe(5);
-    expect(numberOr(null, 5, 1)).toBe(5);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// booleanOr
-// ---------------------------------------------------------------------------
-describe('booleanOr', () => {
-  it('returns the value when it is a boolean', () => {
-    expect(booleanOr(true, false)).toBe(true);
-    expect(booleanOr(false, true)).toBe(false);
-  });
-
-  it('returns fallback when value is not a boolean', () => {
-    expect(booleanOr('true', false)).toBe(false);
-    expect(booleanOr(1, false)).toBe(false);
-    expect(booleanOr(null, true)).toBe(true);
-  });
 });
 
 // ---------------------------------------------------------------------------

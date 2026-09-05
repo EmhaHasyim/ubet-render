@@ -6,6 +6,9 @@ import {
   type Setter,
 } from 'solid-js';
 import { getSafeWindow } from '../core/window';
+import { createLogger } from '../core/logger';
+
+const log = createLogger('useAppShortcuts');
 
 export type AppTabId = 'renderer' | 'activity';
 
@@ -15,11 +18,11 @@ export interface AppShortcuts {
 }
 
 /**
- * Register the application's global keyboard shortcuts in one place.
+ * Window/tab/help shortcuts (F1, Ctrl+W, F11, Ctrl+1/2, Ctrl+Shift+M).
  *
- * Keeping window controls, tab navigation, and help-dialog toggling in a
- * single owner prevents multiple listeners from competing for the same key
- * events while preserving the existing shortcut behavior.
+ * Render controls (Ctrl+Enter/P/C) live in `Dashboard.tsx` because they need
+ * live pipeline state. The two owners listen for disjoint key sets so they
+ * never compete; both skip INPUT/TEXTAREA/SELECT targets.
  */
 export function useAppShortcuts(setActiveTab: Setter<AppTabId>): AppShortcuts {
   const [isShortcutsOpen, setShortcutsOpen] = createSignal(false);
@@ -41,12 +44,18 @@ export function useAppShortcuts(setActiveTab: Setter<AppTabId>): AppShortcuts {
       .then((value) => {
         isFullscreen = value;
       })
-      .catch(() => {
+      .catch((err) => {
         // IPC failed — safest default is false (windowed).
+        log.warn('isFullscreen probe failed, assuming windowed:', err);
       });
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      const tag = (event.target as HTMLElement | null)?.tagName;
+      const isTyping =
+        tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
       const mod = event.metaKey || event.ctrlKey;
+      // Don't hijack typing for tab switches; F1/W/F11/M still apply.
+      if (isTyping && mod && (event.key === '1' || event.key === '2')) return;
 
       // F1 → toggle the shortcuts dialog.
       if (event.key === 'F1') {
@@ -58,7 +67,7 @@ export function useAppShortcuts(setActiveTab: Setter<AppTabId>): AppShortcuts {
       // Ctrl/Cmd+W → hide window (close to tray, render keeps running).
       if (mod && event.key === 'w') {
         event.preventDefault();
-        appWindow.hide().catch(() => {});
+        appWindow.hide().catch((err) => log.warn('hide window failed:', err));
         return;
       }
 
@@ -66,14 +75,16 @@ export function useAppShortcuts(setActiveTab: Setter<AppTabId>): AppShortcuts {
       if (event.key === 'F11') {
         event.preventDefault();
         isFullscreen = !isFullscreen;
-        appWindow.setFullscreen(isFullscreen).catch(() => {});
+        appWindow
+          .setFullscreen(isFullscreen)
+          .catch((err) => log.warn('setFullscreen failed:', err));
         return;
       }
 
       // Ctrl/Cmd+Shift+M → minimize.
       if (mod && event.shiftKey && event.key === 'M') {
         event.preventDefault();
-        appWindow.minimize().catch(() => {});
+        appWindow.minimize().catch((err) => log.warn('minimize failed:', err));
         return;
       }
 

@@ -1,0 +1,80 @@
+name: Release
+
+# Flow:
+#   - push/merge to main  -> build Windows installer, upload as a workflow
+#     artifact (downloadable from the Actions tab, no release spam).
+#   - push tag `v*`        -> build Windows installer + create a GitHub
+#     Release with the installer attached (auto release per version).
+#     The tag must match the version in src-tauri/tauri.conf.json
+#     (e.g. version 0.4.0 -> push tag `v0.4.0`).
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      # ffmpeg/ffprobe sidecars live in Git LFS (see .gitattributes);
+      # without `lfs: true` the bundled binaries would be empty LFS pointers.
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Branch pushes: build only, upload the installer as an artifact.
+      # Signing key is required because createUpdaterArtifacts is on;
+      # add it as a repo secret (content of ~/.tauri/ubet-render.key).
+      # The password env MUST be set (even empty) or the CLI prompts
+      # interactively and hangs CI.
+      - name: Build installer
+        if: startsWith(github.ref, 'refs/heads/')
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+        run: bun run tauri build
+
+      - name: Upload installer artifact
+        if: startsWith(github.ref, 'refs/heads/')
+        uses: actions/upload-artifact@v4
+        with:
+          name: ubet-render-windows-installer
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+
+      # Tag pushes: build + create the GitHub Release (installer attached).
+      - name: Build and publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+        with:
+          tagName: v__VERSION__
+          releaseName: 'v__VERSION__'
+          # Auto-generate release notes from commits; releaseBody above is
+          # pre-pended to them.
+          generateReleaseNotes: true
+          releaseDraft: false
+          prerelease: false

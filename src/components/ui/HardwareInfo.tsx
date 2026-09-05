@@ -1,5 +1,5 @@
 import { Show, Index } from 'solid-js';
-import { Icon } from '@iconify-icon/solid';
+import { Icon } from './Icon';
 import { Skeleton } from './Skeleton';
 
 interface HardwareData {

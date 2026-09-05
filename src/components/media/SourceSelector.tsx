@@ -1,7 +1,7 @@
 import { createSignal, For, Show } from 'solid-js';
 import { dirname } from '@tauri-apps/api/path';
 import { open } from '@tauri-apps/plugin-dialog';
-import { Icon } from '@iconify-icon/solid';
+import { Icon } from '../ui/Icon';
 import { ConfirmDialog } from '../ui/ConfirmDialog';
 import { createLogger } from '../../core/logger';
 
@@ -66,7 +66,9 @@ export function SourceSelector(props: SourceSelectorProps) {
     try {
       const firstFile = files[0];
       if (firstFile) setLastDir(await dirname(firstFile));
-    } catch {}
+    } catch (err) {
+      log.warn('Could not cache last dir', err);
+    }
 
     props.onChange(files);
   };

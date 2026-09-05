@@ -4,9 +4,15 @@ import { describe, it, expect, vi } from 'vitest';
 import type { JobProgress } from '../../core/types';
 import { JobTable } from './JobTable';
 
-// Mock Tauri APIs that aren't available in jsdom
+// Mock Tauri APIs that aren't available in jsdom. `vi.hoisted` keeps the spy
+// available inside the hoisted module mock and lets tests assert the exact
+// path handed to Tauri's asset protocol converter.
+const { convertFileSrcMock } = vi.hoisted(() => ({
+  convertFileSrcMock: vi.fn((path: string) => `asset://localhost/${path}`),
+}));
+
 vi.mock('@tauri-apps/api/core', () => ({
-  convertFileSrc: (path: string) => `asset://localhost/${path}`,
+  convertFileSrc: convertFileSrcMock,
   invoke: vi.fn(),
 }));
 
@@ -102,6 +108,21 @@ describe('JobTable', () => {
     const img = container.querySelector('img') as HTMLImageElement;
     expect(img).toBeTruthy();
     expect(img.src).toContain('asset://localhost/');
+  });
+
+  it('passes a Windows thumbnail path to Tauri asset conversion unchanged', () => {
+    convertFileSrcMock.mockClear();
+    const windowsPath = String.raw`C:\Users\render\AppData\Local\Temp\thumbnails\thumb.jpg`;
+    const job: JobProgress = {
+      ...sampleJobs[1]!,
+      thumbnailPath: windowsPath,
+    };
+
+    const { container } = render(() => <JobTable jobs={[job]} />);
+    const img = container.querySelector('img') as HTMLImageElement;
+
+    expect(convertFileSrcMock).toHaveBeenCalledWith(windowsPath);
+    expect(img.getAttribute('src')).toBe(`asset://localhost/${windowsPath}`);
   });
 
   it('keeps the placeholder after a thumbnail fails to load, even across jobs updates', () => {

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { EtaCalculator } from './eta';
 
@@ -40,6 +41,18 @@ describe('EtaCalculator', () => {
     // addSample with elapsedMs=0 should be ignored
     eta.addSample(0, 10);
     expect(eta.estimateRemaining(50)).toBe('Calculating...');
+  });
+
+  it('ignores invalid or non-positive samples', () => {
+    const eta = new EtaCalculator(10);
+    eta.addSample(1000, 10);
+    expect(eta.estimateRemaining(50)).toBe('< 1m left');
+
+    // A progress regression or non-finite sample must not poison the EMA.
+    eta.addSample(1000, -100);
+    eta.addSample(Number.NaN, 10);
+    eta.addSample(1000, Number.POSITIVE_INFINITY);
+    expect(eta.estimateRemaining(50)).toBe('< 1m left');
   });
 
   it('shows a real ETA for renders longer than 24 hours (up to 7 days)', () => {

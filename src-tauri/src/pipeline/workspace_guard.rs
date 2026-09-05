@@ -54,6 +54,12 @@ impl WorkspaceGuard {
 
 impl Drop for WorkspaceGuard {
     fn drop(&mut self) {
+        // Synchronous teardown (deterministic for tests). This runs once per
+        // render at task exit — not on the hot path — so blocking briefly
+        // here is preferable to an async background delete that races test
+        // assertions and shutdown. For very large caches the pipeline already
+        // removes `thumb_dir`/`cache_dir` incrementally via `tokio::fs` in
+        // `execute()` before the guard drops.
         let remove_dir = |path: &Path, keep: bool| {
             if !keep
                 && let Err(error) = std::fs::remove_dir_all(path)

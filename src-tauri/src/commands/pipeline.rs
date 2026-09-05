@@ -17,6 +17,20 @@ use tauri::AppHandle;
 /// so we only run it once instead of on every `start_render` call.
 static SIDECAR_VERIFIED: OnceLock<()> = OnceLock::new();
 
+/// Clones the active `RenderControl`, if any, recovering from a poisoned
+/// mutex. Shared by the cancel/pause/resume commands.
+fn current_control(
+    state: &tauri::State<'_, crate::RenderState>,
+) -> Option<Arc<crate::RenderControl>> {
+    match state.control.lock() {
+        Ok(guard) => guard.clone(),
+        Err(poisoned) => {
+            crate::utils::logger::log_line(&format!("RenderState mutex poisoned: {}", poisoned));
+            poisoned.into_inner().clone()
+        }
+    }
+}
+
 /// Ensures `RenderState.control` is cleared when the guard is dropped,
 /// even if the spawned pipeline task panics. This prevents a stuck control
 /// handle from permanently blocking every future `start_render` call.
@@ -175,49 +189,35 @@ pub async fn start_render(
 
 #[tauri::command]
 pub async fn cancel_render(state: tauri::State<'_, crate::RenderState>) -> Result<bool, String> {
-    let control = match state.control.lock() {
-        Ok(guard) => guard.clone(),
-        Err(poisoned) => {
-            crate::utils::logger::log_line(&format!("RenderState mutex poisoned: {}", poisoned));
-            poisoned.into_inner().clone()
-        }
+    let Some(control) = current_control(&state) else {
+        return Ok(false);
     };
-    if let Some(control) = control {
-        if control.is_terminated() {
-            return Ok(false);
-        }
-        control.cancel();
-        // Cancellation is a completion acknowledgement, not merely an
-        // acceptance acknowledgement. The frontend may safely close its
-        // listener once this returns because the pipeline guard marks the
-        // control terminated even if execute() exits through an error or
-        // panic.
-        match tokio::time::timeout(Duration::from_secs(30), control.wait_for_cleanup()).await {
-            Ok(()) => Ok(true),
-            Err(_) => Err(
-                "Cancellation requested, but the render did not terminate within 30 seconds".into(),
-            ),
-        }
-    } else {
-        Ok(false)
+    if control.is_terminated() {
+        return Ok(false);
+    }
+    control.cancel();
+    // Cancellation is a completion acknowledgement, not merely an
+    // acceptance acknowledgement. The frontend may safely close its
+    // listener once this returns because the pipeline guard marks the
+    // control terminated even if execute() exits through an error or
+    // panic.
+    match tokio::time::timeout(Duration::from_secs(30), control.wait_for_cleanup()).await {
+        Ok(()) => Ok(true),
+        Err(_) => Err(
+            "Cancellation requested, but the render did not terminate within 30 seconds".into(),
+        ),
     }
 }
 
 #[tauri::command]
 pub fn pause_render(state: tauri::State<'_, crate::RenderState>) {
-    let control = match state.control.lock() {
-        Ok(guard) => guard.clone(),
-        Err(poisoned) => {
-            crate::utils::logger::log_line(&format!("RenderState mutex poisoned: {}", poisoned));
-            poisoned.into_inner().clone()
-        }
+    let Some(control) = current_control(&state) else {
+        return;
     };
-    if let Some(control) = control {
-        // The pipeline emits `Paused` after durable state has been saved and
-        // execute() has returned. Emitting here acknowledged only the request
-        // and created a pause→resume teardown race.
-        control.pause();
-    }
+    // The pipeline emits `Paused` after durable state has been saved and
+    // execute() has returned. Emitting here acknowledged only the request
+    // and created a pause→resume teardown race.
+    control.pause();
 }
 
 /// Persist the user's configuration to the app config directory.
@@ -255,38 +255,30 @@ pub async fn resume_render(
     app: tauri::AppHandle,
     state: tauri::State<'_, crate::RenderState>,
 ) -> Result<bool, String> {
-    let control = match state.control.lock() {
-        Ok(guard) => guard.clone(),
-        Err(poisoned) => {
-            crate::utils::logger::log_line(&format!("RenderState mutex poisoned: {}", poisoned));
-            poisoned.into_inner().clone()
-        }
+    let Some(control) = current_control(&state) else {
+        return Ok(false);
     };
-    if let Some(control) = control {
-        // The pipeline may still be in the process of tearing down after a
-        // pause (ffmpeg killed, state saved, task about to exit). A control
-        // that has already committed to terminating cannot be resumed —
-        // report `false` so the frontend starts a fresh pipeline from the
-        // on-disk state file instead of waiting forever for events that
-        // will never arrive.
-        if control.is_terminated() {
-            tokio::time::timeout(Duration::from_secs(30), control.wait_for_cleanup())
-                .await
-                .map_err(|_| "Paused render cleanup timed out".to_string())?;
-            return Ok(false);
-        }
-        let resumed = control.resume();
-        if resumed {
-            event::emit(
-                &app,
-                crate::models::job::PipelineEvent::Log {
-                    level: "info".into(),
-                    message: "Render resumed".into(),
-                },
-            );
-        }
-        Ok(resumed)
-    } else {
-        Ok(false)
+    // The pipeline may still be in the process of tearing down after a
+    // pause (ffmpeg killed, state saved, task about to exit). A control
+    // that has already committed to terminating cannot be resumed —
+    // report `false` so the frontend starts a fresh pipeline from the
+    // on-disk state file instead of waiting forever for events that
+    // will never arrive.
+    if control.is_terminated() {
+        tokio::time::timeout(Duration::from_secs(30), control.wait_for_cleanup())
+            .await
+            .map_err(|_| "Paused render cleanup timed out".to_string())?;
+        return Ok(false);
     }
+    let resumed = control.resume();
+    if resumed {
+        event::emit(
+            &app,
+            crate::models::job::PipelineEvent::Log {
+                level: "info".into(),
+                message: "Render resumed".into(),
+            },
+        );
+    }
+    Ok(resumed)
 }

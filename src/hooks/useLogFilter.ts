@@ -37,6 +37,11 @@ export function useLogFilter(logs: () => string[]) {
   const [enabledLevels, setEnabledLevels] =
     createSignal<Set<LogLevel>>(readEnabledLevels());
   const [searchQuery, setSearchQuery] = createSignal(readSearchQuery());
+  // Debounced query drives the expensive 2000-line filter; raw input stays
+  // responsive while `filteredLogs` recomputes at most every 150ms.
+  const [debouncedQuery, setDebouncedQuery] = createSignal(readSearchQuery());
+  let searchTimer: ReturnType<typeof setTimeout> | null = null;
+  let storageTimer: ReturnType<typeof setTimeout> | null = null;
 
   const toggleLevel = (level: LogLevel) => {
     setEnabledLevels((current) => {
@@ -50,11 +55,21 @@ export function useLogFilter(logs: () => string[]) {
 
   const handleSearchInput = (value: string) => {
     setSearchQuery(value);
-    safeSetStorageItem('logs.filter.query', value);
+    if (searchTimer !== null) clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      searchTimer = null;
+      setDebouncedQuery(value);
+    }, 150);
+    // Coalesce rapid keystrokes into one storage write.
+    if (storageTimer !== null) clearTimeout(storageTimer);
+    storageTimer = setTimeout(() => {
+      storageTimer = null;
+      safeSetStorageItem('logs.filter.query', value);
+    }, 300);
   };
 
   const filteredLogs = createMemo(() => {
-    const query = searchQuery().trim().toLowerCase();
+    const query = debouncedQuery().trim().toLowerCase();
     const levels = enabledLevels();
     const allOn = levels.size === ALL_LEVELS.length;
 

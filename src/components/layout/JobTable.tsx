@@ -1,6 +1,6 @@
 import { createSignal, Index, Show } from 'solid-js';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
-import { Icon } from '@iconify-icon/solid';
+import { Icon } from '../ui/Icon';
 import { TAURI_COMMANDS } from '../../core/constants';
 import type { JobProgress } from '../../core/types';
 import { StatusBadge } from '../ui/StatusBadge';

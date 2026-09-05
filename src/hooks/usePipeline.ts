@@ -2,24 +2,20 @@ import { createMemo } from 'solid-js';
 import type { PipelineApi } from '../context/pipeline';
 import { usePersistedConfig } from './usePersistedConfig';
 import { useRenderLogs } from './useRenderLogs';
-import { useResilientPeripherals } from './useResilientPeripherals';
+import { useHardware } from './useHardware';
+import { useDragDrop } from './useDragDrop';
 import { useCanStart } from './useCanStart';
 import { useRenderLifecycle } from './useRenderLifecycle';
 import { showToast } from '../core/toast';
 
 /**
- * Pipeline orchestrator — now a thin composer.
- *
- * Responsibility map (v0.3.0 decomposition):
- *   - `usePersistedConfig`      → persisted settings store + setters
- *   - `useRenderLogs`           → ring-buffer log store
- *   - `useResilientPeripherals` → hardware detection + drag-drop w/ fallbacks
- *   - `useCanStart`             → start-readiness validation + disabledReason
- *   - `useRenderLifecycle`      → start/pause/resume/cancel + event listener
- *
- * This hook only wires them together and exposes the {@link PipelineApi}
- * contract. Adding a config field requires one edit in `core/schema.ts` plus
- * the accessor pair below — no other orchestration changes.
+ * Pipeline orchestrator — a thin composer over:
+ *   - `usePersistedConfig` → persisted settings store + setters
+ *   - `useRenderLogs`      → capped log store
+ *   - `useHardware`        → hardware detection + encoder resolution
+ *   - `useDragDrop`        → native/HTML5 drag-drop with fallbacks
+ *   - `useCanStart`        → start-readiness validation + disabledReason
+ *   - `useRenderLifecycle` → start/pause/resume/cancel + event listener
  */
 export function usePipeline(): PipelineApi {
   const config = usePersistedConfig();
@@ -28,9 +24,14 @@ export function usePipeline(): PipelineApi {
   // synchronously during hook initialisation.
   const logs = useRenderLogs();
 
-  const { hardwareInfo, resolveEncoder, dragHover } = useResilientPeripherals(
-    config,
-    { appendLog: logs.appendLog },
+  const { hardwareInfo, resolveEncoder } = useHardware(
+    config.codec,
+    config.setCodec,
+  );
+  const { dragHover } = useDragDrop(
+    config.setVideoSource,
+    config.setAudioSource,
+    config.setOutputPath,
   );
 
   const readiness = useCanStart(config, hardwareInfo);

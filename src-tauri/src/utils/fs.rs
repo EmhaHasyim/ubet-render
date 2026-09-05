@@ -203,6 +203,19 @@ pub async fn safe_delete(file: &Path) -> Result<(), std::io::Error> {
     }
 }
 
+/// Delete a temporary file, logging (but not propagating) failures. Shared
+/// by the muxer and job processor for best-effort cleanup of cancelled or
+/// failed encode artifacts.
+pub async fn cleanup_temp_file(path: &Path) {
+    if let Err(error) = safe_delete(path).await {
+        crate::utils::logger::log_line(&format!(
+            "Temporary file cleanup failed for '{}': {}",
+            path.display(),
+            error
+        ));
+    }
+}
+
 /// Synchronous variant of `safe_delete` for callers that cannot await
 /// (e.g. inside an `async move` closure that is itself `async`).
 /// Used by the audio-pool's at-least-once tmp-file cleanup on ffmpeg

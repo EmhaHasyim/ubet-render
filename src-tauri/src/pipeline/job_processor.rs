@@ -46,11 +46,7 @@ fn map_encoder_to_codec(enc: &str) -> &str {
     }
 }
 
-fn requires_intermediate(
-    _use_pingpong: bool,
-    skip_intermediate_on_codec_match: bool,
-    should_reencode: bool,
-) -> bool {
+fn requires_intermediate(skip_intermediate_on_codec_match: bool, should_reencode: bool) -> bool {
     // OFF = always run the intermediate processing step.
     // ON  = skip it when the source can be stream-copied (i.e. re-encode
     //        is not required — either codec matches or the user forced
@@ -70,16 +66,6 @@ pub struct JobParams {
     pub(crate) min_duration_sec: u64,
     pub(crate) loop_count: Option<usize>,
     pub(crate) embed_chapters: bool,
-}
-
-async fn cleanup_temp_file(path: &Path) {
-    if let Err(error) = fs::safe_delete(path).await {
-        crate::utils::logger::log_line(&format!(
-            "Temporary file cleanup failed for '{}': {}",
-            path.display(),
-            error
-        ));
-    }
 }
 
 pub(crate) async fn process_single_job(
@@ -162,8 +148,7 @@ pub(crate) async fn process_single_job(
     // is stream-copied unconditionally (should_reencode is forced false).
     // When OFF, the normal codec-matching logic applies.
     let skip_match = params.skip_intermediate_on_codec_match;
-    let needs_intermediate =
-        requires_intermediate(params.use_pingpong, skip_match, should_reencode);
+    let needs_intermediate = requires_intermediate(skip_match, should_reencode);
 
     if needs_intermediate {
         {
@@ -227,7 +212,7 @@ pub(crate) async fn process_single_job(
         {
             Ok(()) => {}
             Err(e) => {
-                cleanup_temp_file(&ping_pong_path).await;
+                fs::cleanup_temp_file(&ping_pong_path).await;
                 return Err(e);
             }
         }
@@ -298,10 +283,10 @@ pub(crate) async fn process_single_job(
         Ok(result) => result,
         Err(error) => {
             if created_intermediate {
-                cleanup_temp_file(&ping_pong_path).await;
+                fs::cleanup_temp_file(&ping_pong_path).await;
             }
-            cleanup_temp_file(&audio_list_path).await;
-            cleanup_temp_file(&video_list_path).await;
+            fs::cleanup_temp_file(&audio_list_path).await;
+            fs::cleanup_temp_file(&video_list_path).await;
             return Err(error);
         }
     };
@@ -359,10 +344,10 @@ pub(crate) async fn process_single_job(
         .unwrap_or_else(|e| Err(AppError::Pipeline(format!("Task panic: {}", e))));
 
     if created_intermediate {
-        cleanup_temp_file(&ping_pong_path).await;
+        fs::cleanup_temp_file(&ping_pong_path).await;
     }
-    cleanup_temp_file(&audio_list_path).await;
-    cleanup_temp_file(&video_list_path).await;
+    fs::cleanup_temp_file(&audio_list_path).await;
+    fs::cleanup_temp_file(&video_list_path).await;
 
     match res {
         Ok(()) => {
@@ -454,19 +439,17 @@ mod tests {
 
     #[test]
     fn test_intermediate_policy_keeps_encode_for_codec_mismatch() {
-        assert!(requires_intermediate(false, true, true));
+        assert!(requires_intermediate(true, true));
     }
 
     #[test]
     fn test_intermediate_policy_allows_explicit_stream_copy_on_match() {
-        assert!(!requires_intermediate(true, true, false));
-        assert!(!requires_intermediate(false, true, false));
+        assert!(!requires_intermediate(true, false));
     }
 
     #[test]
-    fn test_intermediate_policy_applies_pingpong_without_stream_copy() {
-        assert!(requires_intermediate(true, false, false));
-        assert!(requires_intermediate(false, false, false));
+    fn test_intermediate_policy_defaults_to_intermediate() {
+        assert!(requires_intermediate(false, false));
     }
 
     #[test]

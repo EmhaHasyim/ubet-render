@@ -2,34 +2,26 @@ import { createSignal, onMount, onCleanup } from 'solid-js';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { UnlistenFn } from '@tauri-apps/api/event';
 import type { MediaSource } from '../core/types';
-import { VIDEO_EXTENSIONS, AUDIO_EXTENSIONS } from '../core/config';
+import {
+  dispatchDropPaths,
+  scalePoint,
+  zoneFromElement,
+  type DropZone,
+} from '../core/dropZones';
 import { createLogger } from '../core/logger';
 
 // Replaces 2 ad-hoc console.error calls; see `src/core/logger.ts`.
 const log = createLogger('DragDrop');
 
-type DropZone = 'video' | 'audio' | 'output';
+export type { DropZone } from '../core/dropZones';
 
 /**
  * Map an (x, y) coordinate to the dropzone element underneath.
- * Shared by both Tauri native DnD and HTML5 fallback.
+ * Thin adapter over the pure `zoneFromElement` — the only DOM touchpoint,
+ * shared by both Tauri native DnD and HTML5 fallback.
  */
 function hitTestDropzone(x: number, y: number): DropZone | null {
-  const el = document.elementFromPoint(x, y);
-  if (el?.closest('#video-dropzone')) return 'video';
-  if (el?.closest('#audio-dropzone')) return 'audio';
-  if (el?.closest('#output-dropzone')) return 'output';
-  return null;
-}
-
-/**
- * Filter an array of file paths to only those matching one of the given
- * extension arrays.  Used by both Tauri and HTML5 drop handlers.
- */
-function filterPaths(paths: string[], extensions: string[]): string[] {
-  return paths.filter((p) =>
-    extensions.some((ext) => p.toLowerCase().endsWith(ext)),
-  );
+  return zoneFromElement(document.elementFromPoint(x, y));
 }
 
 export function useDragDrop(
@@ -39,6 +31,20 @@ export function useDragDrop(
 ) {
   const [dragHover, setDragHover] = createSignal<DropZone | null>(null);
   let unlistenDrag: UnlistenFn | null = null;
+
+  // Single dispatch shared by HTML5 and Tauri-native drop handlers.
+  // Zone/extension branching lives in the pure `dispatchDropPaths`
+  // (`src/core/dropZones.ts`); this only forwards the resulting action.
+  const dispatchDrop = (paths: string[], x: number, y: number): void => {
+    const action = dispatchDropPaths(paths, hitTestDropzone(x, y));
+    if (action.kind === 'video') {
+      updateVideoSource({ type: 'files', paths: action.paths });
+    } else if (action.kind === 'audio') {
+      updateAudioSource({ type: 'files', paths: action.paths });
+    } else if (action.kind === 'output') {
+      updateOutputPath(action.path);
+    }
+  };
 
   // ------------------------------------------------------------------
   // HTML5 drag-and-drop fallback handlers (used when running in the
@@ -77,22 +83,7 @@ export function useDragDrop(
         f.name) as string;
     });
 
-    const zone = hitTestDropzone(e.clientX, e.clientY);
-
-    if (zone === 'video') {
-      const filtered = filterPaths(paths, VIDEO_EXTENSIONS);
-      if (filtered.length > 0) {
-        updateVideoSource({ type: 'files', paths: filtered });
-      }
-    } else if (zone === 'audio') {
-      const filtered = filterPaths(paths, AUDIO_EXTENSIONS);
-      if (filtered.length > 0) {
-        updateAudioSource({ type: 'files', paths: filtered });
-      }
-    } else if (zone === 'output') {
-      const firstPath = paths[0];
-      if (firstPath) updateOutputPath(firstPath);
-    }
+    dispatchDrop(paths, e.clientX, e.clientY);
   };
 
   // ------------------------------------------------------------------
@@ -112,36 +103,23 @@ export function useDragDrop(
       unlistenDrag = await appWindow.onDragDropEvent((event) => {
         try {
           if (event.payload.type === 'over' || event.payload.type === 'enter') {
-            const ratio = window.devicePixelRatio || 1;
-            const x = event.payload.position.x / ratio;
-            const y = event.payload.position.y / ratio;
+            const { x, y } = scalePoint(
+              event.payload.position.x,
+              event.payload.position.y,
+              window.devicePixelRatio || 1,
+            );
             setDragHover(hitTestDropzone(x, y));
           } else if (event.payload.type === 'leave') {
             setDragHover(null);
           } else if (event.payload.type === 'drop') {
             setDragHover(null);
             const paths = event.payload.paths;
-            if (paths.length === 0) return;
-
-            const ratio = window.devicePixelRatio || 1;
-            const x = event.payload.position.x / ratio;
-            const y = event.payload.position.y / ratio;
-            const zone = hitTestDropzone(x, y);
-
-            if (zone === 'video') {
-              const filtered = filterPaths(paths, VIDEO_EXTENSIONS);
-              if (filtered.length > 0) {
-                updateVideoSource({ type: 'files', paths: filtered });
-              }
-            } else if (zone === 'audio') {
-              const filtered = filterPaths(paths, AUDIO_EXTENSIONS);
-              if (filtered.length > 0) {
-                updateAudioSource({ type: 'files', paths: filtered });
-              }
-            } else if (zone === 'output') {
-              const firstPath = paths[0];
-              if (firstPath) updateOutputPath(firstPath);
-            }
+            const { x, y } = scalePoint(
+              event.payload.position.x,
+              event.payload.position.y,
+              window.devicePixelRatio || 1,
+            );
+            dispatchDrop(paths, x, y);
           }
         } catch (err) {
           log.error('Tauri event handler error:', err);
@@ -157,8 +135,8 @@ export function useDragDrop(
     if (unlistenDrag) {
       try {
         unlistenDrag();
-      } catch {
-        /* noop */
+      } catch (err) {
+        log.warn('unlisten drag-drop failed:', err);
       }
     }
 

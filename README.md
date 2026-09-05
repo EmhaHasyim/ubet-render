@@ -275,9 +275,10 @@ bun run test src/core/persisted.test.ts  # Single file
 
 ## Project Status
 
-**Version:** 0.3.1 • **License:** MIT
+**Version:** 0.4.0 • **License:** MIT
 
-See [CHANGELOG.md](./CHANGELOG.md) for the full release history.
+See [CHANGELOG.md](./CHANGELOG.md) for the full release history, and
+[RELEASE.md](./RELEASE.md) for how releases are cut.
 
 ---
 

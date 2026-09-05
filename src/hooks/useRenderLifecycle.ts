@@ -57,7 +57,7 @@ export function useRenderLifecycle({
   readiness,
   resolveEncoder,
 }: LifecycleDeps) {
-  const { appendLog, reset: resetLogs } = logs;
+  const { appendLog, flush: flushLogs, reset: resetLogs } = logs;
   const { canStart } = readiness;
 
   const persistence = usePipelinePersistence(config, resolveEncoder);
@@ -120,6 +120,9 @@ export function useRenderLifecycle({
     }
 
     resetRenderState(resume);
+    // Flush any buffered diagnostics before starting the listener.
+    // This is important for short renders and startup failures.
+    flushLogs();
     // Remove any stale listener from a previous render before creating a new one.
     safeUnlisten();
 
@@ -182,9 +185,10 @@ export function useRenderLifecycle({
         setPaused(false);
         await startRender(true);
       }
-    } catch {
+    } catch (err) {
       // IPC failed entirely — reset paused state so the UI doesn't
       // stay frozen, then attempt a clean restart.
+      log.error('resumeRender IPC failed, restarting from state:', err);
       setPaused(false);
       await startRender(true);
     }

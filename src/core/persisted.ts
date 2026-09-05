@@ -13,45 +13,22 @@
  *
  * This allows users to upgrade the app without losing their saved settings.
  *
- * # Single-source field schema (v0.3.0)
- *
- * Field names, defaults, and coercion rules now live in `core/schema.ts`
- * ({@link CONFIG_SCHEMA}).  This module keeps the versioned-storage concerns
- * (key, version, migrations) and delegates all per-field coercion to the
- * schema, so a new field needs no edit here at all.
+ * Field names, defaults, and coercion rules live in `core/schema.ts`; this
+ * module keeps only the versioned-storage concerns (key, version, migrations).
  */
-import type { MediaSource } from './types';
 import { safeSetStorageItem } from './storage';
-import { coerceFromRecord, defaultConfigRecord } from './schema';
+import {
+  coerceFromRecord,
+  defaultConfigRecord,
+  type SchemaState,
+} from './schema';
 
 export const STORAGE_KEY = 'ubetrender-paths';
 export const STORAGE_VERSION = 3;
 
-/** The persisted config shape. Field list, defaults, and coercion rules
- *  live in `core/schema.ts` ({@link CONFIG_SCHEMA}); the golden contract test
- *  (`schema.test.ts` + `config-contract.json`) pins this interface to the
- *  schema so they cannot drift. */
-export interface PersistedConfig {
-  version: number;
-  videoSource: MediaSource | null;
-  audioSource: MediaSource | null;
-  outputPath: string;
-  outputPrefix: string;
-  maxrate: string;
-  usePingpong: boolean;
-  songsPerPlaylist: number;
-  minDurationHours: number;
-  loopMode: 'duration' | 'count';
-  loopCount: number;
-  codec: string;
-  audioMode: 'original' | 'normalize';
-  embedChapters: boolean;
-  outputFormat: 'mp4' | 'mkv';
-  /** When true, the intermediate re-encode step is bypassed entirely —
-   *  the source video is fed directly to the concat demuxer via stream-copy,
-   *  regardless of codec. Disabled by default. */
-  skipIntermediateOnCodecMatch: boolean;
-}
+/** The persisted config shape — field list, defaults, and coercion rules
+ *  live in `core/schema.ts`; versioned-storage concerns live here. */
+export type PersistedConfig = SchemaState & { version: number };
 
 /**
  * Migration registry.
@@ -80,89 +57,15 @@ MIGRATIONS.set(1, (_prev) => ({
   skipIntermediateOnCodecMatch: false,
 }));
 
-export function isMediaSource(value: unknown): value is MediaSource {
-  if (!value || typeof value !== 'object') return false;
-  const source = value as Record<string, unknown>;
-  if (source.type === 'files') {
-    return (
-      Array.isArray(source.paths) &&
-      (source.paths as unknown[]).every((p) => typeof p === 'string')
-    );
-  }
-  if (source.type === 'folder') {
-    return typeof source.path === 'string';
-  }
-  return false;
-}
-
-export function stringOr(value: unknown, fallback: string): string {
-  return typeof value === 'string' ? value : fallback;
-}
-
-export function numberOr(
-  value: unknown,
-  fallback: number,
-  min: number,
-): number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= min
-    ? value
-    : fallback;
-}
-
-export function booleanOr(value: unknown, fallback: boolean): boolean {
-  return typeof value === 'boolean' ? value : fallback;
-}
-
 export function getDefaultInitial(): PersistedConfig {
-  const defaults = defaultConfigRecord();
-  return {
-    version: STORAGE_VERSION,
-    videoSource: defaults.videoSource as MediaSource | null,
-    audioSource: defaults.audioSource as MediaSource | null,
-    outputPath: defaults.outputPath as string,
-    outputPrefix: defaults.outputPrefix as string,
-    maxrate: defaults.maxrate as string,
-    usePingpong: defaults.usePingpong as boolean,
-    songsPerPlaylist: defaults.songsPerPlaylist as number,
-    minDurationHours: defaults.minDurationHours as number,
-    loopMode: defaults.loopMode as 'duration' | 'count',
-    loopCount: defaults.loopCount as number,
-    codec: defaults.codec as string,
-    audioMode: defaults.audioMode as 'original' | 'normalize',
-    embedChapters: defaults.embedChapters as boolean,
-    outputFormat: defaults.outputFormat as 'mp4' | 'mkv',
-    skipIntermediateOnCodecMatch:
-      defaults.skipIntermediateOnCodecMatch as boolean,
-  };
+  return { ...defaultConfigRecord(), version: STORAGE_VERSION };
 }
 
-/**
- * Safely coerce a parsed JSON value into a {@link PersistedConfig}.
- * Each field is validated individually by the schema and falls back to a
- * sensible default when the stored value is missing, wrong type, or out of
- * range.
- */
+/** Safely coerce a parsed JSON value into a {@link PersistedConfig}.
+ *  Each field is validated individually and falls back to a sensible default
+ *  when the stored value is missing, wrong type, or out of range. */
 function coerceConfig(raw: Record<string, unknown>): PersistedConfig {
-  const values = coerceFromRecord(raw);
-  return {
-    version: STORAGE_VERSION,
-    videoSource: values.videoSource as MediaSource | null,
-    audioSource: values.audioSource as MediaSource | null,
-    outputPath: values.outputPath as string,
-    outputPrefix: values.outputPrefix as string,
-    maxrate: values.maxrate as string,
-    usePingpong: values.usePingpong as boolean,
-    songsPerPlaylist: values.songsPerPlaylist as number,
-    minDurationHours: values.minDurationHours as number,
-    loopMode: values.loopMode as 'duration' | 'count',
-    loopCount: values.loopCount as number,
-    codec: values.codec as string,
-    audioMode: values.audioMode as 'original' | 'normalize',
-    embedChapters: values.embedChapters as boolean,
-    outputFormat: values.outputFormat as 'mp4' | 'mkv',
-    skipIntermediateOnCodecMatch:
-      values.skipIntermediateOnCodecMatch as boolean,
-  };
+  return { ...coerceFromRecord(raw), version: STORAGE_VERSION };
 }
 
 /** Attempt to parse saved config from localStorage. Returns defaults on any error. */

@@ -4,6 +4,30 @@ All notable changes to Ubet Render are documented in this file.
 
 ---
 
+## [0.4.0] — 2026-09-05
+
+### Added
+
+- **Automatic in-app updates**: installers are now signed, and the app checks GitHub Releases on every startup — a newer version is downloaded and installed automatically (reopen the app to apply it).
+- **Automated release pipeline**: a new `Release` GitHub Actions workflow builds the Windows installer on every push to `main` (uploaded as a run artifact) and creates a tagged GitHub Release with the installer, its signature, and the update manifest whenever a `v*` tag is pushed.
+- **`bun run bundle`**: one-command local build that signs the installer with the updater key and copies the `.exe` + `.sig` into a `build/` folder at the repo root.
+- Inline SVG icon component replacing the iconify runtime (drops `@iconify-icon/solid`, `@iconify-json/lucide`, and the phantom `iconify-icon` dependency).
+
+### Changed
+
+- Windows bundling pinned to NSIS (`nsis`) only.
+- Log rendering simplified: the capped 2000-line log is rendered directly — the virtual scroller and ring buffer are gone.
+- Collapsed the schema/persistence engine and cross-language "golden contract" ceremony into plain typed code (removed `config-contract.json`, `docs/MEDIA_EXTENSIONS.md`, redundant persistence retries, barrel exports, and ~1.5k lines of dead code and duplication across the Rust pipeline).
+- CI dependency audits now use prebuilt binaries instead of compiling `cargo-audit` from source on every run.
+- Removed the `start` npm script (duplicate of `dev`) and the unused `@vitest/coverage-v8` tooling.
+
+### Fixed
+
+- The Hardware Info GPU icon rendered blank: `lucide:chip` does not exist in the Lucide set — remapped to `microchip`.
+- Removed a committed `coverage/` directory (1.7 MB of stale build artifacts) and a stray 100 MB `_ffmpeg_pin.zip` from the repository.
+
+---
+
 ## [0.3.1] — 2026-09-02
 
 ### Fixed

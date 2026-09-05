@@ -51,6 +51,9 @@ pub fn human_bytes(bytes: u64) -> String {
 }
 
 pub fn parse_bitrate_to_kbps(value: &str) -> Option<u32> {
+    // Canonical unchecked parser. For range-checked IPC validation use
+    // `validation::validate_bitrate` instead — this stays lenient because
+    // the pipeline applies its own fallback + warning.
     let normalized = value.trim().to_ascii_lowercase();
     let number = normalized.strip_suffix('k').unwrap_or(&normalized);
     number.parse::<u32>().ok()
@@ -79,11 +82,9 @@ pub fn sanitize_filename_component(value: &str) -> String {
     if stem.is_empty() {
         return "unnamed".to_string();
     }
-    let reserved = [
-        "CON", "NUL", "PRN", "AUX", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
-        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
-    ];
-    if reserved.contains(&stem.to_ascii_uppercase().as_str()) {
+    if crate::validation::limits::WINDOWS_RESERVED_NAMES
+        .contains(&stem.to_ascii_uppercase().as_str())
+    {
         format!("_{}", sanitized)
     } else {
         sanitized
@@ -92,7 +93,17 @@ pub fn sanitize_filename_component(value: &str) -> String {
 
 /// Returns the free space (bytes) on the filesystem that hosts `path`, or 0 if
 /// it cannot be determined.
-pub fn available_space_for(path: &std::path::Path) -> u64 {
+///
+/// Runs the blocking `sysinfo` refresh + canonicalize on the blocking pool
+/// so the async pipeline executor is never stalled by disk enumeration.
+pub async fn available_space_for(path: &std::path::Path) -> u64 {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || available_space_for_blocking(&path))
+        .await
+        .unwrap_or(0)
+}
+
+fn available_space_for_blocking(path: &std::path::Path) -> u64 {
     use sysinfo::Disks;
     let disks = Disks::new_with_refreshed_list();
     let canon = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());

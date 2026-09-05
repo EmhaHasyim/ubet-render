@@ -31,6 +31,18 @@ const genId = (): number => {
   return nextId;
 };
 
+// Track auto-dismiss timers so manual dismiss clears them (no leaked
+// `setTimeout` firing `dismissToast` for an already-removed id).
+const timers = new Map<number, ReturnType<typeof setTimeout>>();
+
+/** Reset module state — test-only. */
+export function resetToastsForTests(): void {
+  for (const t of timers.values()) clearTimeout(t);
+  timers.clear();
+  nextId = 0;
+  setToasts([]);
+}
+
 export interface ToastOptions {
   /** Visual variant. Defaults to `'info'`. */
   variant?: ToastVariant;
@@ -55,17 +67,25 @@ export function showToast(message: string, options: ToastOptions = {}): number {
     },
   ]);
   if (ttl > 0) {
-    // setTimeout is the only safe choice here — utils/scheduler-level
-    // alternatives don't auto-cleanup on dismiss and would leak toasts if
-    // the id is removed manually before the timer fires.
-    setTimeout(() => dismissToast(id), ttl);
+    const timer = setTimeout(() => {
+      timers.delete(id);
+      dismissToast(id);
+    }, ttl);
+    timers.set(id, timer);
   }
   return id;
 }
 
 /** Manually dismiss a toast by id (e.g. user clicked the X button). */
 export function dismissToast(id: number): void {
-  setToasts((cur) => cur.filter((t) => t.id !== id));
+  const timer = timers.get(id);
+  if (timer !== undefined) {
+    clearTimeout(timer);
+    timers.delete(id);
+  }
+  setToasts((cur) =>
+    cur.some((t) => t.id === id) ? cur.filter((t) => t.id !== id) : cur,
+  );
 }
 
 /** Reactive accessor for the current toast queue. */

@@ -1,15 +1,15 @@
 {
   "name": "ubet-render",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "",
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "start": "vite",
     "dev": "vite",
     "build": "vite build",
     "serve": "vite preview",
     "tauri": "tauri",
+    "bundle": "bun scripts/bundle.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint",
@@ -19,11 +19,10 @@
     "prepare": "husky"
   },
   "dependencies": {
-    "@iconify-icon/solid": "^3.0.3",
-    "@iconify-json/lucide": "^1.2.118",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-notification": "^2.3.3",
+    "@tauri-apps/plugin-updater": "^2.11.0",
     "daisyui": "^5.6.16",
     "solid-js": "^1.9.14"
   },
@@ -33,9 +32,8 @@
     "@tauri-apps/cli": "^2.11.4",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/user-event": "^14.6.1",
-    "@vitest/coverage-v8": "^4.1.10",
+    "happy-dom": "^20.14.0",
     "husky": "^9.1.7",
-    "jsdom": "^30.0.1",
     "lint-staged": "^17.1.0",
     "oxfmt": "^0.58.0",
     "oxlint": "^1.73.0",
@@ -47,11 +45,12 @@
   },
   "overrides": {
     "@babel/core": "^7.29.6",
+    "browserslist": "^4.28.7",
     "nanoid": "^3.3.18",
     "postcss": "^8.5.26"
   },
   "lint-staged": {
-    "*.{ts,tsx}": [
+    "*.{ts,tsx,mjs}": [
       "oxlint --fix",
       "oxfmt"
     ],

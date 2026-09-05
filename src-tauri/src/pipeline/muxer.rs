@@ -2,16 +2,6 @@ use crate::error::AppError;
 use crate::ffmpeg;
 use std::path::Path;
 
-async fn cleanup_temp_file(path: &Path) {
-    if let Err(error) = crate::utils::fs::safe_delete(path).await {
-        crate::utils::logger::log_line(&format!(
-            "Temporary file cleanup failed for '{}': {}",
-            path.display(),
-            error
-        ));
-    }
-}
-
 /// Build a same-container temporary output path. The final destination is
 /// never handed to FFmpeg directly: a cancelled or failed encode must not
 /// expose a truncated file or destroy a previously completed output.
@@ -91,7 +81,7 @@ pub async fn mux_final_video(
     ];
     if let Err(error) = ffmpeg::run(app, &args, tx_progress, cancel_control.clone(), tx_stats).await
     {
-        cleanup_temp_file(&temp_output).await;
+        crate::utils::fs::cleanup_temp_file(&temp_output).await;
         return Err(error);
     }
     if let Err(error) = tokio::task::spawn_blocking({
@@ -105,7 +95,7 @@ pub async fn mux_final_video(
     })
     .and_then(|result| result.map_err(AppError::Io))
     {
-        cleanup_temp_file(&temp_output).await;
+        crate::utils::fs::cleanup_temp_file(&temp_output).await;
         return Err(error);
     }
 
@@ -125,20 +115,8 @@ pub async fn mux_final_video(
             let chapter_path_str = chapter_path.to_string_lossy().into_owned();
 
             // Write chapters into a same-container temp, then swap it over the output.
-            let out_path = output_path;
-            let tmp_out = if let Some(parent) = out_path.parent() {
-                let stem = out_path
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "output".into());
-                let ext = out_path
-                    .extension()
-                    .map(|e| e.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "mp4".into());
-                parent.join(format!("{}.chaptered.{}", stem, ext))
-            } else {
-                std::path::PathBuf::from(format!("{}.chaptered.mp4", output))
-            };
+            // Reuses the canonical temp-path helper so both stages share one naming scheme.
+            let tmp_out = render_temp_path(output_path);
             let tmp_out_str = tmp_out.to_string_lossy().into_owned();
 
             let chapter_args: Vec<&str> = vec![
@@ -160,8 +138,8 @@ pub async fn mux_final_video(
             {
                 // Chapter insertion is best-effort: the output file is already usable
                 // without chapters, so a warning is sufficient.
-                cleanup_temp_file(&chapter_path).await;
-                cleanup_temp_file(&tmp_out).await;
+                crate::utils::fs::cleanup_temp_file(&chapter_path).await;
+                crate::utils::fs::cleanup_temp_file(&tmp_out).await;
                 crate::utils::event::emit(
                     app,
                     crate::models::job::PipelineEvent::Log {
@@ -184,11 +162,11 @@ pub async fn mux_final_video(
                 })
                 .and_then(|result| result.map_err(AppError::Io))
                 {
-                    cleanup_temp_file(&tmp_out).await;
-                    cleanup_temp_file(&chapter_path).await;
+                    crate::utils::fs::cleanup_temp_file(&tmp_out).await;
+                    crate::utils::fs::cleanup_temp_file(&chapter_path).await;
                     return Err(e);
                 }
-                cleanup_temp_file(&chapter_path).await;
+                crate::utils::fs::cleanup_temp_file(&chapter_path).await;
             }
         }
     }

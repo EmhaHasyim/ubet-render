@@ -41,12 +41,99 @@ pub struct Pipeline {
     state_manager: state::StateManager,
 }
 
+/// Parsed per-run overrides. Extracted so `execute()` orchestrates instead of
+/// inlining ~60 lines of `ov.and_then(...)` plumbing.
+struct ExecutionParams {
+    use_pingpong: bool,
+    audio_mode: String,
+    embed_chapters: bool,
+    songs_per_playlist: usize,
+    min_duration_sec: u64,
+    loop_count: Option<usize>,
+    encoder_selected: Option<String>,
+    safe_prefix: String,
+    output_ext: &'static str,
+    maxrate_k: u32,
+    video_cfg: crate::config::VideoSettings,
+    skip_intermediate_on_codec_match: bool,
+}
+
 impl Pipeline {
     pub fn new(app: AppHandle, config: AppConfig) -> Self {
         Self {
             app,
             config,
             state_manager: state::StateManager::new(),
+        }
+    }
+
+    fn parse_params(&self, overrides: &Option<OverrideConfig>) -> ExecutionParams {
+        let ov = overrides.as_ref();
+        let use_pingpong = ov.and_then(|o| o.use_pingpong).unwrap_or(true);
+        let audio_mode = ov
+            .and_then(|o| o.audio_mode.clone())
+            .unwrap_or_else(|| self.config.audio.audio_mode.clone());
+        let embed_chapters = ov
+            .and_then(|o| o.embed_chapters)
+            .unwrap_or(self.config.embed_chapters);
+        let songs_per_playlist = ov
+            .and_then(|o| o.songs_per_playlist)
+            .unwrap_or(self.config.audio.songs_per_playlist)
+            .max(1);
+        let min_duration_sec = ov
+            .and_then(|o| o.min_duration_hours)
+            .map(|h| (h * 3600.0) as u64)
+            .unwrap_or(self.config.target.min_duration_sec);
+        let loop_count = ov.and_then(|o| o.loop_count);
+        let encoder_selected = ov.and_then(|o| o.encoder.clone());
+        let prefix = ov
+            .and_then(|o| o.output_prefix.as_deref())
+            .unwrap_or(&self.config.metadata.channel_prefix);
+        let safe_prefix = sanitize_filename_component(prefix);
+        let skip_intermediate_on_codec_match = ov
+            .and_then(|o| o.skip_intermediate_on_codec_match)
+            .unwrap_or(false);
+        let output_format = ov
+            .and_then(|o| o.output_format.clone())
+            .unwrap_or_else(|| "mp4".to_string());
+        let output_ext = if output_format.eq_ignore_ascii_case("mkv") {
+            "mkv"
+        } else {
+            "mp4"
+        };
+        let maxrate_str = ov
+            .and_then(|o| o.maxrate.clone())
+            .unwrap_or_else(|| self.config.video.bitrate_target.clone());
+        let maxrate_k = parse_bitrate_to_kbps(&maxrate_str).unwrap_or(4000).max(1);
+        if parse_bitrate_to_kbps(&maxrate_str).is_none() {
+            event::emit(
+                &self.app,
+                PipelineEvent::Log {
+                    level: "warn".into(),
+                    message: format!("Invalid bitrate '{}', falling back to 4000k", maxrate_str),
+                },
+            );
+        }
+        let target_k = (maxrate_k as f64 * 0.7).ceil() as u32;
+        let mut video_cfg = self.config.video.clone();
+        video_cfg.bitrate_target = format!("{}k", target_k);
+        video_cfg.bitrate_max = format!("{}k", maxrate_k);
+        if let Some(enc) = encoder_selected.as_deref() {
+            video_cfg.encoder = enc.to_string();
+        }
+        ExecutionParams {
+            use_pingpong,
+            audio_mode,
+            embed_chapters,
+            songs_per_playlist,
+            min_duration_sec,
+            loop_count,
+            encoder_selected,
+            safe_prefix,
+            output_ext,
+            maxrate_k,
+            video_cfg,
+            skip_intermediate_on_codec_match,
         }
     }
 
@@ -59,7 +146,6 @@ impl Pipeline {
         let ResolvedRoots {
             output_dir,
             input_roots,
-            allowed_roots: _allowed_roots,
             cache_dir,
             thumb_dir,
             state_path,
@@ -143,79 +229,21 @@ impl Pipeline {
             return Err(AppError::NoAudio);
         }
 
-        // Extract overrides reference once to avoid repeated .as_ref() calls
-        let ov = overrides.as_ref();
-        let use_pingpong = ov.and_then(|o| o.use_pingpong).unwrap_or(true);
-        let audio_mode = ov
-            .and_then(|o| o.audio_mode.clone())
-            .unwrap_or_else(|| self.config.audio.audio_mode.clone());
-        let embed_chapters = ov
-            .and_then(|o| o.embed_chapters)
-            .unwrap_or(self.config.embed_chapters);
-
-        let songs_per_playlist = ov
-            .and_then(|o| o.songs_per_playlist)
-            .unwrap_or(self.config.audio.songs_per_playlist)
-            .max(1);
-        let min_duration_sec = ov
-            .and_then(|o| o.min_duration_hours)
-            .map(|h| (h * 3600.0) as u64)
-            .unwrap_or(self.config.target.min_duration_sec);
-        let loop_count = ov.and_then(|o| o.loop_count);
-
-        let encoder_selected = ov.and_then(|o| o.encoder.clone());
-        let prefix = ov
-            .and_then(|o| o.output_prefix.as_deref())
-            .unwrap_or(&self.config.metadata.channel_prefix);
-        let safe_prefix = sanitize_filename_component(prefix);
-
-        // Stream-copy is an explicit opt-in. Keeping it disabled by default
-        // preserves the normal encode/filter pipeline (including ping-pong)
-        // and avoids surprising failures when source and target codecs differ.
-        let skip_intermediate_on_codec_match = ov
-            .and_then(|o| o.skip_intermediate_on_codec_match)
-            .unwrap_or(false);
-
-        // Output container chosen by the user (MP4 or MKV). This decouples the
-        // final file extension from the input file's extension, so e.g. a
-        // `.webm`/`.avi` source can still be encoded to a universally supported
-        // container (previously the container followed the input extension).
-        let output_format = ov
-            .and_then(|o| o.output_format.clone())
-            .unwrap_or_else(|| "mp4".to_string());
-        let output_ext = if output_format.eq_ignore_ascii_case("mkv") {
-            "mkv"
-        } else {
-            "mp4"
-        };
-
-        let maxrate_str = ov
-            .and_then(|o| o.maxrate.clone())
-            .unwrap_or_else(|| self.config.video.bitrate_target.clone());
-        let maxrate_k = parse_bitrate_to_kbps(&maxrate_str)
-            .unwrap_or_else(|| {
-                event::emit(
-                    &self.app,
-                    PipelineEvent::Log {
-                        level: "warn".into(),
-                        message: format!(
-                            "Invalid bitrate '{}', falling back to 4000k",
-                            maxrate_str
-                        ),
-                    },
-                );
-                4000
-            })
-            .max(1);
-        let target_k = (maxrate_k as f64 * 0.7).ceil() as u32;
-
-        let mut video_cfg = self.config.video.clone();
-        video_cfg.bitrate_target = format!("{}k", target_k);
-        video_cfg.bitrate_max = format!("{}k", maxrate_k);
-
-        if let Some(enc) = encoder_selected.as_deref() {
-            video_cfg.encoder = enc.to_string();
-        }
+        let params = self.parse_params(&overrides);
+        let ExecutionParams {
+            use_pingpong,
+            audio_mode,
+            embed_chapters,
+            songs_per_playlist,
+            min_duration_sec,
+            loop_count,
+            encoder_selected,
+            safe_prefix,
+            output_ext,
+            maxrate_k,
+            video_cfg,
+            skip_intermediate_on_codec_match,
+        } = params;
 
         event::emit(
             &self.app,
@@ -286,99 +314,20 @@ impl Pipeline {
             }
         }
 
-        let mut initial_jobs = if resume && state_path.exists() {
-            match tokio::fs::read_to_string(&state_path).await {
-                Ok(content) => match serde_json::from_str::<Vec<RenderJob>>(&content) {
-                    Ok(mut saved_jobs) => {
-                        match crate::validation::validate_resumed_jobs(
-                            &saved_jobs,
-                            &output_dir,
-                            &input_roots,
-                            &thumb_dir,
-                        ) {
-                            Ok(()) => {
-                                for j in &mut saved_jobs {
-                                    if j.state != JobState::Done {
-                                        j.state = JobState::Pending;
-                                        j.progress_percent = 0;
-                                        j.current_step = "Pending".into();
-                                        j.error = None;
-                                    }
-                                }
-                                event::emit(
-                                    &self.app,
-                                    PipelineEvent::Log {
-                                        level: "info".into(),
-                                        message: "Resuming previous render state...".into(),
-                                    },
-                                );
-                                saved_jobs
-                            }
-                            Err(error) => {
-                                event::emit(
-                                    &self.app,
-                                    PipelineEvent::Log {
-                                        level: "warn".into(),
-                                        message: format!(
-                                            "Saved render state failed validation ({}); quarantining it and starting a fresh batch.",
-                                            error
-                                        ),
-                                    },
-                                );
-                                if !quarantine_state_file(&state_path, render_timestamp) {
-                                    workspace.cancel();
-                                    return Err(AppError::Pipeline(
-                                        "Invalid render state could not be quarantined".into(),
-                                    ));
-                                }
-                                self.create_initial_jobs(
-                                    &video_files,
-                                    &safe_prefix,
-                                    &output_dir,
-                                    output_ext,
-                                )
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        event::emit(
-                            &self.app,
-                            PipelineEvent::Log {
-                                level: "warn".into(),
-                                message: format!(
-                                    "Saved render state is invalid ({}); quarantining it and starting a fresh batch.",
-                                    error
-                                ),
-                            },
-                        );
-                        if !quarantine_state_file(&state_path, render_timestamp) {
-                            workspace.cancel();
-                            return Err(AppError::Pipeline(
-                                "Invalid render state could not be quarantined".into(),
-                            ));
-                        }
-                        self.create_initial_jobs(
-                            &video_files,
-                            &safe_prefix,
-                            &output_dir,
-                            output_ext,
-                        )
-                    }
-                },
-                Err(error) => {
-                    event::emit(
-                        &self.app,
-                        PipelineEvent::Log {
-                            level: "warn".into(),
-                            message: format!("Unable to read saved render state: {}", error),
-                        },
-                    );
-                    self.create_initial_jobs(&video_files, &safe_prefix, &output_dir, output_ext)
-                }
-            }
-        } else {
-            self.create_initial_jobs(&video_files, &safe_prefix, &output_dir, output_ext)
-        };
+        let mut initial_jobs = self
+            .load_resume_or_fresh(
+                resume,
+                &state_path,
+                &video_files,
+                &safe_prefix,
+                &output_dir,
+                output_ext,
+                &input_roots,
+                &thumb_dir,
+                &mut workspace,
+                render_timestamp,
+            )
+            .await?;
 
         if !resume {
             event::emit(
@@ -459,7 +408,7 @@ impl Pipeline {
             min_duration_sec,
             loop_count,
         );
-        let avail = available_space_for(&output_dir);
+        let avail = available_space_for(&output_dir).await;
         if avail > 0 && est_bytes > avail {
             event::emit(
                 &pipeline_arc.app,
@@ -486,11 +435,7 @@ impl Pipeline {
         // pipeline from the state file.
         let mut idx = 0usize;
         let mut pause_exit = false;
-        let milestone_step = if total_jobs <= 20 {
-            (total_jobs / 4).max(1)
-        } else {
-            10usize
-        };
+        let milestone_step = loop_control::milestone_step(total_jobs);
         let mut completed: usize = 0;
         let mut last_milestone: usize = 0;
         while idx < total_jobs {
@@ -523,8 +468,8 @@ impl Pipeline {
                     .save_state_from_arc(&state_path, &jobs_arc)
                     .await;
                 completed += 1;
-                let band = completed / milestone_step;
-                if band > last_milestone || completed == total_jobs {
+                if loop_control::is_milestone(completed, total_jobs, last_milestone, milestone_step)
+                {
                     event::emit(
                         &pipeline_arc.app,
                         PipelineEvent::Log {
@@ -532,7 +477,7 @@ impl Pipeline {
                             message: format!("Videos: {}/{} done", completed, total_jobs),
                         },
                     );
-                    last_milestone = band;
+                    last_milestone = loop_control::milestone_band(completed, milestone_step);
                 }
                 idx += 1;
                 continue;
@@ -586,8 +531,12 @@ impl Pipeline {
                             .await;
                     }
                     completed += 1;
-                    let band = completed / milestone_step;
-                    if band > last_milestone || completed == total_jobs {
+                    if loop_control::is_milestone(
+                        completed,
+                        total_jobs,
+                        last_milestone,
+                        milestone_step,
+                    ) {
                         event::emit(
                             &pipeline_arc.app,
                             PipelineEvent::Log {
@@ -595,7 +544,7 @@ impl Pipeline {
                                 message: format!("Videos: {}/{} done", completed, total_jobs),
                             },
                         );
-                        last_milestone = band;
+                        last_milestone = loop_control::milestone_band(completed, milestone_step);
                     }
                     idx += 1;
                 }
@@ -633,8 +582,9 @@ impl Pipeline {
         if pause_exit || control.is_paused() {
             // Flush state immediately (bypassing the 2s throttle) so the most
             // recently finished job isn't lost when the next resume reloads it.
+            // Snapshot under a short lock scope — clone, drop, then write.
             {
-                let jobs = jobs_arc.lock().await.clone();
+                let jobs = { jobs_arc.lock().await.clone() };
                 let _ = pipeline_arc
                     .state_manager
                     .save_state(&state_path, &jobs)
@@ -650,42 +600,53 @@ impl Pipeline {
 
         workspace.complete();
 
-        let final_jobs = jobs_arc.lock().await.clone();
+        let final_jobs = { jobs_arc.lock().await.clone() };
+        Self::write_timestamp_artifact(&pipeline_arc.app, &final_jobs).await;
+        Self::emit_final_summary(&pipeline_arc.app, &final_jobs, total_jobs);
+        Ok(())
+    }
 
-        if !final_jobs.is_empty() {
-            let mut all_timestamps = Vec::new();
-            for job in &final_jobs {
-                if !job.timestamps.is_empty() {
-                    all_timestamps.extend(job.timestamps.clone());
-                    all_timestamps.push("".into());
-                }
-            }
-            let parent_opt = final_jobs
-                .first()
-                .map(|j| &j.video.output_path)
-                .and_then(|p| Path::new(p).parent());
-            if let Some(parent) = parent_opt.filter(|_| !all_timestamps.is_empty()) {
-                let combined_path = parent.join("all_timestamps.txt");
-                let contents = all_timestamps.join("\n").into_bytes();
-                if let Err(error) = fs::atomic_write(&combined_path, contents).await {
-                    event::emit(
-                        &pipeline_arc.app,
-                        PipelineEvent::Log {
-                            level: "warn".into(),
-                            message: format!(
-                                "Render completed, but all_timestamps.txt could not be written: {}",
-                                error
-                            ),
-                        },
-                    );
-                    crate::utils::logger::log_line(&format!(
-                        "Timestamp artifact write failed for '{}': {}",
-                        combined_path.display(),
-                        error
-                    ));
-                }
+    /// Write the combined `all_timestamps.txt` artifact. Best-effort: failures
+    /// emit a warning but never fail the render.
+    async fn write_timestamp_artifact(app: &AppHandle, final_jobs: &[RenderJob]) {
+        if final_jobs.is_empty() {
+            return;
+        }
+        let mut all_timestamps = Vec::new();
+        for job in final_jobs {
+            if !job.timestamps.is_empty() {
+                all_timestamps.extend(job.timestamps.clone());
+                all_timestamps.push("".into());
             }
         }
+        let parent_opt = final_jobs
+            .first()
+            .map(|j| &j.video.output_path)
+            .and_then(|p| Path::new(p).parent());
+        if let Some(parent) = parent_opt.filter(|_| !all_timestamps.is_empty()) {
+            let combined_path = parent.join("all_timestamps.txt");
+            let contents = all_timestamps.join("\n").into_bytes();
+            if let Err(error) = fs::atomic_write(&combined_path, contents).await {
+                event::emit(
+                    app,
+                    PipelineEvent::Log {
+                        level: "warn".into(),
+                        message: format!(
+                            "Render completed, but all_timestamps.txt could not be written: {}",
+                            error
+                        ),
+                    },
+                );
+                crate::utils::logger::log_line(&format!(
+                    "Timestamp artifact write failed for '{}': {}",
+                    combined_path.display(),
+                    error
+                ));
+            }
+        }
+    }
+
+    fn emit_final_summary(app: &AppHandle, final_jobs: &[RenderJob], total_jobs: usize) {
         let failed = final_jobs
             .iter()
             .filter(|j| j.state == JobState::Error)
@@ -694,9 +655,8 @@ impl Pipeline {
             .iter()
             .filter(|j| j.state == JobState::Done)
             .count();
-
         event::emit(
-            &pipeline_arc.app,
+            app,
             PipelineEvent::Log {
                 level: "info".into(),
                 message: format!(
@@ -706,14 +666,120 @@ impl Pipeline {
             },
         );
         event::emit(
-            &pipeline_arc.app,
+            app,
             PipelineEvent::Done {
                 completed,
                 total: total_jobs,
                 failed,
             },
         );
-        Ok(())
+    }
+
+    /// Load jobs from the resume state file, falling back to a fresh batch on
+    /// any validation/IO failure (quarantining the bad file). Extracted from
+    /// `execute()` so the orchestrator stays readable.
+    #[allow(clippy::too_many_arguments)]
+    async fn load_resume_or_fresh(
+        &self,
+        resume: bool,
+        state_path: &Path,
+        video_files: &[String],
+        safe_prefix: &str,
+        output_dir: &Path,
+        output_ext: &str,
+        input_roots: &[std::path::PathBuf],
+        thumb_dir: &Path,
+        workspace: &mut WorkspaceGuard,
+        render_timestamp: u64,
+    ) -> Result<Vec<RenderJob>, AppError> {
+        if !(resume && state_path.exists()) {
+            return Ok(self.create_initial_jobs(video_files, safe_prefix, output_dir, output_ext));
+        }
+        let content = match tokio::fs::read_to_string(state_path).await {
+            Ok(c) => c,
+            Err(error) => {
+                event::emit(
+                    &self.app,
+                    PipelineEvent::Log {
+                        level: "warn".into(),
+                        message: format!("Unable to read saved render state: {}", error),
+                    },
+                );
+                return Ok(self.create_initial_jobs(
+                    video_files,
+                    safe_prefix,
+                    output_dir,
+                    output_ext,
+                ));
+            }
+        };
+        let mut saved_jobs: Vec<RenderJob> = match serde_json::from_str(&content) {
+            Ok(j) => j,
+            Err(error) => {
+                event::emit(
+                    &self.app,
+                    PipelineEvent::Log {
+                        level: "warn".into(),
+                        message: format!(
+                            "Saved render state is invalid ({}); quarantining it and starting a fresh batch.",
+                            error
+                        ),
+                    },
+                );
+                if !quarantine_state_file(state_path, render_timestamp) {
+                    workspace.cancel();
+                    return Err(AppError::Pipeline(
+                        "Invalid render state could not be quarantined".into(),
+                    ));
+                }
+                return Ok(self.create_initial_jobs(
+                    video_files,
+                    safe_prefix,
+                    output_dir,
+                    output_ext,
+                ));
+            }
+        };
+        if let Err(error) = crate::validation::validate_resumed_jobs(
+            &saved_jobs,
+            output_dir,
+            input_roots,
+            thumb_dir,
+        ) {
+            event::emit(
+                &self.app,
+                PipelineEvent::Log {
+                    level: "warn".into(),
+                    message: format!(
+                        "Saved render state failed validation ({}); quarantining it and starting a fresh batch.",
+                        error
+                    ),
+                },
+            );
+            if !quarantine_state_file(state_path, render_timestamp) {
+                workspace.cancel();
+                return Err(AppError::Pipeline(
+                    "Invalid render state could not be quarantined".into(),
+                ));
+            }
+            return Ok(self.create_initial_jobs(video_files, safe_prefix, output_dir, output_ext));
+        }
+        for j in &mut saved_jobs {
+            if j.state != JobState::Done {
+                j.state = JobState::Pending;
+                j.progress_percent = 0;
+                j.current_step = "Pending".into();
+                j.error = None;
+            }
+        }
+        event::emit(
+            &self.app,
+            PipelineEvent::Log {
+                level: "info".into(),
+                message: "Resuming previous render state...".into(),
+            },
+        );
+        Ok(saved_jobs)
     }
 
     fn create_initial_jobs(

@@ -1,12 +1,10 @@
 import { createEffect, type Accessor, type Setter } from 'solid-js';
-import { Icon } from '@iconify-icon/solid';
-import {
-  AppHeader,
-  HardwareInfo,
-  JobTable,
-  LogViewer,
-  OverallProgress,
-} from '../index';
+import { Icon } from '../ui/Icon';
+import { AppHeader } from './AppHeader';
+import { JobTable } from './JobTable';
+import { LogViewer } from './LogViewer';
+import { HardwareInfo } from '../ui/HardwareInfo';
+import { OverallProgress } from '../ui/OverallProgress';
 import type { Pipeline } from '../../context/pipeline';
 import type { AppTabId } from '../../hooks/useAppShortcuts';
 

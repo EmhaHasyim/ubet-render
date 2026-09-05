@@ -1,5 +1,5 @@
 import { Show, For, createEffect } from 'solid-js';
-import { Icon } from '@iconify-icon/solid';
+import { Icon } from './Icon';
 import { rememberFocus } from '../../core/focus';
 
 /**

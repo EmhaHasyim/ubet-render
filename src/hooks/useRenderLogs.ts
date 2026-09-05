@@ -1,36 +1,60 @@
-import { createSignal } from 'solid-js';
-import { RingBuffer } from '../core/ringBuffer';
+import { createSignal, onCleanup } from 'solid-js';
 
 const MAX_LOGS = 2000;
 const FLUSH_EVERY = 10;
+const FLUSH_DELAY_MS = 100;
 
 /**
- * Ring-buffer-backed log store for high-frequency FFmpeg output.
+ * Capped log store for high-frequency FFmpeg output.
  *
- * Lines are pushed into a pre-allocated ring buffer and flushed to the
- * SolidJS signal in batches (every {@link FLUSH_EVERY} lines, or immediately
- * for the first line) to avoid re-rendering the virtual-scrolled LogViewer
- * on every backend event.
+ * Lines are batched in a plain array and flushed to the SolidJS signal in
+ * batches (every {@link FLUSH_EVERY} lines, immediately for the first line,
+ * or after {@link FLUSH_DELAY_MS} ms) so the LogViewer doesn't re-render on
+ * every backend event.
  */
 export function useRenderLogs() {
-  const logBuffer = new RingBuffer<string>(MAX_LOGS);
   const [logs, setLogs] = createSignal<string[]>([]);
-  const flushLogs = () => setLogs(logBuffer.toArray());
-  let pushesSinceFlush = 0;
+  let buffer: string[] = [];
+  let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const flushLogs = () => {
+    if (flushTimer !== null) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+    if (buffer.length === 0) return;
+    const batch = buffer;
+    buffer = [];
+    setLogs((prev) => [...prev, ...batch].slice(-MAX_LOGS));
+  };
 
   const appendLog = (line: string) => {
-    logBuffer.push(line);
-    pushesSinceFlush += 1;
-    if (pushesSinceFlush >= FLUSH_EVERY || logBuffer.length === 1) {
-      pushesSinceFlush = 0;
+    buffer.push(line);
+    if (
+      buffer.length >= FLUSH_EVERY ||
+      (logs().length === 0 && buffer.length === 1)
+    ) {
       flushLogs();
+    } else if (flushTimer === null) {
+      flushTimer = setTimeout(flushLogs, FLUSH_DELAY_MS);
     }
   };
 
   const reset = () => {
-    logBuffer.reset();
+    if (flushTimer !== null) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+    buffer = [];
     setLogs([]);
   };
 
-  return { logs, appendLog, reset, logBuffer };
+  onCleanup(() => {
+    if (flushTimer !== null) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+  });
+
+  return { logs, appendLog, flush: flushLogs, reset };
 }

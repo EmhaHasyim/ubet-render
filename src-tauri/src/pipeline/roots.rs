@@ -11,7 +11,6 @@ use std::path::{Path, PathBuf};
 pub(crate) struct ResolvedRoots {
     pub output_dir: PathBuf,
     pub input_roots: Vec<PathBuf>,
-    pub allowed_roots: Vec<PathBuf>,
     pub cache_dir: PathBuf,
     pub thumb_dir: PathBuf,
     pub state_path: PathBuf,
@@ -145,7 +144,6 @@ pub(crate) fn resolve_roots(
     Ok(ResolvedRoots {
         output_dir,
         input_roots,
-        allowed_roots,
         cache_dir,
         thumb_dir,
         state_path,

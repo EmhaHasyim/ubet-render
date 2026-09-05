@@ -55,19 +55,27 @@ pub fn reveal_in_explorer(path: String) -> Result<(), String> {
         .unwrap_or_else(|_| crate::utils::fs::to_absolute(&thumb_dir));
     let allowed_roots: Vec<PathBuf> = vec![output_root, thumb_root];
 
-    let _ = crate::validation::resolve_and_validate_path(p, &allowed_roots)
+    // Use the canonicalized, root-checked result — not the raw IPC string —
+    // to close the check-then-use (TOCTOU) gap and avoid `p.is_dir()` races.
+    let validated = crate::validation::resolve_and_validate_path(p, &allowed_roots)
         .map_err(|e| format!("Path not allowed to open: {} ({})", path, e))?;
+    let is_dir = validated.is_dir();
 
     #[cfg(target_os = "windows")]
     {
-        let mut command = std::process::Command::new("explorer.exe");
+        // Prefer the absolute System32 path so a PATH hijack cannot
+        // redirect `explorer.exe`.
+        let explorer = std::env::var_os("SystemRoot")
+            .map(std::path::PathBuf::from)
+            .map(|r| r.join("explorer.exe"))
+            .unwrap_or_else(|| PathBuf::from("explorer.exe"));
+        let mut command = std::process::Command::new(explorer);
         command.creation_flags(CREATE_NO_WINDOW);
-        let status = if p.is_dir() {
-            command.arg(p).spawn()
+        let status = if is_dir {
+            command.arg(&validated).spawn()
         } else {
             // `/select,` must be a single argument with the quoted path.
-            // Rust `\"` inside a string literal produces a literal `"` character.
-            let arg = format!("/select,\"{}\"", path);
+            let arg = format!("/select,\"{}\"", validated.display());
             command.arg(&arg).spawn()
         };
         status
@@ -77,9 +85,9 @@ pub fn reveal_in_explorer(path: String) -> Result<(), String> {
 
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open")
+        std::process::Command::new("/usr/bin/open")
             .arg("-R")
-            .arg(p)
+            .arg(&validated)
             .spawn()
             .map(|_| ())
             .map_err(|e| format!("Failed to open Finder: {}", e))
@@ -87,14 +95,15 @@ pub fn reveal_in_explorer(path: String) -> Result<(), String> {
 
     #[cfg(target_os = "linux")]
     {
-        let open_path = if p.is_dir() {
-            path.clone()
+        let open_path = if is_dir {
+            validated.clone()
         } else {
-            p.parent()
-                .map(|parent| parent.to_string_lossy().to_string())
-                .unwrap_or_else(|| path.clone())
+            validated
+                .parent()
+                .map(|parent| parent.to_path_buf())
+                .unwrap_or_else(|| validated.clone())
         };
-        std::process::Command::new("xdg-open")
+        std::process::Command::new("/usr/bin/xdg-open")
             .arg(open_path)
             .spawn()
             .map(|_| ())

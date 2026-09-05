@@ -72,23 +72,9 @@ export const DEFAULT_CONFIG: AppConfig = {
   embedChapters: true,
 };
 
-// The canonical allow-list of accepted media extensions is documented in
-// `docs/MEDIA_EXTENSIONS.md` — that file is the contract; this list and the
-// Rust constants below are the implementations that must stay in sync.
-//
-// Adding a new extension requires updating FOUR places:
-//   1. docs/MEDIA_EXTENSIONS.md
-//   2. this file (VIDEO_EXTENSIONS / AUDIO_EXTENSIONS)
-//   3. src-tauri/src/pipeline/estimator.rs (and validation.rs if relevant)
-//   4. the EXPECTED_* sentinel list in BOTH:
-//        - src/core/config.test.ts (TypeScript sentinel)
-//        - src-tauri/src/validation.rs   (Rust sentinel)
-//
-// Both tests assert that their `EXPECTED_*` list (the same canonical
-// contract, written twice in two languages for symmetry) equals the
-// implementation constants. The doc is the human-readable truth, the
-// EXPECTED_* lists are the machine-enforced truth; an implementation that
-// drifts from either fails CI.
+// The backend independently filters media files by extension at the trust
+// boundary (`src-tauri/src/pipeline/estimator.rs`). These lists drive the
+// UI (file pickers + drop zones) only; keep them in sync with the backend.
 export const VIDEO_EXTENSIONS = [
   '.mp4',
   '.mkv',

@@ -16,7 +16,6 @@ pub struct VideoInfo {
 use std::ffi::OsStr;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::AppHandle;
 use tauri::async_runtime::Receiver;
 use tauri_plugin_shell::ShellExt;
@@ -111,16 +110,8 @@ pub async fn run_with_timeout<S: AsRef<OsStr>>(
     if let Some(ref control) = cancel_control {
         // Mirror the in-loop handling below: a pause must *terminate* this ffmpeg
         // run (so the pipeline can save state and finish) rather than block
-        // waiting for resume. The previous `wait_for_resume()` left a job
-        // hanging in the window between job start and the first stderr line,
-        // which was inconsistent with the pipeline's terminate-on-pause design
-        // (and with the in-loop branch). Cancel takes precedence, as below.
-        if control.is_cancelled() {
-            return Err(cancelled_error());
-        }
-        if control.is_paused() {
-            return Err(AppError::Paused("FFmpeg paused by user".into()));
-        }
+        // waiting for resume. Cancel takes precedence, as below.
+        control.ensure_running()?;
     }
     let sidecar_command = app
         .shell()
@@ -142,17 +133,15 @@ pub async fn run_with_timeout<S: AsRef<OsStr>>(
     // but must never extend the total lifetime of a render indefinitely.
     let absolute_deadline = tokio::time::Instant::now() + timeout_dur;
     let mut idle_deadline = tokio::time::Instant::now() + idle_timeout;
+    // Per-invocation stats-drop warning (resets every run; previously a
+    // process-wide `static` that warned only once per session).
+    let mut stats_drop_warned = false;
     loop {
-        if let Some(ref control) = cancel_control {
-            if control.is_cancelled() {
-                child_guard.terminate();
-                return Err(cancelled_error());
-            }
-            if control.is_paused() {
-                child_guard.terminate();
-                let msg = "FFmpeg paused by user".into();
-                return Err(AppError::Paused(msg));
-            }
+        if let Some(ref control) = cancel_control
+            && let Err(e) = control.ensure_running()
+        {
+            child_guard.terminate();
+            return Err(e);
         }
 
         tokio::select! {
@@ -191,13 +180,12 @@ pub async fn run_with_timeout<S: AsRef<OsStr>>(
                         if let Some(tx) = &tx_stats
                             && let Some(stats) = parse_stats(&line_cow)
                             && tx.try_send(stats).is_err()
+                            && !stats_drop_warned
                         {
-                            static WARNED: AtomicBool = AtomicBool::new(false);
-                            if !WARNED.swap(true, Ordering::Relaxed) {
-                                crate::utils::logger::log_line(
-                                    "WARNING: Render stats channel full — stats are being dropped. The UI may show stale render speed.",
-                                );
-                            }
+                            stats_drop_warned = true;
+                            crate::utils::logger::log_line(
+                                "WARNING: Render stats channel full — stats are being dropped. The UI may show stale render speed.",
+                            );
                         }
                         // Only capture non-progress lines as potential error messages
                         let trimmed = line_cow.trim();
@@ -253,10 +241,6 @@ pub async fn run_with_timeout<S: AsRef<OsStr>>(
             } => {}
         }
     }
-}
-
-fn cancelled_error() -> AppError {
-    AppError::Cancelled("Render cancelled by user".into())
 }
 
 struct CapturedOutput {
@@ -498,12 +482,7 @@ pub async fn run_loudnorm_pass1(
     use tauri_plugin_shell::process::CommandEvent;
 
     if let Some(ref c) = cancel {
-        if c.is_cancelled() {
-            return Err(cancelled_error());
-        }
-        if c.is_paused() {
-            return Err(AppError::Paused("FFmpeg paused by user".into()));
-        }
+        c.ensure_running()?;
     }
 
     let input_str = input.to_string_lossy().into_owned();
@@ -544,15 +523,11 @@ pub async fn run_loudnorm_pass1(
     let mut idle_deadline = tokio::time::Instant::now() + idle_timeout;
 
     loop {
-        if let Some(ref c) = cancel {
-            if c.is_cancelled() {
-                child_guard.terminate();
-                return Err(cancelled_error());
-            }
-            if c.is_paused() {
-                child_guard.terminate();
-                return Err(AppError::Paused("FFmpeg paused by user".into()));
-            }
+        if let Some(ref c) = cancel
+            && let Err(e) = c.ensure_running()
+        {
+            child_guard.terminate();
+            return Err(e);
         }
 
         tokio::select! {

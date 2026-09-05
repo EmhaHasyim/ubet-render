@@ -54,7 +54,17 @@ fn get_gpu_name() -> String {
     // ── Windows: PowerShell + WMIC fallback ───────────────────────────
     #[cfg(target_os = "windows")]
     {
-        let mut ps_cmd = Command::new("powershell");
+        // Absolute System32 paths so a PATH hijack cannot redirect GPU probes.
+        let system32 = std::env::var_os("SystemRoot")
+            .map(std::path::PathBuf::from)
+            .map(|r| r.join("System32"))
+            .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows\System32"));
+        let mut ps_cmd = Command::new(
+            system32
+                .join("WindowsPowerShell")
+                .join("v1.0")
+                .join("powershell.exe"),
+        );
         ps_cmd.args([
             "-NoProfile",
             "-Command",
@@ -68,7 +78,7 @@ fn get_gpu_name() -> String {
             }
         }
 
-        let mut wmic_cmd = Command::new("wmic");
+        let mut wmic_cmd = Command::new(system32.join("wbem").join("wmic.exe"));
         wmic_cmd.args(["path", "win32_VideoController", "get", "name"]);
         wmic_cmd.creation_flags(CREATE_NO_WINDOW);
         if let Ok(output) = wmic_cmd.output() {
@@ -85,7 +95,7 @@ fn get_gpu_name() -> String {
     // ── macOS: system_profiler ────────────────────────────────────────
     #[cfg(target_os = "macos")]
     {
-        if let Ok(output) = Command::new("system_profiler")
+        if let Ok(output) = Command::new("/usr/sbin/system_profiler")
             .args(["SPDisplaysDataType"])
             .output()
         {
@@ -110,7 +120,7 @@ fn get_gpu_name() -> String {
     // ── Linux: lspci ──────────────────────────────────────────────────
     #[cfg(target_os = "linux")]
     {
-        if let Ok(output) = Command::new("lspci").args(["-mm"]).output() {
+        if let Ok(output) = Command::new("/usr/bin/lspci").args(["-mm"]).output() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let gpus: Vec<String> = stdout
                 .lines()

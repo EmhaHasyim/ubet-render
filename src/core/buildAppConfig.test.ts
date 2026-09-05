@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import { buildAppConfig } from './buildAppConfig';
 import { DEFAULT_CONFIG } from './config';

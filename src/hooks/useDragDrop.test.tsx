@@ -2,44 +2,34 @@ import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import { render } from '@solidjs/testing-library';
 import type { MediaSource } from '../core/types';
 
-// jsdom doesn't support elementFromPoint — polyfill it.
-// jsdom elements have no layout, so getBoundingClientRect() returns all zeros.
-// We use a simple approach: find the deepest element whose rect contains (x,y),
-// then for the all-zero case default to the first matching dropzone.
+// No DOM simulator has real layout, so `elementFromPoint` can never resolve
+// zones truthfully. Stub it instead of polyfilling geometry: the dropzone
+// lookup (`zoneFromElement`) is covered by pure `dropZones.test.ts`, and this
+// stub overrides the native implementation in EVERY simulator (jsdom lacks it,
+// happy-dom has one), keeping these wiring tests environment-agnostic.
+// Coordinate encoding: x=1 → video, x=2 → audio, x=3 → output.
+// Module scope (not inside beforeAll): no parent variables captured, and
+// oxlint `consistent-function-scoping` requires it hoisted.
+function resolveDropTarget(x: number) {
+  const map: Record<number, string> = {
+    1: '#video-dropzone',
+    2: '#audio-dropzone',
+    3: '#output-dropzone',
+  };
+  return document.querySelector(map[x] ?? '#nonexistent');
+}
+
 beforeAll(() => {
-  if (typeof document.elementFromPoint !== 'function') {
+  // Same mapping in every simulator: override the native implementation
+  // where present (happy-dom), define it where absent (jsdom).
+  if (typeof document.elementFromPoint === 'function') {
+    vi.spyOn(document, 'elementFromPoint').mockImplementation((x) =>
+      resolveDropTarget(x),
+    );
+  } else {
     (document as unknown as Record<string, unknown>).elementFromPoint = (
       x: number,
-      y: number,
-    ) => {
-      const all = document.querySelectorAll('*');
-      // First try actual bounding rects
-      for (const el of all) {
-        const rect = el.getBoundingClientRect();
-        if (
-          rect.width > 0 &&
-          rect.height > 0 &&
-          x >= rect.left &&
-          x <= rect.right &&
-          y >= rect.top &&
-          y <= rect.bottom
-        ) {
-          return el;
-        }
-      }
-      // jsdom fallback: all rects are 0,0,0,0 → return the element whose
-      // data-test attribute matches a simple encoding of the zone.
-      // We encode the target by using x=1 for #video-dropzone, x=2 for
-      // #audio-dropzone, x=3 for #output-dropzone.
-      const map: Record<number, string> = {
-        1: '#video-dropzone',
-        2: '#audio-dropzone',
-        3: '#output-dropzone',
-      };
-      const selector = map[x];
-      if (selector) return document.querySelector(selector);
-      return null;
-    };
+    ) => resolveDropTarget(x);
   }
 });
 

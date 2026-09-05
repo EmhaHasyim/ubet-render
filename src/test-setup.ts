@@ -1,3 +1,14 @@
+// jest-dom matchers need a DOM; pure-logic files run under
+// `// @vitest-environment node`, so import them lazily. Top-level await is
+// supported in Vitest setup files and resolves before any test file runs.
+// Makes this a module so top-level await is legal; the braces are
+// intentionally empty (side-effect-only setup file).
+// oxlint-disable-next-line unicorn/require-module-specifiers
+export {};
+if (typeof document !== 'undefined') {
+  await import('@testing-library/jest-dom/vitest');
+}
+
 /**
  * Test setup — runs before every test file.
  *
@@ -45,8 +56,12 @@ if (
  * Polyfill `<dialog>.showModal()` / `.close()` for jsdom, which does not
  * implement the HTMLDialogElement API.  We patch `HTMLElement.prototype`
  * (always available) rather than `HTMLDialogElement` (undefined in jsdom).
+ * Skipped entirely under `node` (no `HTMLElement` there).
  */
-if (!('showModal' in HTMLElement.prototype)) {
+if (
+  typeof HTMLElement !== 'undefined' &&
+  !('showModal' in HTMLElement.prototype)
+) {
   (HTMLElement.prototype as unknown as Record<string, unknown>).showModal =
     function (this: HTMLElement) {
       this.setAttribute('open', '');

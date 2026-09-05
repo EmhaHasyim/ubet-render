@@ -1,13 +1,19 @@
-import { createSignal, ErrorBoundary } from 'solid-js';
+import { createSignal, ErrorBoundary, onMount } from 'solid-js';
 import { PipelineBridge, Dashboard } from './components/layout/Dashboard';
 import { FatalScreen } from './components/ui/FatalScreen';
 import { ShortcutsDialog } from './components/ui/ShortcutsDialog';
 import { useAppShortcuts, type AppTabId } from './hooks/useAppShortcuts';
 import { ToastViewport } from './components/ui/Toast';
+import { checkForUpdates } from './core/updater';
 
 export default function App() {
   const [activeTab, setActiveTab] = createSignal<AppTabId>('renderer');
   const { isShortcutsOpen, closeShortcuts } = useAppShortcuts(setActiveTab);
+
+  // Check for a new release on startup (production builds only).
+  onMount(() => {
+    void checkForUpdates();
+  });
 
   return (
     <ErrorBoundary

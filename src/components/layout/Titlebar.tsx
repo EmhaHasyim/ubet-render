@@ -6,7 +6,7 @@ import {
   type Accessor,
   type Setter,
 } from 'solid-js';
-import { Icon } from '@iconify-icon/solid';
+import { Icon } from '../ui/Icon';
 import {
   applyTheme,
   loadTheme,

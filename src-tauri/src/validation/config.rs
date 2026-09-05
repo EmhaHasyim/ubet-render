@@ -232,6 +232,23 @@ pub fn validate_loudnorm_params(params: &str) -> Result<(), AppError> {
                 params, prefix
             )));
         }
+        let parsed: f64 = value.parse().map_err(|_| {
+            AppError::Pipeline(format!(
+                "Invalid loudnorm_params value for '{}': '{}'",
+                prefix, value
+            ))
+        })?;
+        let (lo, hi) = match *prefix {
+            "I=" => LOUDNORM_I_RANGE,
+            "LRA=" => LOUDNORM_LRA_RANGE,
+            _ => LOUDNORM_TP_RANGE,
+        };
+        if !(lo..=hi).contains(&parsed) {
+            return Err(AppError::Pipeline(format!(
+                "loudnorm_params value for '{}' out of range ({}..{}): '{}'",
+                prefix, lo, hi, value
+            )));
+        }
     }
     Ok(())
 }

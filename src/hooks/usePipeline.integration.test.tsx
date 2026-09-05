@@ -6,7 +6,8 @@
  * receiving events (Log, Progress, Stats, Done), and verifying that every
  * reactive signal updates correctly at each stage.
  *
- * All Tauri IPC calls are mocked so the test runs entirely in jsdom.
+ * All Tauri IPC calls are mocked so the test runs entirely in the
+ * happy-dom test environment.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render } from '@solidjs/testing-library';

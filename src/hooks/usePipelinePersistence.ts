@@ -11,25 +11,21 @@ import { showToast } from '../core/toast';
 
 const log = createLogger('usePipeline');
 const SAVE_DEBOUNCE_MS = 500;
-const RETRY_COUNT = 3;
-const RETRY_BASE_DELAY_MS = 250;
 
 export interface PipelinePersistence {
   /** Flushes the latest snapshot and resolves false when all attempts fail. */
   flush: () => Promise<boolean>;
 }
 
-const wait = (ms: number): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, ms));
-
 /**
  * Persist the subset of frontend settings represented by the backend
  * AppConfig. Render-only overrides such as output format and loop mode are
  * intentionally excluded because they are sent with start_render instead.
  *
- * Saves are debounced during editing, retried after transient IPC/filesystem
- * failures, and exposed through `flush()` so a render never starts while the
- * backend is knowingly holding an older configuration.
+ * Saves are debounced during editing and exposed through `flush()` so a
+ * render never starts while the backend is knowingly holding an older
+ * configuration. A failed write surfaces a toast; retrying won't fix a
+ * disk-full or permission error, so the user retries via the UI.
  */
 export function usePipelinePersistence(
   config: BackendConfigSnapshot,
@@ -43,43 +39,30 @@ export function usePipelinePersistence(
     if (persistTimer !== null) clearTimeout(persistTimer);
     persistTimer = setTimeout(() => {
       persistTimer = null;
-      void saveWithRetry();
+      void save();
     }, SAVE_DEBOUNCE_MS);
   };
 
-  const saveSnapshotWithRetry = async (
-    snapshot: AppConfig,
-    attempt = 0,
-  ): Promise<boolean> => {
+  const saveSnapshot = async (snapshot: AppConfig): Promise<boolean> => {
     try {
       await invoke(TAURI_COMMANDS.saveConfig, { config: snapshot });
-      // A newer edit may have arrived while this request was in flight.
-      // Keep tracking for the next save attempt.
       return true;
     } catch (err) {
-      log.error(
-        `Failed to save backend config (attempt ${attempt + 1}/${RETRY_COUNT}):`,
-        err,
-      );
-      if (attempt + 1 < RETRY_COUNT) {
-        await wait(RETRY_BASE_DELAY_MS * 2 ** attempt);
-        return saveSnapshotWithRetry(snapshot, attempt + 1);
-      }
+      log.error('Failed to save backend config:', err);
+      showToast('Settings could not be saved to disk', {
+        variant: 'warning',
+        ttl: 5000,
+      });
+      return false;
     }
-
-    showToast('Settings could not be saved to disk', {
-      variant: 'warning',
-      ttl: 5000,
-    });
-    return false;
   };
 
-  const saveWithRetry = (): Promise<boolean> => {
+  const save = (): Promise<boolean> => {
     if (latestConfig === null) return Promise.resolve(true);
     if (saveInFlight !== null) return saveInFlight;
 
     const snapshot = latestConfig;
-    const task = saveSnapshotWithRetry(snapshot);
+    const task = saveSnapshot(snapshot);
 
     saveInFlight = task.finally(() => {
       saveInFlight = null;
@@ -122,7 +105,7 @@ export function usePipelinePersistence(
     const flushLatest = async (): Promise<boolean> => {
       const snapshot = latestConfig;
       if (snapshot === null) return true;
-      if (!(await saveWithRetry())) return false;
+      if (!(await save())) return false;
       return latestConfig === snapshot ? true : flushLatest();
     };
     return flushLatest();
@@ -132,7 +115,7 @@ export function usePipelinePersistence(
     if (persistTimer !== null) clearTimeout(persistTimer);
     // A cleanup cannot await, but starting the final save prevents the common
     // remount/error-boundary path from dropping a pending backend snapshot.
-    void saveWithRetry();
+    void save();
   });
 
   return { flush };

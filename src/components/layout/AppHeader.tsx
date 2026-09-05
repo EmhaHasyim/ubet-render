@@ -1,5 +1,5 @@
 import { Show, createSignal, createEffect } from 'solid-js';
-import { Icon } from '@iconify-icon/solid';
+import { Icon } from '../ui/Icon';
 import { rememberFocus } from '../../core/focus';
 
 export function AppHeader(props: {

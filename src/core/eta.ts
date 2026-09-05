@@ -24,7 +24,12 @@ export class EtaCalculator {
     // Update the EMA with the instantaneous rate of this sample so the
     // ETA reacts quickly to stalls (sudden rate drop) while still smoothing
     // noise from individual ffmpeg progress lines.
-    if (elapsedMs > 0) {
+    if (
+      Number.isFinite(elapsedMs) &&
+      elapsedMs > 0 &&
+      Number.isFinite(progressGained) &&
+      progressGained > 0
+    ) {
       const instantRate = progressGained / elapsedMs;
       if (this.emaRate === 0) {
         this.emaRate = instantRate;

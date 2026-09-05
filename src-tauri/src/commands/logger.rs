@@ -21,10 +21,17 @@ pub struct FrontendLogEntry {
 /// their timestamp formatting.
 #[tauri::command]
 pub fn log_to_file(entries: Vec<FrontendLogEntry>) {
-    for entry in entries {
-        logger::log_line(&format!(
-            "[frontend] [{}] [{}] {}",
-            entry.context, entry.level, entry.message
-        ));
+    // DoS / log-forgery guard: cap batch size and strip CR/LF so one IPC
+    // call cannot fill the disk or fake multi-line log entries.
+    let capped = entries
+        .into_iter()
+        .take(crate::validation::limits::MAX_FRONTEND_LOG_BATCH);
+    for entry in capped {
+        let context = entry.context.replace(['\n', '\r'], " ");
+        let level = entry.level.replace(['\n', '\r'], " ");
+        let message = entry.message.replace(['\n', '\r'], " ");
+        // Truncate pathological single lines (10KB cap keeps the file readable).
+        let message = message.chars().take(10_000).collect::<String>();
+        logger::log_line(&format!("[frontend] [{}] [{}] {}", context, level, message));
     }
 }

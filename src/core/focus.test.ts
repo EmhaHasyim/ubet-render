@@ -20,8 +20,8 @@ beforeEach(() => {
  * spy) and produced two false negatives.
  *
  * The four contract tests below verify the public guarantee without
- * depending on focus-chain semantics — they pass identically under jsdom
- * and a real browser DOM.
+ * depending on focus-chain semantics — they pass identically under any
+ * DOM simulator (happy-dom today) and a real browser DOM.
  */
 describe('rememberFocus', () => {
   it('returns a callable function', () => {
@@ -43,7 +43,7 @@ describe('rememberFocus', () => {
   });
 
   it('the returned function is a no-op when the captured element has been removed from the DOM', () => {
-    // jsdom does not promote a freshly-appended element to
+    // DOM simulators do not promote a freshly-appended element to
     // `document.activeElement` after `.focus()`. To exercise the
     // detached-target early-return branch we override the getter while
     // `rememberFocus()` reads it, then restore the original descriptor.

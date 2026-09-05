@@ -30,11 +30,6 @@ fn format_pipeline_event(event: &PipelineEvent) -> String {
         PipelineEvent::Log { level, message } => {
             format!("[{}] {}", level.to_uppercase(), message)
         }
-        PipelineEvent::Progress {
-            total, completed, ..
-        } => {
-            format!("PROGRESS {}/{}", completed, total)
-        }
         PipelineEvent::Done {
             completed,
             total,
@@ -49,16 +44,9 @@ fn format_pipeline_event(event: &PipelineEvent) -> String {
         PipelineEvent::FatalError(msg) => {
             format!("FATAL: {}", msg)
         }
-        PipelineEvent::Stats {
-            speed,
-            bitrate_kbps,
-            fps,
-        } => {
-            format!(
-                "STATS speed={:.2}x bitrate={:.0}kbps fps={:.1}",
-                speed, bitrate_kbps, fps
-            )
-        }
+        // Unreachable in production: `emit` filters Progress/Stats before
+        // calling the formatter. Kept as a wildcard for exhaustive matching.
+        _ => String::new(),
     }
 }
 
@@ -94,14 +82,4 @@ mod tests {
         assert!(formatted.contains("CANCELLED"));
     }
 
-    #[test]
-    fn test_format_stats() {
-        let event = PipelineEvent::Stats {
-            speed: 2.5,
-            bitrate_kbps: 4123.4,
-            fps: 29.97,
-        };
-        let formatted = format_pipeline_event(&event);
-        assert!(formatted.contains("speed=2.50x"));
-    }
 }

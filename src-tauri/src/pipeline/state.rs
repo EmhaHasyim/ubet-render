@@ -1,7 +1,6 @@
 use crate::error::AppError;
 use crate::models::job::{JobProgress, JobState, PipelineEvent, RenderJob};
 use crate::utils::event;
-use serde::Serialize;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -12,21 +11,6 @@ use tauri::AppHandle;
 /// without throttling the pipeline would clone + serialize the entire job list
 /// on every line.
 const EMIT_INTERVAL_MS: u64 = 120;
-
-/// Compact job representation for state serialisation. Timestamps are kept
-/// because completed jobs are skipped on resume; omitting them would make the
-/// final combined `all_timestamps.txt` incomplete after a partial render.
-/// The playlist generator emits a bounded, compact timestamp list per job.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RenderJobState {
-    video: crate::models::media::VideoFile,
-    state: JobState,
-    progress_percent: u8,
-    current_step: String,
-    error: Option<String>,
-    timestamps: Vec<String>,
-}
 
 /// Manages render-state persistence and progress emission for the pipeline.
 pub struct StateManager {
@@ -43,43 +27,20 @@ impl StateManager {
     }
 
     pub async fn save_state(&self, state_path: &Path, jobs: &[RenderJob]) -> Result<(), AppError> {
-        let state_jobs: Vec<RenderJobState> = jobs
-            .iter()
-            .map(|j| RenderJobState {
-                video: j.video.clone(),
-                state: j.state.clone(),
-                progress_percent: j.progress_percent,
-                current_step: j.current_step.clone(),
-                error: j.error.clone(),
-                timestamps: j.timestamps.clone(),
-            })
-            .collect();
-        self.save_state_jobs(state_path, &state_jobs).await
+        self.save_state_jobs(state_path, jobs).await
     }
 
+    /// Serialize jobs to the state file atomically (tmp file + replace),
+    /// off the async executor. `RenderJob` itself derives `Serialize`.
     async fn save_state_jobs(
         &self,
         state_path: &Path,
-        state_jobs: &[RenderJobState],
+        jobs: &[RenderJob],
     ) -> Result<(), AppError> {
-        let json =
-            serde_json::to_string(state_jobs).map_err(|e| AppError::Pipeline(e.to_string()))?;
-        let state_path = state_path.to_path_buf();
-        let temp_path = state_path.with_extension("tmp");
-        tokio::task::spawn_blocking(move || {
-            use std::io::Write;
-            let mut file =
-                std::fs::File::create(&temp_path).map_err(|e| AppError::Pipeline(e.to_string()))?;
-            file.write_all(json.as_bytes())
-                .map_err(|e| AppError::Pipeline(e.to_string()))?;
-            file.sync_all()
-                .map_err(|e| AppError::Pipeline(e.to_string()))?;
-            crate::utils::fs::atomic_replace(&temp_path, &state_path)
-                .map_err(|e| AppError::Pipeline(e.to_string()))?;
-            Ok(())
-        })
-        .await
-        .map_err(|e| AppError::Pipeline(format!("spawn_blocking panicked: {}", e)))?
+        let json = serde_json::to_string(jobs).map_err(|e| AppError::Pipeline(e.to_string()))?;
+        crate::utils::fs::atomic_write(state_path, json.into_bytes())
+            .await
+            .map_err(AppError::Io)
     }
 
     pub async fn save_state_from_arc(
@@ -105,23 +66,10 @@ impl StateManager {
         {
             return Ok(());
         }
-        // Build the lightweight serialisable snapshot while holding the lock,
-        // then release it before the blocking file write to avoid stalling
-        // progress updates.
-        let state_jobs: Vec<RenderJobState> = {
-            let jobs = jobs_arc.lock().await;
-            jobs.iter()
-                .map(|j| RenderJobState {
-                    video: j.video.clone(),
-                    state: j.state.clone(),
-                    progress_percent: j.progress_percent,
-                    current_step: j.current_step.clone(),
-                    error: j.error.clone(),
-                    timestamps: j.timestamps.clone(),
-                })
-                .collect()
-        };
-        self.save_state_jobs(state_path, &state_jobs).await
+        // Clone the job list while holding the lock, then release it before
+        // the blocking file write to avoid stalling progress updates.
+        let jobs = jobs_arc.lock().await.clone();
+        self.save_state_jobs(state_path, &jobs).await
     }
 
     pub async fn emit_progress_from_arc(

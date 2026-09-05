@@ -1,4 +1,4 @@
-import { Icon } from '@iconify-icon/solid';
+import { Icon } from '../ui/Icon';
 import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import {

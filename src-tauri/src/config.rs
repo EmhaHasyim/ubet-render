@@ -108,7 +108,7 @@ impl Default for AudioSettings {
             concurrent_prep: 5,
             bitrate: "192k".into(),
             sample_rate: 44100,
-            loudnorm_params: "I=-14:LRA=11:TP=-1".into(),
+            loudnorm_params: crate::validation::limits::LOUDNORM_DEFAULT.into(),
             audio_mode: "original".into(),
         }
     }
