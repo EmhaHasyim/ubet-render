@@ -156,7 +156,6 @@ impl RenderControl {
         }
         Ok(())
     }
-
 }
 
 impl Default for RenderControl {

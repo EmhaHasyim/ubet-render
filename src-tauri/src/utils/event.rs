@@ -81,5 +81,4 @@ mod tests {
         let formatted = format_pipeline_event(&event);
         assert!(formatted.contains("CANCELLED"));
     }
-
 }

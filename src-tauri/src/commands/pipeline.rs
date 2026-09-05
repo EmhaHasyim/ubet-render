@@ -203,9 +203,9 @@ pub async fn cancel_render(state: tauri::State<'_, crate::RenderState>) -> Resul
     // panic.
     match tokio::time::timeout(Duration::from_secs(30), control.wait_for_cleanup()).await {
         Ok(()) => Ok(true),
-        Err(_) => Err(
-            "Cancellation requested, but the render did not terminate within 30 seconds".into(),
-        ),
+        Err(_) => {
+            Err("Cancellation requested, but the render did not terminate within 30 seconds".into())
+        }
     }
 }
 

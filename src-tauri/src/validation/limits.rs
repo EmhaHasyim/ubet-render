@@ -61,4 +61,3 @@ pub const LOUDNORM_TP_RANGE: (f64, f64) = (-9.0, 0.0);
 
 /// Max frontend log entries accepted per `log_to_file` call (DoS guard).
 pub const MAX_FRONTEND_LOG_BATCH: usize = 100;
-

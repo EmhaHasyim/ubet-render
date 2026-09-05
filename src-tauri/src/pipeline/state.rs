@@ -32,11 +32,7 @@ impl StateManager {
 
     /// Serialize jobs to the state file atomically (tmp file + replace),
     /// off the async executor. `RenderJob` itself derives `Serialize`.
-    async fn save_state_jobs(
-        &self,
-        state_path: &Path,
-        jobs: &[RenderJob],
-    ) -> Result<(), AppError> {
+    async fn save_state_jobs(&self, state_path: &Path, jobs: &[RenderJob]) -> Result<(), AppError> {
         let json = serde_json::to_string(jobs).map_err(|e| AppError::Pipeline(e.to_string()))?;
         crate::utils::fs::atomic_write(state_path, json.into_bytes())
             .await
