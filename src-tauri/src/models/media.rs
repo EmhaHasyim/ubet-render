@@ -20,7 +20,7 @@ pub struct VideoFile {
 ///
 /// Used by `audio_pool` to decide between three encoding strategies:
 /// 1. **Smart-skip** (`-c copy`) — when the source already matches the target
-///    pipeline (AAC, same sample rate, exactly 2 channels, and a known
+///    pipeline (AAC-LC, same sample rate, exactly 2 channels, and a known
 ///    bitrate that does not exceed the requested one).
 /// 2. **Two-pass loudnorm** — when the user asked for YouTube-Music-grade
 ///    normalization AND the source is not smart-skip-eligible.
@@ -29,9 +29,14 @@ pub struct VideoFile {
 /// `bit_rate` is intentionally `Option<u32>` because many AAC sources
 /// (especially .m4a with VBR) report `N/A` for `bit_rate`; the consumer
 /// treats `None` as "cannot compare, fall through to re-encode".
+/// `profile` is `Option<String>` for the same reason — when ffprobe does not
+/// report one, the consumer must not assume AAC-LC and re-encodes instead.
 #[derive(Debug, Clone)]
 pub struct AudioInfo {
     pub codec: String,
+    /// FFmpeg profile name for the first audio stream (e.g. `LC` for AAC-LC,
+    /// `HE-AAC`/`HE-AACv2` for SBR/PS variants). `None` when unreported.
+    pub profile: Option<String>,
     pub sample_rate: u32,
     pub channels: u32,
     pub bit_rate: Option<u32>,

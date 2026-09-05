@@ -4,6 +4,40 @@ All notable changes to Ubet Render are documented in this file.
 
 ---
 
+## [0.4.1] — 2026-09-05
+
+### Fixed
+
+- **Log filter no longer hides `[SUCCESS]` lines**: turning off any filter chip
+  made every success line (including the Rust milestone logs like
+  `Videos: N/M done`) vanish with no way to bring them back — success lines
+  are now always visible regardless of the active chips.
+- **Smart-skip now truly requires AAC-LC**: ffprobe reads the audio stream
+  profile, and HE-AAC / HE-AACv2 (or unknown-profile) sources are re-encoded
+  instead of stream-copied, so the master pool stays a uniform AAC-LC layout
+  as the concat step assumes.
+- **ETA for exact hours reads "5h left"** instead of the noisy "5h 0m left".
+
+### Changed
+
+- Video concat playlists are capped at 10,000 lines with a warning, mirroring
+  the audio-side cap (guards the unbounded-playlist path for sub-second clips
+  against multi-hour targets).
+- Cross-language mirror checks (media extension/limit/loudnorm constants) moved
+  to Rust-side tests that read the frontend sources directly, so drift from
+  either side is caught in CI without a new dependency.
+
+### Cleanup
+
+- Fixed the inverted event-routing comment, removed an orphaned loudnorm doc
+  block that rustdoc attached to the wrong function, and aligned the
+  `useAppShortcuts` docstring with actual behavior.
+- Refreshed stale README claims (virtual scroller, ring buffer, jsdom test
+  setup, iconify icons) and dropped the outdated test count from
+  `test-setup.ts` / `vitest.config.ts`.
+
+---
+
 ## [0.4.0] — 2026-09-05
 
 ### Added

@@ -244,3 +244,56 @@ mod tests {
         assert!(result.contains("CON"));
     }
 }
+
+#[cfg(test)]
+mod ts_extension_mirror {
+    //! Drift guard: `src/core/config.ts` mirrors `VIDEO_EXTENSIONS` and
+    //! `AUDIO_EXTENSIONS` (see the "keep in sync" comments above). Reading the
+    //! TS file at compile time means a change on either side fails `cargo test`.
+
+    use super::{AUDIO_EXTENSIONS, VIDEO_EXTENSIONS};
+
+    const TS_CONFIG: &str = include_str!("../../../src/core/config.ts");
+
+    /// Extract the single-quoted strings from `NAME = ['…', …]`.
+    fn ts_string_list(source: &str, name: &str) -> Vec<String> {
+        let start = source
+            .find(&format!("{} = [", name))
+            .unwrap_or_else(|| panic!("TS const `{}` not found", name));
+        let open = start + source[start..].find('[').expect("opening bracket");
+        let close_rel = source[open + 1..].find(']').expect("closing bracket");
+        let body = &source[open + 1..open + 1 + close_rel];
+        let mut out = Vec::new();
+        let mut rest = body;
+        while let Some(quote) = rest.find('\'') {
+            let after = &rest[quote + 1..];
+            match after.find('\'') {
+                Some(end) => {
+                    out.push(after[..end].to_string());
+                    rest = &after[end + 1..];
+                }
+                None => break,
+            }
+        }
+        out
+    }
+
+    fn sorted(mut list: Vec<String>) -> Vec<String> {
+        list.sort();
+        list
+    }
+
+    #[test]
+    fn video_extensions_match_ts() {
+        let ts = sorted(ts_string_list(TS_CONFIG, "VIDEO_EXTENSIONS"));
+        let rust = sorted(VIDEO_EXTENSIONS.iter().map(|s| s.to_string()).collect());
+        assert_eq!(ts, rust, "VIDEO_EXTENSIONS drifted from src/core/config.ts");
+    }
+
+    #[test]
+    fn audio_extensions_match_ts() {
+        let ts = sorted(ts_string_list(TS_CONFIG, "AUDIO_EXTENSIONS"));
+        let rust = sorted(AUDIO_EXTENSIONS.iter().map(|s| s.to_string()).collect());
+        assert_eq!(ts, rust, "AUDIO_EXTENSIONS drifted from src/core/config.ts");
+    }
+}

@@ -31,14 +31,14 @@ Making long-form looped videos (1-hour lo-fi mixes, stream screens, ambient soun
 | ------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------- |
 | **Frontend framework**    | [SolidJS](https://www.solidjs.com/) v1.9                                         | Fine-grained reactivity, no virtual DOM overhead, tiny bundles |
 | **UI toolkit**            | [Tailwind CSS](https://tailwindcss.com/) v4 + [DaisyUI](https://daisyui.com/) v5 | Utility-first + pre-built components for rapid, consistent UIs |
-| **Icons**                 | [Lucide](https://lucide.dev/) via `@iconify-icon/solid`                          | Consistent, tree-shakeable icon set                            |
+| **Icons**                 | [Lucide](https://lucide.dev/) (inlined SVG bodies, no icon runtime)              | Consistent, dependency-free icon set                           |
 | **Desktop wrapper**       | [Tauri](https://v2.tauri.app/) v2                                                | OS integration, Rust bridge, tiny binary size (~5 MB)          |
 | **Core engine**           | Rust (tokio async + FFmpeg wrappers)                                             | Safe, fast, predictable                                        |
 | **Build tool**            | [Vite](https://vite.dev/) v8                                                     | Lightning-fast HMR and bundling                                |
 | **Runtime / package mgr** | [Bun](https://bun.sh/)                                                           | Fast installs and scripts                                      |
 | **Linting**               | [oxlint](https://oxc.rs/)                                                        | Rust-based linter, ~50× faster than ESLint                     |
 | **Formatting**            | [oxfmt](https://oxc.rs/)                                                         | Rust-based formatter                                           |
-| **Testing**               | [Vitest](https://vitest.dev/) v4 + jsdom + `@solidjs/testing-library`            | Fast, native ESM test runner                                   |
+| **Testing**               | [Vitest](https://vitest.dev/) v4 + happy-dom + `@solidjs/testing-library`        | Fast, native ESM test runner                                   |
 | **Pre-commit**            | Husky + lint-staged                                                              | Automated lint/format on every commit                          |
 
 ---
@@ -113,8 +113,8 @@ src/
       │  [Tab: Activity]                         │
       │  ┌─ Grid ───────────────────────────┐   │
       │  │  JobTable                 │ Logs │   │
-      │  │  (queue, progress,       │ (virtual   │
-      │  │   thumbnails)            │  scrolled) │
+      │  │  (queue, progress,       │ (capped,   │
+      │  │   thumbnails)            │ (filtered) │
       │  └──────────────────────────────────┘   │
       └──────────────────────────────────────────┘
     </PipelineBridge>
@@ -142,7 +142,7 @@ Component calls pipeline setter (e.g. `pipeline.setCodec('h265')`)
                       ├─▶ listen('pipeline-event') → event handler
                       ├─▶ invoke('start_render', { config, overrides })
                       └─▶ Events received:
-                            ├─ Log     → appendLog() → virtual-scrolled LogViewer
+                            ├─ Log     → appendLog() → LogViewer
                             ├─ Stats   → liveStats() → StatsStrip
                             ├─ Progress → jobs() + overallProgress() → JobTable + Progress bars
                             ├─ Done     → setRunning(false) + notify()
@@ -155,21 +155,26 @@ Component calls pipeline setter (e.g. `pipeline.setCodec('h265')`)
 
 ## Key Implementation Patterns
 
-### 1. Virtual Scrolling (LogViewer)
+### 1. Capped Log Rendering (LogViewer)
 
-The log viewer uses a **padding-trick virtual scroller** instead of rendering all 2000+ log lines into the DOM:
+The log viewer renders the capped log directly rather than virtualising it:
 
-- A `ResizeObserver` tracks the viewport height.
-- On scroll, only ~30–50 visible items + overscan are rendered.
-- Correct scroll height is maintained via `padding-top` and `padding-bottom` on a wrapper `<div>`.
+- `useRenderLogs` caps the store at 2000 lines and flushes new lines to the
+  SolidJS signal in batches (every 10 lines, or after a 100 ms idle timeout),
+  so the DOM isn't rewritten on every backend event.
 - Auto-scroll only triggers when the user is near the bottom; scrolling up pauses auto-scroll.
+- A `ResizeObserver` re-pins the view to the bottom when the container is
+  resized while auto-scrolling.
 
-### 2. Ring Buffer for Logs + ETA
+### 2. Buffered Logs + EMA ETA
 
 To avoid GC pressure during high-frequency FFmpeg output:
 
-- **Log ring buffer**: Pre-allocated array of 2000 entries. New lines overwrite old ones. Flushed to the SolidJS signal every 10 lines via `flushLogs()`.
-- **ETA ring buffer**: Pre-allocated array of 10 `{ elapsed, gained }` samples. A sliding-window average estimates remaining time without allocations.
+- **Log batching**: incoming lines accumulate in a plain array and flush to
+  the store in batches (see above) instead of one signal update per event.
+- **ETA**: `EtaCalculator` keeps an exponential moving average of the
+  %-per-ms render rate; every progress event feeds one sample and
+  `estimateRemaining()` projects the remainder from the EMA.
 
 ### 3. Error Boundary + Recoverable Pipeline Bridge
 
@@ -190,7 +195,7 @@ Persisted settings use a versioned schema with a migration system:
 
 - **Tauri native** `onDragDropEvent` for the production Tauri webview (provides full file paths).
 - **HTML5 DnD** fallback for browser dev mode (uses `dataTransfer.files`).
-- Shared `hitTestDropzone()` and `filterPaths()` utilities.
+- Shared pure utilities (`zoneFromElement`, `dispatchDropPaths`, `filterPathsByExt`) keep zone/extension logic DOM-free and testable.
 
 ### 6. Hardware Detection & Encoder Selection
 
@@ -202,18 +207,18 @@ Persisted settings use a versioned schema with a migration system:
 
 ## Scripts
 
-| Script                  | Purpose                                                          |
-| ----------------------- | ---------------------------------------------------------------- |
-| `bun dev` / `bun start` | Start Vite dev server                                            |
-| `bun build`             | Production build                                                 |
-| `bun tauri dev`         | Tauri dev mode (desktop window)                                  |
-| `bun tauri build`       | Production desktop build                                         |
-| `bun test`              | Run all vitest tests                                             |
-| `bun lint`              | Run oxlint                                                       |
-| `bun lint:fix`          | Run oxlint with auto-fix                                         |
-| `bun format`            | Run oxfmt (formats staged `.ts`, `.tsx`, `.css`, `.json`, `.md`) |
-| `bun format:check`      | Check formatting (CI)                                            |
-| `bun prepare`           | Initialize Husky hooks (auto-run after `bun install`)            |
+| Script             | Purpose                                                          |
+| ------------------ | ---------------------------------------------------------------- |
+| `bun dev`          | Start Vite dev server                                            |
+| `bun build`        | Production build                                                 |
+| `bun tauri dev`    | Tauri dev mode (desktop window)                                  |
+| `bun tauri build`  | Production desktop build                                         |
+| `bun test`         | Run all vitest tests                                             |
+| `bun lint`         | Run oxlint                                                       |
+| `bun lint:fix`     | Run oxlint with auto-fix                                         |
+| `bun format`       | Run oxfmt (formats staged `.ts`, `.tsx`, `.css`, `.json`, `.md`) |
+| `bun format:check` | Check formatting (CI)                                            |
+| `bun prepare`      | Initialize Husky hooks (auto-run after `bun install`)            |
 
 ---
 
@@ -260,7 +265,7 @@ prints it on exit. The README intentionally avoids hard-coding the number so
 it does not drift as soon as a new test is added.
 
 ```bash
-bun run test             # Run all tests (≈95 tests, Vitest + jsdom)
+bun run test             # Run all tests (400+ Vitest tests)
 bun run test --watch     # Watch mode
 bun run test src/core/persisted.test.ts  # Single file
 ```
@@ -275,7 +280,7 @@ bun run test src/core/persisted.test.ts  # Single file
 
 ## Project Status
 
-**Version:** 0.4.0 • **License:** MIT
+**Version:** 0.4.1 • **License:** MIT
 
 See [CHANGELOG.md](./CHANGELOG.md) for the full release history, and
 [RELEASE.md](./RELEASE.md) for how releases are cut.

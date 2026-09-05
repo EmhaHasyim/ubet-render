@@ -4,9 +4,9 @@ use tauri::Emitter;
 
 /// Emit a [`PipelineEvent`] to the frontend **and** persist it to the log
 /// file (when the logger has been initialised). High-frequency events such
-/// as `Progress` and `Stats` are written to the log but NOT to the frontend
-/// when the event type would be too verbose — instead they are already sent
-/// via their dedicated channels.
+/// as `Progress` and `Stats` are forwarded to the frontend but skipped from
+/// the on-disk log: they arrive many times per second and writing every one
+/// would bloat the log by megabytes over a long render.
 pub fn emit(app_handle: &tauri::AppHandle, event: PipelineEvent) {
     // Persist to the on-disk log file (best-effort).
     // High-frequency events (Progress, Stats) are skipped to avoid log bloat:

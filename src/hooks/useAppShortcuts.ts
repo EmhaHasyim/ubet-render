@@ -22,7 +22,12 @@ export interface AppShortcuts {
  *
  * Render controls (Ctrl+Enter/P/C) live in `Dashboard.tsx` because they need
  * live pipeline state. The two owners listen for disjoint key sets so they
- * never compete; both skip INPUT/TEXTAREA/SELECT targets.
+ * never compete.
+ *
+ * Window-level shortcuts (F1, Ctrl+W, F11, Ctrl+Shift+M) are intentionally
+ * global — they apply even while typing so a render can be backgrounded or
+ * fullscreened from anywhere. Only the Ctrl+1/2 tab switches are suppressed
+ * inside INPUT/TEXTAREA/SELECT so typing is never hijacked.
  */
 export function useAppShortcuts(setActiveTab: Setter<AppTabId>): AppShortcuts {
   const [isShortcutsOpen, setShortcutsOpen] = createSignal(false);
@@ -54,7 +59,8 @@ export function useAppShortcuts(setActiveTab: Setter<AppTabId>): AppShortcuts {
       const isTyping =
         tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
       const mod = event.metaKey || event.ctrlKey;
-      // Don't hijack typing for tab switches; F1/W/F11/M still apply.
+      // Only tab switches are suppressed while typing; the window-level
+      // shortcuts (F1/W/F11/M) deliberately still apply (see module doc).
       if (isTyping && mod && (event.key === '1' || event.key === '2')) return;
 
       // F1 → toggle the shortcuts dialog.

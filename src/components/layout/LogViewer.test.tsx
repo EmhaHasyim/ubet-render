@@ -1,4 +1,4 @@
-import { render, screen } from '@solidjs/testing-library';
+import { render, screen, fireEvent } from '@solidjs/testing-library';
 import { describe, it, expect } from 'vitest';
 import { LogViewer } from './LogViewer';
 
@@ -31,5 +31,22 @@ describe('LogViewer', () => {
   it('renders heading', () => {
     render(() => <LogViewer logs={[]} />);
     expect(screen.getByText('Logs')).toBeTruthy();
+  });
+
+  it('keeps [SUCCESS] lines visible when another level chip is disabled', () => {
+    render(() => (
+      <LogViewer
+        logs={['[INFO] starting', '[WARN] watch out', '[SUCCESS] 10/10 done']}
+      />
+    ));
+
+    // Turn the INFO chip off. INFO lines disappear…
+    fireEvent.click(screen.getByTestId('log-filter-info'));
+    expect(screen.queryByText('[INFO] starting')).toBeNull();
+
+    // …but SUCCESS has no toggle chip of its own, so its lines must stay
+    // visible (previously they vanished under any active filter).
+    expect(screen.getByText('[WARN] watch out')).toBeTruthy();
+    expect(screen.getByText('[SUCCESS] 10/10 done')).toBeTruthy();
   });
 });

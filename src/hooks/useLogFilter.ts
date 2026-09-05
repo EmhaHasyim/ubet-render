@@ -74,7 +74,14 @@ export function useLogFilter(logs: () => string[]) {
     const allOn = levels.size === ALL_LEVELS.length;
 
     return logs().filter((line) => {
-      if (!allOn && !levels.has(parseLevel(line) ?? 'INFO')) return false;
+      const level = parseLevel(line);
+      // SUCCESS has no toggle chip (see FILTERABLE_LEVELS), so a success
+      // line must stay visible under any filter combination — otherwise
+      // disabling one chip would silently drop every `[SUCCESS]` line with
+      // no way to bring them back.
+      if (level !== 'SUCCESS' && !allOn && !levels.has(level ?? 'INFO')) {
+        return false;
+      }
       return !query || line.toLowerCase().includes(query);
     });
   });

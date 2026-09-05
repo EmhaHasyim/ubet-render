@@ -49,6 +49,11 @@ export function useHardware(
       });
   });
 
+  // ponytail: GPU-vendor substring → encoder is a heuristic, not a probe.
+  // An unexpected brand string falls back to software, and a wrong guess
+  // surfaces as a per-job FFmpeg failure mid-render. Upgrade path when it
+  // bites: probe each candidate encoder once at startup (the backend's
+  // `probe_hw_encoder` pattern) exactly like AV1 support is verified.
   const resolveEncoder = (codec: string): string => {
     const gpu = hardwareInfo()?.gpuModel.toLowerCase() || '';
     switch (codec) {

@@ -333,16 +333,36 @@ pub async fn generate_loop_playlists(
 
     // Write the video concat playlist directly to disk, same approach as the
     // audio playlist above to avoid building an oversized String in memory.
+    //
+    // Cap the number of video lines symmetrically with the audio repeat cap:
+    // a pathological source (a sub-second clip next to a multi-hour target)
+    // would otherwise expand the `while` loop into an unbounded multi-GB
+    // playlist. Truncation is warned about like the audio-side cap.
+    let video_repeat_count = ((total_audio_duration + target.padding_sec as f64)
+        / ping_pong_duration)
+        .ceil()
+        .min(MAX_REPEAT_COUNT as f64) as usize;
+    let needed = ((total_audio_duration + target.padding_sec as f64) / ping_pong_duration).ceil();
+    if needed > MAX_REPEAT_COUNT as f64 {
+        event::emit(
+            app,
+            PipelineEvent::Log {
+                level: "warn".into(),
+                message: format!(
+                    "Video repeat count capped at {} to bound playlist size. Output duration may be shorter than requested.",
+                    MAX_REPEAT_COUNT
+                ),
+            },
+        );
+    }
     {
         let file = tokio::fs::File::create(video_list_path).await?;
         let mut writer = tokio::io::BufWriter::new(file);
         use tokio::io::AsyncWriteExt;
         let ping_pong_path_str = escape_concat_path(&ping_pong_path.to_string_lossy());
         let video_line = format!("file '{}'\n", ping_pong_path_str);
-        let mut current_video_duration = 0.0;
-        while current_video_duration < total_audio_duration + target.padding_sec as f64 {
+        for _ in 0..video_repeat_count {
             writer.write_all(video_line.as_bytes()).await?;
-            current_video_duration += ping_pong_duration;
         }
         writer.flush().await?;
     }

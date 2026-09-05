@@ -75,9 +75,9 @@ if (
 }
 
 /**
- * Polyfill `ResizeObserver` for jsdom, which does not implement it.
- * The virtual scroller in LogViewer uses ResizeObserver to track the
- * viewport height of the scrollable container.
+ * Polyfill `ResizeObserver` for happy-dom/jsdom, which do not implement it.
+ * LogViewer uses ResizeObserver to keep the log view pinned to the bottom
+ * when its scroll container is resized.
  */
 if (typeof globalThis.ResizeObserver === 'undefined') {
   class ResizeObserverMock implements ResizeObserver {
@@ -91,8 +91,8 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
     observe(target: Element): void {
       this.observedElements.add(target);
       // Fire immediately with a sensible default entry so consumers
-      // that depend on initial measurements (e.g. virtual scroll viewport
-      // height) have data to work with on the first frame.
+      // that depend on initial measurements (e.g. scroll containers that
+      // pin to the bottom) have data to work with on the first frame.
       queueMicrotask(() => {
         if (!this.observedElements.has(target)) return;
         const entry: ResizeObserverEntry = {

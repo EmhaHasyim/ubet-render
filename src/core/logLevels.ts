@@ -30,6 +30,10 @@ export type LogLevel = 'INFO' | 'WARN' | 'ERROR' | 'SUCCESS';
 /** Order used by the filter-chip UI (left-to-right). */
 export const FILTERABLE_LEVELS: LogLevel[] = ['INFO', 'WARN', 'ERROR'];
 
+// `SUCCESS` is deliberately NOT a filterable level: there is no chip to
+// re-enable it, so consumers must always keep success lines visible (see
+// `useLogFilter`, which treats SUCCESS as exempt from level filtering).
+
 /**
  * Extract the log level from a line of pipeline output.
  *

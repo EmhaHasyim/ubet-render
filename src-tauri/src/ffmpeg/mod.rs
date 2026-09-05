@@ -432,17 +432,18 @@ pub async fn get_duration(app: &AppHandle, file_path: &Path) -> Result<f64, AppE
 
 /// Combined probe of audio-only metadata for the audio pool.
 ///
-/// Calls `ffprobe` once and returns the first audio stream's codec, sample
-/// rate, channel count, bit rate (if reported), and container duration in a
-/// single round-trip. The audio pool uses this to decide whether to:
+/// Calls `ffprobe` once and returns the first audio stream's codec, profile,
+/// sample rate, channel count, bit rate (if reported), and container duration
+/// in a single round-trip. The audio pool uses this to decide whether to:
 ///   1. Smart-skip the re-encode (`-c copy`) when the source is already a
-///      compatible AAC stream.
+///      compatible AAC-LC stream (checked via the reported `profile`).
 ///   2. Apply two-pass loudnorm (otherwise).
 ///   3. Fall back to a plain single-pass re-encode.
 ///
 /// `bit_rate` is intentionally optional because many AAC containers (notably
 /// VBR .m4a) report `N/A` for that field — callers must treat `None` as
-/// "cannot compare, default to re-encode".
+/// "cannot compare, default to re-encode". The same applies to `profile`: a
+/// missing profile cannot prove AAC-LC, so smart-skip must be refused.
 pub async fn get_audio_info(app: &AppHandle, file_path: &Path) -> Result<AudioInfo, AppError> {
     let path_str = file_path.to_string_lossy().into_owned();
     let args = [
@@ -451,7 +452,7 @@ pub async fn get_audio_info(app: &AppHandle, file_path: &Path) -> Result<AudioIn
         "-select_streams",
         "a:0",
         "-show_entries",
-        "stream=codec_name,sample_rate,channels,bit_rate:format=duration",
+        "stream=codec_name,profile,sample_rate,channels,bit_rate:format=duration",
         "-of",
         "json",
         &path_str,
@@ -602,15 +603,6 @@ pub async fn run_loudnorm_pass1(
     }
 }
 
-/// Parse the loudnorm JSON measurement block out of an arbitrary stderr
-/// text.
-///
-/// We anchor on the leading literal `"input_i"` (the loudnorm `print_format=json`
-/// output always emits the five required fields — `input_i`, `input_tp`,
-/// `input_lra`, `input_thresh`, `target_offset` — in a flat object, and it is
-/// the first one written). Scanning for the literal is robust against any
-/// pre-amble noise in ffmpeg's stderr (warning text, decoder info, etc.) that
-/// might contain unrelated `{…}` characters. Returns `None` if no complete
 pub async fn verify_sidecar_binaries(app: &AppHandle) -> Result<(), AppError> {
     verify_version(app, "ffmpeg", "ffmpeg version ").await?;
     verify_version(app, "ffprobe", "ffprobe version ").await?;

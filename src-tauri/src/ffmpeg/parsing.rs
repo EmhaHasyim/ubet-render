@@ -117,6 +117,13 @@ pub(crate) fn parse_audio_probe_value(
         .trim()
         .to_lowercase();
 
+    // Codec profile (e.g. `LC`, `HE-AAC`, `HE-AACv2`). Absent → `None`;
+    // `audio_pool` treats a missing profile as "not AAC-LC" and re-encodes.
+    let profile = stream
+        .get("profile")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string());
+
     let sample_rate = stream
         .get("sample_rate")
         .and_then(|v| v.as_str())
@@ -147,6 +154,7 @@ pub(crate) fn parse_audio_probe_value(
 
     Ok(AudioInfo {
         codec,
+        profile,
         sample_rate,
         channels,
         bit_rate,

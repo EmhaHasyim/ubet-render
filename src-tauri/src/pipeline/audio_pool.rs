@@ -20,17 +20,19 @@ use tauri::AppHandle;
 ///    because two workers could see `exists() == false` at the same time
 ///    and both try to write. A single `HashSet` collapses the list before
 ///    worker dispatch.
-/// 2. **One ffprobe per track** — `get_audio_info` returns codec, sample
-///    rate, channel count, and bit rate in one round-trip. We use this
-///    for both smart-skip and channel-layout decisions.
+/// 2. **One ffprobe per track** — `get_audio_info` returns codec, profile,
+///    sample rate, channel count, and bit rate in one round-trip. We use
+///    this for both smart-skip and channel-layout decisions.
 /// 3. **Smart-skip** — when the source already matches the target profile
-///    (`codec == aac`, sample rate matches, exactly 2 channels, bit rate
-///    ≤ target if reported) we transcode with `-c copy` instead of
-///    re-encoding. Strict 2-channel requirement protects downstream
-///    concat: mono sources fall through to re-encode so the cache file
-///    matches the uniform 2-channel AAC layout. Disabled automatically
-///    when the user picked the `normalize` mode because loudnorm must
-///    still apply.
+///    (`codec == aac` with profile `LC`, sample rate matches, exactly 2
+///    channels, bit rate ≤ target if reported) we transcode with
+///    `-c copy` instead of re-encoding. The explicit LC check keeps
+///    HE-AAC/SBR sources on the re-encode path so the cache file stays
+///    uniformly AAC-LC; the strict 2-channel requirement protects
+///    downstream concat too (mono sources fall through to re-encode so
+///    the cache file matches the uniform 2-channel AAC layout). Disabled
+///    automatically when the user picked the `normalize` mode because
+///    loudnorm must still apply.
 /// 4. **Two-pass loudnorm** — when `audio_mode == "normalize"`, pass 1
 ///    measures the source via `loudnorm=...:print_format=json` and the
 ///    measured values are fed back to pass 2 (with `linear=true`) for
@@ -386,8 +388,11 @@ fn dedupe_paths(paths: &[String]) -> Vec<String> {
 /// target enough to safely transcode with `-c copy`. All conditions must
 /// hold:
 ///
-/// - codec is `aac` (LC-AAC / HE-AAC will be discarded by the down-stream
-///   muxer if not neutralized; smart-skip is only safe when AAC-LC).
+/// - codec is `aac` **and the reported profile is `LC`**. HE-AAC (SBR/PS)
+///   keeps its parameter bands under `-c copy`, so stream-copying it would
+///   leave a mixed-profile master that the downstream AAC-LC concat cannot
+///   guarantee to mux cleanly. A missing/unparseable profile is treated as
+///   not-LC and re-encoded rather than guessed.
 /// - sample rate exactly equals the user-requested target
 ///   (avoids FFmpeg's auto-resample, which would defeat the "copy").
 /// - channels **exactly equals 2**: mono sources MUST go through the
@@ -401,6 +406,13 @@ fn dedupe_paths(paths: &[String]) -> Vec<String> {
 /// so the audio-pool cannot drift from the canonical bit-rate parser.
 fn can_skip_reencode(info: &AudioInfo, target_sr: u32, target_br_s: &str) -> bool {
     if !info.codec.eq_ignore_ascii_case("aac") {
+        return false;
+    }
+    if !info
+        .profile
+        .as_deref()
+        .is_some_and(|profile| profile.eq_ignore_ascii_case("LC"))
+    {
         return false;
     }
     if info.sample_rate != target_sr {
@@ -526,9 +538,13 @@ mod tests {
     // can_skip_reencode
     // -------------------------------------------------------------------
 
-    fn info(codec: &str, sr: u32, ch: u32, br: Option<u32>) -> AudioInfo {
+    /// `profile` is always `Some` here — smart-skip must additionally pass
+    /// the LC check, so call sites pass `"LC"` unless a test targets the
+    /// profile guard itself.
+    fn info(codec: &str, profile: &str, sr: u32, ch: u32, br: Option<u32>) -> AudioInfo {
         AudioInfo {
             codec: codec.into(),
+            profile: Some(profile.into()),
             sample_rate: sr,
             channels: ch,
             bit_rate: br,
@@ -537,25 +553,25 @@ mod tests {
 
     #[test]
     fn test_can_skip_reencode_matching_aac_stereo() {
-        let i = info("aac", 44100, 2, Some(192_000));
+        let i = info("aac", "LC", 44100, 2, Some(192_000));
         assert!(can_skip_reencode(&i, 44100, "192k"));
     }
 
     #[test]
     fn test_can_skip_reencode_wrong_codec_rejected() {
-        let i = info("mp3", 44100, 2, Some(192_000));
+        let i = info("mp3", "LC", 44100, 2, Some(192_000));
         assert!(!can_skip_reencode(&i, 44100, "192k"));
     }
 
     #[test]
     fn test_can_skip_reencode_wrong_sample_rate_rejected() {
-        let i = info("aac", 48000, 2, Some(192_000));
+        let i = info("aac", "LC", 48000, 2, Some(192_000));
         assert!(!can_skip_reencode(&i, 44100, "192k"));
     }
 
     #[test]
     fn test_can_skip_reencode_too_many_channels_rejected() {
-        let i = info("aac", 44100, 6, Some(192_000));
+        let i = info("aac", "LC", 44100, 6, Some(192_000));
         assert!(!can_skip_reencode(&i, 44100, "192k"));
     }
 
@@ -566,25 +582,62 @@ mod tests {
     /// implementation bug.
     #[test]
     fn test_can_skip_reencode_mono_channels_rejected() {
-        let i = info("aac", 44100, 1, Some(192_000));
+        let i = info("aac", "LC", 44100, 1, Some(192_000));
         assert!(!can_skip_reencode(&i, 44100, "192k"));
     }
 
     #[test]
     fn test_can_skip_reencode_source_higher_bps_rejected() {
-        let i = info("aac", 44100, 2, Some(320_000));
+        let i = info("aac", "LC", 44100, 2, Some(320_000));
         assert!(!can_skip_reencode(&i, 44100, "192k"));
     }
 
     #[test]
     fn test_can_skip_reencode_unknown_bps_rejected() {
-        let i = info("aac", 44100, 2, None);
+        let i = info("aac", "LC", 44100, 2, None);
         assert!(!can_skip_reencode(&i, 44100, "192k"));
     }
 
     #[test]
     fn test_can_skip_reencode_meets_bps_passes() {
-        let i = info("aac", 44100, 2, Some(128_000));
+        let i = info("aac", "LC", 44100, 2, Some(128_000));
+        assert!(can_skip_reencode(&i, 44100, "192k"));
+    }
+
+    /// CRITICAL: HE-AAC (SBR/PS) must NOT be smart-skipped. `-c copy`
+    /// preserves the profile, and a mixed-profile (HE-AAC alongside AAC-LC)
+    /// master is exactly what the LC guard exists to prevent. This test
+    /// guards against the previous codec-name-only implementation that
+    /// stream-copied any `aac` regardless of profile.
+    #[test]
+    fn test_can_skip_reencode_he_aac_rejected() {
+        let i = info("aac", "HE-AAC", 44100, 2, Some(128_000));
+        assert!(!can_skip_reencode(&i, 44100, "192k"));
+    }
+
+    #[test]
+    fn test_can_skip_reencode_he_aac_v2_rejected() {
+        let i = info("aac", "HE-AACv2", 44100, 2, Some(128_000));
+        assert!(!can_skip_reencode(&i, 44100, "192k"));
+    }
+
+    /// A source whose profile ffprobe did not report cannot be proven
+    /// AAC-LC — fall through to the deterministic re-encode path.
+    #[test]
+    fn test_can_skip_reencode_missing_profile_rejected() {
+        let i = AudioInfo {
+            codec: "aac".into(),
+            profile: None,
+            sample_rate: 44100,
+            channels: 2,
+            bit_rate: Some(128_000),
+        };
+        assert!(!can_skip_reencode(&i, 44100, "192k"));
+    }
+
+    #[test]
+    fn test_can_skip_reencode_lc_profile_case_insensitive() {
+        let i = info("aac", "lc", 44100, 2, Some(128_000));
         assert!(can_skip_reencode(&i, 44100, "192k"));
     }
 }

@@ -12,7 +12,7 @@ export default defineConfig({
   ],
   test: {
     // Default is `happy-dom`: measured ~25% faster than jsdom on this suite
-    // (438/438 green, no env-specific mocks) after the dropzone logic was
+    // (all green, no env-specific mocks) after the dropzone logic was
     // extracted to pure, simulator-agnostic units. Pure-logic files opt out
     // further with a `// @vitest-environment node` lead comment (only if
     // they never touch document/window/localStorage, directly or via

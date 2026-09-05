@@ -89,6 +89,11 @@ describe('formatDuration', () => {
     expect(formatDuration(3661000)).toBe('1h 1m left');
   });
 
+  it('omits the zero-minute noise on exact hours', () => {
+    expect(formatDuration(3600000)).toBe('1h left');
+    expect(formatDuration(18000000)).toBe('5h left');
+  });
+
   it('returns empty string for non-positive or invalid input', () => {
     expect(formatDuration(0)).toBe('');
     expect(formatDuration(-1000)).toBe('');
