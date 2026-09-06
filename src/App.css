@@ -46,6 +46,10 @@
 
   --color-base-100: oklch(16.5% 0.003 250);
   --color-base-200: oklch(13% 0.003 250);
+  /* NOTE: base-300 is intentionally LIGHTER than base-200 — it serves
+     as border/accent tone (borders, pills, skeleton, scrollbar), never
+     as a large surface. Do not "fix" the scale without rechecking
+     every usage. */
   --color-base-300: oklch(24% 0.005 250);
   --color-base-content: oklch(93% 0.003 250);
 
@@ -84,7 +88,7 @@
 [data-theme='light'] {
   color-scheme: light;
 
-  --color-base-100: oklch(99% 0 0);
+  --color-base-100: oklch(99% 0.002 250);
   --color-base-200: oklch(96.5% 0.002 250);
   --color-base-300: oklch(90.5% 0.004 250);
   --color-base-content: oklch(26% 0.008 250);
