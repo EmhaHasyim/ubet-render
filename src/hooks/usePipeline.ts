@@ -1,5 +1,5 @@
 import { createMemo } from 'solid-js';
-import type { PipelineApi } from '../context/pipeline';
+import type { Pipeline } from '../context/pipeline';
 import { usePersistedConfig } from './usePersistedConfig';
 import { useRenderLogs } from './useRenderLogs';
 import { useHardware } from './useHardware';
@@ -17,7 +17,7 @@ import { showToast } from '../core/toast';
  *   - `useCanStart`        → start-readiness validation + disabledReason
  *   - `useRenderLifecycle` → start/pause/resume/cancel + event listener
  */
-export function usePipeline(): PipelineApi {
+export function usePipeline(): Pipeline {
   const config = usePersistedConfig();
 
   // Log buffer first: the peripheral fallbacks may call appendLog()

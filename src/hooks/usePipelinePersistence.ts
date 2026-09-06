@@ -12,11 +12,6 @@ import { showToast } from '../core/toast';
 const log = createLogger('usePipeline');
 const SAVE_DEBOUNCE_MS = 500;
 
-export interface PipelinePersistence {
-  /** Flushes the latest snapshot and resolves false when all attempts fail. */
-  flush: () => Promise<boolean>;
-}
-
 /**
  * Persist the subset of frontend settings represented by the backend
  * AppConfig. Render-only overrides such as output format and loop mode are
@@ -30,7 +25,7 @@ export interface PipelinePersistence {
 export function usePipelinePersistence(
   config: BackendConfigSnapshot,
   resolveEncoder: (codec: string) => string,
-): PipelinePersistence {
+) {
   let persistTimer: ReturnType<typeof setTimeout> | null = null;
   let latestConfig: AppConfig | null = null;
   let saveInFlight: Promise<boolean> | null = null;

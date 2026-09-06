@@ -22,8 +22,6 @@ export interface BackendConfigSnapshot {
   readonly embedChapters: () => boolean;
 }
 
-export type BackendConfigAccessors = BackendConfigSnapshot;
-
 export function buildAppConfig(
   config: BackendConfigSnapshot,
   resolveEncoder: (codec: string) => string,

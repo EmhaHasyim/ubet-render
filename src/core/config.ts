@@ -9,8 +9,6 @@ export const CODECS = {
   av1: 'av1',
 } as const;
 
-export type CodecId = (typeof CODECS)[keyof typeof CODECS];
-
 /** All recognised codec ids — used for validation coercion in persisted config. */
 export const ALL_CODECS: readonly string[] = [
   CODECS.h264,

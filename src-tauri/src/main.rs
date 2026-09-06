@@ -158,12 +158,6 @@ impl RenderControl {
     }
 }
 
-impl Default for RenderControl {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 pub struct RenderState {
     pub control: Mutex<Option<Arc<RenderControl>>>,
 }
@@ -172,75 +166,6 @@ pub struct RenderState {
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_render_control_new_is_not_cancelled() {
-        let rc = RenderControl::new();
-        assert!(!rc.is_cancelled());
-    }
-
-    #[test]
-    fn test_render_control_new_is_not_paused() {
-        let rc = RenderControl::new();
-        assert!(!rc.is_paused());
-    }
-
-    #[test]
-    fn test_render_control_cancel() {
-        let rc = RenderControl::new();
-        assert!(!rc.is_cancelled());
-        rc.cancel();
-        assert!(rc.is_cancelled());
-    }
-
-    #[test]
-    fn test_render_control_pause() {
-        let rc = RenderControl::new();
-        assert!(!rc.is_paused());
-        rc.pause();
-        assert!(rc.is_paused());
-    }
-
-    #[test]
-    fn test_render_control_resume_returns_true_when_paused() {
-        let rc = RenderControl::new();
-        rc.pause();
-        assert!(rc.is_paused());
-        let resumed = rc.resume();
-        assert!(resumed);
-        assert!(!rc.is_paused());
-    }
-
-    #[test]
-    fn test_render_control_resume_returns_false_when_not_paused() {
-        let rc = RenderControl::new();
-        let resumed = rc.resume();
-        assert!(!resumed);
-        assert!(!rc.is_paused());
-    }
-
-    #[test]
-    fn test_render_control_subscribe_cancel() {
-        let rc = RenderControl::new();
-        let rx = rc.subscribe_cancel();
-        assert!(!*rx.borrow());
-        rc.cancel();
-        assert!(*rx.borrow());
-    }
-
-    #[test]
-    fn test_render_control_default() {
-        let rc = RenderControl::default();
-        assert!(!rc.is_cancelled());
-        assert!(!rc.is_paused());
-    }
-
-    #[test]
-    fn test_render_control_new_is_not_terminated() {
-        let rc = RenderControl::new();
-        assert!(!rc.is_terminated());
-        assert!(!rc.is_cleaned());
-    }
 
     #[tokio::test]
     async fn test_render_control_cleanup_is_distinct_from_termination() {

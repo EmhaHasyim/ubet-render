@@ -15,7 +15,7 @@ type DropZone = 'video' | 'audio' | 'output';
  * internally without forcing every context consumer and test double to depend
  * on its inferred implementation return type.
  */
-export interface PipelineApi {
+export interface Pipeline {
   running: Accessor<boolean>;
   paused: Accessor<boolean>;
   jobs: Accessor<JobProgress[]>;
@@ -70,13 +70,10 @@ export interface PipelineApi {
   setSkipIntermediateOnCodecMatch: (value: boolean) => void;
 }
 
-/** Backward-compatible name used by existing consumers and test helpers. */
-export type Pipeline = PipelineApi;
-
-const PipelineContext = createContext<PipelineApi>();
+const PipelineContext = createContext<Pipeline>();
 
 export function PipelineProvider(props: {
-  value: PipelineApi;
+  value: Pipeline;
   children: JSX.Element;
 }) {
   return (
@@ -86,7 +83,7 @@ export function PipelineProvider(props: {
   );
 }
 
-export function usePipelineContext(): PipelineApi {
+export function usePipelineContext(): Pipeline {
   const ctx = useContext(PipelineContext);
   if (!ctx) {
     throw new Error(

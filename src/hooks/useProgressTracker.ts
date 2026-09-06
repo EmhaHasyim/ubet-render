@@ -1,4 +1,4 @@
-import { createSignal, type Accessor, type Setter } from 'solid-js';
+import { createSignal } from 'solid-js';
 import type { PipelineStats } from '../core/types';
 import { EtaCalculator } from '../core/eta';
 
@@ -7,22 +7,9 @@ import { EtaCalculator } from '../core/eta';
  *
  * Extracted from {@link usePipeline} so the progress signals, baseline
  * state, and ETA calculator live together instead of being scattered
- * across the orchestrator hook.
+ * across the orchestrator hook. The return type is inferred — no separate
+ * interface, since no consumer names it.
  */
-export interface ProgressTracker {
-  overallProgress: Accessor<number>;
-  setOverallProgress: Setter<number>;
-  overallEta: Accessor<string>;
-  setOverallEta: Setter<string>;
-  liveStats: Accessor<PipelineStats | null>;
-  setLiveStats: Setter<PipelineStats | null>;
-
-  /** Reset progress signals before a new (or resumed) render starts. */
-  resetProgress: (resuming: boolean) => void;
-  /** Re-seed the ETA baseline after a pause→resume transition. */
-  seedResumeBaseline: () => void;
-}
-
 export function useProgressTracker() {
   const [overallProgress, setOverallProgress] = createSignal(0);
   const [overallEta, setOverallEta] = createSignal('');

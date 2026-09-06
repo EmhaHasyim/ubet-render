@@ -1,13 +1,7 @@
-// jest-dom matchers need a DOM; pure-logic files run under
-// `// @vitest-environment node`, so import them lazily. Top-level await is
-// supported in Vitest setup files and resolves before any test file runs.
-// Makes this a module so top-level await is legal; the braces are
-// intentionally empty (side-effect-only setup file).
+// Side-effect-only setup file. Kept a module (rather than a global
+// script) so its top-level consts don't leak into the global scope.
 // oxlint-disable-next-line unicorn/require-module-specifiers
 export {};
-if (typeof document !== 'undefined') {
-  await import('@testing-library/jest-dom/vitest');
-}
 
 /**
  * Test setup — runs before every test file.
@@ -62,11 +56,14 @@ if (
   typeof HTMLElement !== 'undefined' &&
   !('showModal' in HTMLElement.prototype)
 ) {
+  // SAFETY: patching the prototype with plain data properties; the cast
+  // only satisfies the type checker, no invariant beyond function shape.
   (HTMLElement.prototype as unknown as Record<string, unknown>).showModal =
     function (this: HTMLElement) {
       this.setAttribute('open', '');
     };
 
+  // SAFETY: same prototype patch as showModal above.
   (HTMLElement.prototype as unknown as Record<string, unknown>).close =
     function (this: HTMLElement) {
       this.removeAttribute('open');

@@ -118,13 +118,8 @@ export function Titlebar(props: {
   // Double-click titlebar → toggle maximize (Windows convention). Scoped to
   // the left drag region so double-clicking the window-control buttons
   // (which bubble dblclick events) can't accidentally toggle maximize.
-  const handleDoubleClick = async () => {
-    try {
-      await appWindow.toggleMaximize();
-    } catch {
-      /* noop */
-    }
-  };
+  // Same action as the maximize button — reuse it directly.
+  const handleDoubleClick = handleToggleMaximize;
 
   // Right-click titlebar → context menu
   const handleContextMenu = (e: MouseEvent) => {
