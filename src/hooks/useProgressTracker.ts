@@ -30,7 +30,7 @@ export function useProgressTracker() {
 
   let startProgress = 0;
   let startTime = 0;
-  const etaCalculator = new EtaCalculator(0);
+  const etaCalculator = new EtaCalculator();
 
   /**
    * Fresh ETA baseline for a resumed render. The backend resumes from the

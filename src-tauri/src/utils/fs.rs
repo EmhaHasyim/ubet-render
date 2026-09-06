@@ -228,18 +228,25 @@ pub fn safe_delete_sync(file: &Path) -> Result<(), std::io::Error> {
     }
 }
 
-/// Hash input bytes to a deterministic 64-bit FNV-1a value.
-/// Suitable for cache names and quick lookups where collision probability is
-/// acceptable; this is not a cryptographic integrity primitive.
-pub fn hash_path(data: &[u8]) -> u64 {
-    const OFFSET: u64 = 0xcbf29ce484222325;
+/// One FNV-1a stream over `data` with an explicit seed. Shared by
+/// [`hash_path`] and [`hash_path128`] so the offset/prime loop exists once.
+/// (`file_signature` keeps its own chunked loop: it must stream multi-GB
+/// video files instead of loading them fully into memory.)
+fn fnv1a(data: &[u8], seed: u64) -> u64 {
     const PRIME: u64 = 0x100000001b3;
-    let mut hash = OFFSET;
+    let mut hash = seed;
     for byte in data {
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(PRIME);
     }
     hash
+}
+
+/// Hash input bytes to a deterministic 64-bit FNV-1a value.
+/// Suitable for cache names and quick lookups where collision probability is
+/// acceptable; this is not a cryptographic integrity primitive.
+pub fn hash_path(data: &[u8]) -> u64 {
+    fnv1a(data, 0xcbf29ce484222325)
 }
 
 /// Return a content-aware signature for a file.
@@ -293,16 +300,8 @@ pub fn file_signature(path: &Path) -> Result<String, std::io::Error> {
 pub fn hash_path128(data: &[u8]) -> u128 {
     // Use two deterministic FNV-1a streams with different initial offsets.
     // Cache names remain stable across process launches and Rust versions.
-    const OFFSET: u64 = 0xcbf29ce484222325;
-    const PRIME: u64 = 0x100000001b3;
-    let mut hi = OFFSET;
-    let mut lo = OFFSET ^ 0x5a5a5a5a5a5a5a5a;
-    for byte in data {
-        hi ^= u64::from(*byte);
-        hi = hi.wrapping_mul(PRIME);
-        lo ^= u64::from(*byte);
-        lo = lo.wrapping_mul(PRIME);
-    }
+    let hi = fnv1a(data, 0xcbf29ce484222325);
+    let lo = fnv1a(data, 0xcbf29ce484222325 ^ 0x5a5a5a5a5a5a5a5a);
     (u128::from(hi) << 64) | u128::from(lo)
 }
 

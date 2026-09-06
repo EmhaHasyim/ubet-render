@@ -35,14 +35,6 @@ const genId = (): number => {
 // `setTimeout` firing `dismissToast` for an already-removed id).
 const timers = new Map<number, ReturnType<typeof setTimeout>>();
 
-/** Reset module state — test-only. */
-export function resetToastsForTests(): void {
-  for (const t of timers.values()) clearTimeout(t);
-  timers.clear();
-  nextId = 0;
-  setToasts([]);
-}
-
 export interface ToastOptions {
   /** Visual variant. Defaults to `'info'`. */
   variant?: ToastVariant;

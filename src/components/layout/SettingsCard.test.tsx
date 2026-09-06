@@ -192,4 +192,61 @@ describe('SettingsCard', () => {
     fireEvent.click(toggle);
     expect(setSkip).toHaveBeenCalledWith(false);
   });
+
+  it('shows output folder path when set, with reveal button', () => {
+    renderCard({ outputPath: () => '/renders/out' });
+    expect(screen.getByText('/renders/out')).toBeTruthy();
+    expect(screen.getByText('Open in Explorer')).toBeTruthy();
+  });
+
+  it('renders Original and Normalize radio buttons', () => {
+    renderCard();
+    expect(screen.getByRole('radio', { name: 'Original' })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'Normalize' })).toBeTruthy();
+  });
+
+  it('renders codec options (H.264, H.265, AV1)', () => {
+    renderCard();
+    expect(screen.getByText('H.264')).toBeTruthy();
+    expect(screen.getByText('H.265')).toBeTruthy();
+    // AV1 may show as "AV1" or "AV1 (unsupported)"
+    const av1Matches = screen.getAllByText(/AV1/);
+    expect(av1Matches.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('AV1 shows (unsupported) when av1Supported is false', () => {
+    renderCard({ av1Supported: () => false });
+    expect(screen.getByText(/AV1.*unsupported/i)).toBeTruthy();
+  });
+
+  it('renders output prefix input', () => {
+    renderCard({ outputPrefix: () => 'My Channel' });
+    const input = screen.getByDisplayValue('My Channel') as HTMLInputElement;
+    expect(input).toBeTruthy();
+  });
+
+  it('renders the "Skip re-encode" toggle with a short explanatory description', () => {
+    renderCard();
+    expect(screen.getByText(/Skip re-encode/i)).toBeTruthy();
+    expect(screen.getByTestId('zero-reencode-toggle')).toBeTruthy();
+    expect(
+      screen.getByText(/Copy the source video without re-encoding/i),
+    ).toBeTruthy();
+  });
+
+  it('no error message when maxrate is valid', () => {
+    renderCard({
+      maxrate: () => '4000k',
+      maxrateValid: () => true,
+    });
+    expect(screen.queryByText(/Enter a number between/i)).toBeNull();
+  });
+
+  it('renders all collapse section headers', () => {
+    renderCard();
+    expect(screen.getByText('Audio')).toBeTruthy();
+    expect(screen.getByText('Video & Encoding')).toBeTruthy();
+    expect(screen.getByText('Looping')).toBeTruthy();
+    expect(screen.getByText('Features')).toBeTruthy();
+  });
 });

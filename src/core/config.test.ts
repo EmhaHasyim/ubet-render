@@ -5,7 +5,6 @@ import {
   VIDEO_EXTENSIONS,
   AUDIO_EXTENSIONS,
   LOUDNORM_PARAMS,
-  EMPTY_PATHS,
   getSourcePaths,
 } from './config';
 
@@ -85,14 +84,6 @@ describe('LOUDNORM_PARAMS', () => {
   });
 });
 
-describe('EMPTY_PATHS', () => {
-  it('is a frozen empty array', () => {
-    expect(EMPTY_PATHS).toEqual([]);
-    expect(EMPTY_PATHS.length).toBe(0);
-    expect(Object.isFrozen(EMPTY_PATHS)).toBe(true);
-  });
-});
-
 describe('getSourcePaths', () => {
   it('returns paths from files type source', () => {
     expect(
@@ -106,15 +97,15 @@ describe('getSourcePaths', () => {
     ]);
   });
 
-  it('returns EMPTY_PATHS for null source', () => {
-    expect(getSourcePaths(null)).toBe(EMPTY_PATHS);
+  it('returns [] for null source', () => {
+    expect(getSourcePaths(null)).toEqual([]);
   });
 
-  it('returns EMPTY_PATHS for empty files paths', () => {
-    expect(getSourcePaths({ type: 'files', paths: [] })).toBe(EMPTY_PATHS);
+  it('returns [] for empty files paths', () => {
+    expect(getSourcePaths({ type: 'files', paths: [] })).toEqual([]);
   });
 
-  it('returns EMPTY_PATHS for folder with empty path', () => {
-    expect(getSourcePaths({ type: 'folder', path: '' })).toBe(EMPTY_PATHS);
+  it('returns [] for folder with empty path', () => {
+    expect(getSourcePaths({ type: 'folder', path: '' })).toEqual([]);
   });
 });

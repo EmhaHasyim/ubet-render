@@ -18,15 +18,8 @@ import { safeSetStorageItem } from './storage';
 
 export type Theme = 'business' | 'light';
 
-/**
- * Exported so tests and any new consumer can reference the storage key
- * without hard-coding a string literal (drift-protective, mirrors the
- * `STORAGE_KEY` export pattern used by {@link PersistedConfig}).
- */
-export const THEME_STORAGE_KEY = 'ubetrender-theme';
-
-/** The themes the app ships with — used for the cycle order of {@link toggleTheme}. */
-const CYCLE: readonly Theme[] = ['business', 'light'] as const;
+/** localStorage key for the theme (kept out of PersistedConfig on purpose — see above). */
+const THEME_STORAGE_KEY = 'ubetrender-theme';
 
 /**
  * Load the user's preferred theme. Falls back to the OS `prefers-color-scheme`
@@ -57,8 +50,7 @@ export function applyTheme(theme: Theme): void {
   safeSetStorageItem(THEME_STORAGE_KEY, theme);
 }
 
-/** Cycle to the next theme. With `['business', 'light']` this just toggles. */
+/** Toggle between the two shipped themes. */
 export function toggleTheme(current: Theme): Theme {
-  const idx = CYCLE.indexOf(current);
-  return CYCLE[(idx + 1) % CYCLE.length] ?? 'business';
+  return current === 'business' ? 'light' : 'business';
 }

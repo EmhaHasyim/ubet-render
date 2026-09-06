@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { applyTheme, loadTheme, THEME_STORAGE_KEY, toggleTheme } from './theme';
+import { applyTheme, loadTheme, toggleTheme } from './theme';
 
-const KEY = THEME_STORAGE_KEY;
+const KEY = 'ubetrender-theme';
 
 beforeEach(() => {
   localStorage.clear();

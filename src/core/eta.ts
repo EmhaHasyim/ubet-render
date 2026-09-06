@@ -10,12 +10,6 @@ export class EtaCalculator {
   // more than noise rejection.
   private readonly alpha = 0.35;
 
-  constructor(_capacity: number) {
-    // Keep the historical constructor parameter for API compatibility. The
-    // current EMA does not need a sample buffer, so intentionally consume it.
-    void _capacity;
-  }
-
   reset() {
     this.emaRate = 0;
   }

@@ -25,18 +25,11 @@ export const ALL_CODECS: readonly string[] = [
  *  Sent as `loudnorm` filter parameters to FFmpeg in normalize mode. */
 export const LOUDNORM_PARAMS = 'I=-14:LRA=11:TP=-1';
 
-/** Stable empty array reference so bindings don't allocate a fresh
- *  `[]` on every reactive re-evaluation when a source is unset.
- *  Used by {@link getSourcePaths} and {@link SettingsCard}. */
-export const EMPTY_PATHS: readonly string[] = Object.freeze(
-  [],
-) as readonly string[];
-
 /** Extract file paths from a MediaSource regardless of variant. */
 export function getSourcePaths(source: MediaSource | null): readonly string[] {
   if (source?.type === 'files' && source.paths.length > 0) return source.paths;
   if (source?.type === 'folder' && source.path.length > 0) return [source.path];
-  return EMPTY_PATHS;
+  return [];
 }
 
 // ── Default config ────────────────────────────────────────────────────

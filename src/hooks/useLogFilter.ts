@@ -6,8 +6,6 @@ import {
 } from '../core/logLevels';
 import { safeSetStorageItem } from '../core/storage';
 
-const ALL_LEVELS: LogLevel[] = FILTERABLE_LEVELS;
-
 function readEnabledLevels(): Set<LogLevel> {
   try {
     const raw = localStorage.getItem('logs.filter.levels');
@@ -15,14 +13,14 @@ function readEnabledLevels(): Set<LogLevel> {
       const parsed = raw
         .split(',')
         .filter((level) =>
-          ALL_LEVELS.includes(level as LogLevel),
+          FILTERABLE_LEVELS.includes(level as LogLevel),
         ) as LogLevel[];
       if (parsed.length > 0) return new Set(parsed);
     }
   } catch {
     /* quota / disabled */
   }
-  return new Set(ALL_LEVELS);
+  return new Set(FILTERABLE_LEVELS);
 }
 
 function readSearchQuery(): string {
@@ -71,7 +69,7 @@ export function useLogFilter(logs: () => string[]) {
   const filteredLogs = createMemo(() => {
     const query = debouncedQuery().trim().toLowerCase();
     const levels = enabledLevels();
-    const allOn = levels.size === ALL_LEVELS.length;
+    const allOn = levels.size === FILTERABLE_LEVELS.length;
 
     return logs().filter((line) => {
       const level = parseLevel(line);
@@ -88,7 +86,7 @@ export function useLogFilter(logs: () => string[]) {
 
   const isFiltering = createMemo(
     () =>
-      enabledLevels().size !== ALL_LEVELS.length ||
+      enabledLevels().size !== FILTERABLE_LEVELS.length ||
       searchQuery().trim().length > 0,
   );
 
