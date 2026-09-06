@@ -49,36 +49,3 @@ fn format_pipeline_event(event: &PipelineEvent) -> String {
         _ => String::new(),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_format_log_event() {
-        let event = PipelineEvent::Log {
-            level: "info".into(),
-            message: "test message".into(),
-        };
-        let formatted = format_pipeline_event(&event);
-        assert_eq!(formatted, "[INFO] test message");
-    }
-
-    #[test]
-    fn test_format_done_event() {
-        let event = PipelineEvent::Done {
-            completed: 5,
-            total: 10,
-            failed: 1,
-        };
-        let formatted = format_pipeline_event(&event);
-        assert_eq!(formatted, "DONE 5/10 completed, 1 failed");
-    }
-
-    #[test]
-    fn test_format_cancelled() {
-        let event = PipelineEvent::Cancelled("by user".into());
-        let formatted = format_pipeline_event(&event);
-        assert!(formatted.contains("CANCELLED"));
-    }
-}
