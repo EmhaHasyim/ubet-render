@@ -17,6 +17,9 @@ pub struct HardwareInfo {
     pub gpu_name: String,
     pub ram_gb: u64,
     pub av1_supported: bool,
+    /// Working AV1 encoder from the startup probe, if any. The frontend
+    /// uses this name directly instead of guessing from the GPU string.
+    pub av1_encoder: Option<String>,
 }
 
 #[tauri::command]
@@ -40,13 +43,14 @@ pub async fn detect_hardware(app: tauri::AppHandle) -> HardwareInfo {
     .await
     .unwrap_or_else(|_| ("Unknown".to_string(), 0, "Unknown".to_string()));
 
-    let av1_supported = check_av1_support(&app).await;
+    let av1_encoder = check_av1_encoder(&app).await;
 
     HardwareInfo {
         cpu_name,
         gpu_name,
         ram_gb,
-        av1_supported,
+        av1_supported: av1_encoder.is_some(),
+        av1_encoder,
     }
 }
 
@@ -155,15 +159,15 @@ fn parse_gpu_names(stdout: &str) -> Vec<String> {
         .collect()
 }
 
-/// Cached verdict so the (potentially slow) AV1 probe runs at most once per
-/// app session. Without a cache, every remount (e.g. ErrorBoundary "Try
-/// Again") would re-run up to four ffmpeg subprocesses and could stall
+/// Cached probe result so the (potentially slow) AV1 probe runs at most
+/// once per app session. Without a cache, every remount (e.g. ErrorBoundary
+/// "Try Again") would re-run up to four ffmpeg subprocesses and could stall
 /// rendering startup for tens of seconds.
-static AV1_SUPPORT_CACHE: OnceLock<bool> = OnceLock::new();
+static AV1_ENCODER_CACHE: OnceLock<Option<String>> = OnceLock::new();
 
-async fn check_av1_support(app: &tauri::AppHandle) -> bool {
-    if let Some(v) = AV1_SUPPORT_CACHE.get() {
-        return *v;
+async fn check_av1_encoder(app: &tauri::AppHandle) -> Option<String> {
+    if let Some(cached) = AV1_ENCODER_CACHE.get() {
+        return cached.clone();
     }
     let probe_timeout = std::time::Duration::from_secs(8);
 
@@ -182,9 +186,13 @@ async fn check_av1_support(app: &tauri::AppHandle) -> bool {
     let svt_fut = scan_encoders_for_svt_av1(app, probe_timeout);
     let (hw_results, has_svt) = tokio::join!(hw_fut, svt_fut);
 
-    let supported = hw_results.into_iter().any(|r| r) || has_svt;
-    let _ = AV1_SUPPORT_CACHE.set(supported);
-    supported
+    let found = ["av1_nvenc", "av1_amf", "av1_qsv"]
+        .iter()
+        .zip(hw_results)
+        .find_map(|(&enc, ok)| ok.then(|| enc.to_string()))
+        .or_else(|| has_svt.then(|| "libsvtav1".to_string()));
+    let _ = AV1_ENCODER_CACHE.set(found.clone());
+    found
 }
 
 async fn run_probe(

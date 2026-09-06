@@ -23,6 +23,7 @@ export function useHardware(
       gpuName: string;
       ramGb: number;
       av1Supported: boolean;
+      av1Encoder: string | null;
     }>('detect_hardware')
       .then((info) => {
         setHardwareInfo({
@@ -30,6 +31,7 @@ export function useHardware(
           gpuModel: info.gpuName,
           totalRamGB: info.ramGb,
           av1Supported: info.av1Supported,
+          av1Encoder: info.av1Encoder ?? null,
         });
 
         if (!info.av1Supported && currentCodec() === CODECS.av1) {
@@ -45,15 +47,16 @@ export function useHardware(
           gpuModel: 'Unknown',
           totalRamGB: 0,
           av1Supported: false,
+          av1Encoder: null,
         });
       });
   });
 
-  // ponytail: GPU-vendor substring → encoder is a heuristic, not a probe.
-  // An unexpected brand string falls back to software, and a wrong guess
-  // surfaces as a per-job FFmpeg failure mid-render. Upgrade path when it
-  // bites: probe each candidate encoder once at startup (the backend's
-  // `probe_hw_encoder` pattern) exactly like AV1 support is verified.
+  // GPU-vendor substring → encoder is a heuristic, not a probe (kept for
+  // h264/h265, which have no startup probe). AV1 uses the backend-probed
+  // encoder name instead: a vendor match does not imply AV1 hardware
+  // (e.g. RTX 30 has no AV1 encode) and a wrong guess used to surface as
+  // a per-job FFmpeg failure mid-render.
   const resolveEncoder = (codec: string): string => {
     const gpu = hardwareInfo()?.gpuModel.toLowerCase() || '';
     switch (codec) {
@@ -67,12 +70,11 @@ export function useHardware(
         if (gpu.includes('amd') || gpu.includes('radeon')) return 'hevc_amf';
         if (gpu.includes('intel') || gpu.includes('arc')) return 'hevc_qsv';
         return 'libx265';
-      case CODECS.av1:
-        if (!hardwareInfo()?.av1Supported) return resolveEncoder(CODECS.h265);
-        if (gpu.includes('nvidia')) return 'av1_nvenc';
-        if (gpu.includes('amd') || gpu.includes('radeon')) return 'av1_amf';
-        if (gpu.includes('intel') || gpu.includes('arc')) return 'av1_qsv';
-        return 'libsvtav1';
+      case CODECS.av1: {
+        const probed = hardwareInfo()?.av1Encoder;
+        if (probed) return probed;
+        return resolveEncoder(CODECS.h265);
+      }
       default:
         return 'libx264';
     }

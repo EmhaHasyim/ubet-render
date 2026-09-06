@@ -155,6 +155,7 @@ describe('useHardware', () => {
         gpuName: 'NVIDIA GeForce RTX 4090',
         ramGb: 64,
         av1Supported: true,
+        av1Encoder: 'av1_nvenc',
       });
 
       const { ref } = mountMountedHook(() => useHardware(av1Codec, setCodec));
@@ -173,6 +174,7 @@ describe('useHardware', () => {
         gpuName: 'Unknown GPU',
         ramGb: 8,
         av1Supported: true,
+        av1Encoder: 'libsvtav1',
       });
 
       const { ref } = mountMountedHook(() => useHardware(av1Codec, setCodec));
@@ -191,6 +193,7 @@ describe('useHardware', () => {
         gpuName: 'AMD Radeon RX 7900 XTX',
         ramGb: 32,
         av1Supported: true,
+        av1Encoder: 'av1_amf',
       });
 
       const { ref } = mountMountedHook(() => useHardware(av1Codec, setCodec));
@@ -199,6 +202,27 @@ describe('useHardware', () => {
         expect(ref.resolveEncoder('h264')).toBe('h264_amf');
         expect(ref.resolveEncoder('h265')).toBe('hevc_amf');
         expect(ref.resolveEncoder('av1')).toBe('av1_amf');
+      });
+    });
+
+    it('prefers the probed AV1 encoder over GPU-name guessing', () => {
+      // RTX 3060 is NVIDIA without AV1 hardware: the old substring guess
+      // returned av1_nvenc (mid-render FFmpeg failure). The probed name
+      // wins even when it disagrees with the vendor string.
+      const setCodec = vi.fn();
+      (invoke as unknown as Mock).mockResolvedValue({
+        cpuName: 'Intel i7',
+        gpuName: 'NVIDIA GeForce RTX 3060',
+        ramGb: 16,
+        av1Supported: true,
+        av1Encoder: 'libsvtav1',
+      });
+
+      const { ref } = mountMountedHook(() => useHardware(av1Codec, setCodec));
+
+      return vi.waitFor(() => {
+        expect(ref.hardwareInfo()?.av1Encoder).toBe('libsvtav1');
+        expect(ref.resolveEncoder('av1')).toBe('libsvtav1');
       });
     });
   });

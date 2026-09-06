@@ -90,6 +90,7 @@ describe('usePipeline — integration (end-to-end render lifecycle)', () => {
           gpuName: 'NVIDIA RTX 4090',
           ramGb: 64,
           av1Supported: true,
+          av1Encoder: 'av1_nvenc',
         });
       }
       return Promise.resolve(undefined);

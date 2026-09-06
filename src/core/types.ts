@@ -52,6 +52,7 @@ export interface HardwareInfo {
   gpuModel: string;
   totalRamGB: number;
   av1Supported: boolean;
+  av1Encoder: string | null;
 }
 
 export interface JobProgress {
