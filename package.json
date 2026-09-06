@@ -10,6 +10,7 @@
     "serve": "vite preview",
     "tauri": "tauri",
     "bundle": "bun scripts/bundle.mjs",
+    "release:prepare": "bun scripts/version.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint",

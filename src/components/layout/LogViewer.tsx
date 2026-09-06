@@ -13,6 +13,10 @@ import { useLogFilter } from '../../hooks/useLogFilter';
 
 const BASE_LINE_HEIGHT = 20;
 
+// ponytail: max 500 rendered rows; the store still keeps 2000. Upgrade to a
+// virtualized list only if low-end machines jank on filter re-renders.
+const RENDER_LIMIT = 500;
+
 export function LogViewer(props: { logs: string[] }) {
   let containerRef!: HTMLDivElement;
   const [shouldAutoScroll, setShouldAutoScroll] = createSignal(true);
@@ -26,6 +30,12 @@ export function LogViewer(props: { logs: string[] }) {
     toggleLevel,
     handleSearchInput,
   } = filter;
+
+  const visibleLogs = () => {
+    const all = filteredLogs();
+    return all.length > RENDER_LIMIT ? all.slice(-RENDER_LIMIT) : all;
+  };
+  const hiddenCount = () => filteredLogs().length - visibleLogs().length;
 
   // Reset scroll position ONLY on coarse-grained filter changes (chip
   // toggle). Tracking `filteredLogs()` directly would fire on every raw log
@@ -125,7 +135,13 @@ export function LogViewer(props: { logs: string[] }) {
             </Show>
           }
         >
-          <For each={filteredLogs()}>{(line) => <LogLine text={line} />}</For>
+          <Show when={hiddenCount() > 0}>
+            <div class="px-1 pb-2 text-center text-[11px] text-base-content/45">
+              …showing last {RENDER_LIMIT} of {filteredLogs().length} lines —
+              refine the filter to see more
+            </div>
+          </Show>
+          <For each={visibleLogs()}>{(line) => <LogLine text={line} />}</For>
         </Show>
       </div>
     </section>
