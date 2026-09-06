@@ -89,11 +89,10 @@ pub async fn build_master_audio_pool(
 
     let processed = Arc::new(AtomicUsize::new(0));
     let total = dedup_files.len();
-    // Track the last milestone band we emitted so concurrent completions
-    // don't produce duplicate progress lines.
-    let emitted_milestone = Arc::new(AtomicUsize::new(0));
-    // Shared milestone granularity (see `loop_control::milestone_step`).
-    let milestone_step = crate::pipeline::loop_control::milestone_step(total);
+    // Highest completed count emitted so far. Completions arrive
+    // concurrently, so this guard keeps the printed counters monotonic
+    // (a late slower track never prints a lower number after a higher one).
+    let emitted_max = Arc::new(AtomicUsize::new(0));
     let cache_dir_arc = Arc::new(cache_dir.to_path_buf());
 
     let loudnorm_params = settings.loudnorm_params.clone();
@@ -108,7 +107,7 @@ pub async fn build_master_audio_pool(
         let lp = loudnorm_params.clone();
         let br = bitrate.clone();
         let processed = Arc::clone(&processed);
-        let emitted_milestone = Arc::clone(&emitted_milestone);
+        let emitted_max = Arc::clone(&emitted_max);
         async move {
             // Pre-flight cancel before spawning any heavyweight probe.
             if let Some(c) = cancel_control.as_ref() {
@@ -291,13 +290,11 @@ pub async fn build_master_audio_pool(
             }
 
             let completed = processed.fetch_add(1, Ordering::Relaxed) + 1;
-            // Emit a single progress line at each milestone (every N tracks
-            // or every 25% for small pools) instead of one line per track.
-            // `fetch_max` ensures only the first completion that crosses a
-            // milestone band emits the log, even under concurrent dispatch.
-            let band = completed / milestone_step;
-            let prev = emitted_milestone.fetch_max(band, Ordering::Relaxed);
-            if band > prev || completed == total {
+            // One line per track; the monotonic guard above keeps counters
+            // ordered despite concurrent dispatch. The final track always
+            // passes (a max can never already equal `total` here).
+            let prev = emitted_max.fetch_max(completed, Ordering::Relaxed);
+            if completed > prev {
                 let mode_summary = if use_smart_skip {
                     "stream-copied"
                 } else if measurement.is_some() {

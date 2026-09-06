@@ -27,25 +27,6 @@ pub(crate) fn should_skip_job(job: &RenderJob) -> bool {
     Path::new(&job.video.output_path).exists() && job.state == JobState::Done
 }
 
-/// Shared milestone granularity: every 10 jobs for large batches, every 25%
-/// for small ones (≤20). Minimum step of 1 so division never panics.
-/// Single source of truth for `pipeline/mod.rs` and `audio_pool.rs`.
-pub(crate) fn milestone_step(total: usize) -> usize {
-    if total <= 20 { (total / 4).max(1) } else { 10 }
-}
-
-/// Returns `true` when crossing into a new milestone band (or finishing).
-/// Replaces duplicated `band > last_milestone || completed == total` checks.
-pub(crate) fn is_milestone(completed: usize, total: usize, last: usize, step: usize) -> bool {
-    let band = completed / step.max(1);
-    band > last || completed == total
-}
-
-/// Band index for `completed` (used to update `last_milestone`).
-pub(crate) fn milestone_band(completed: usize, step: usize) -> usize {
-    completed / step.max(1)
-}
-
 /// Translate a [`job_processor::process_single_job`] result into the next
 /// loop step, taking the current pause state into account.
 ///

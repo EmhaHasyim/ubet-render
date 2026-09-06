@@ -435,9 +435,7 @@ impl Pipeline {
         // pipeline from the state file.
         let mut idx = 0usize;
         let mut pause_exit = false;
-        let milestone_step = loop_control::milestone_step(total_jobs);
         let mut completed: usize = 0;
-        let mut last_milestone: usize = 0;
         while idx < total_jobs {
             if control.is_cancelled() {
                 break;
@@ -468,17 +466,13 @@ impl Pipeline {
                     .save_state_from_arc(&state_path, &jobs_arc)
                     .await;
                 completed += 1;
-                if loop_control::is_milestone(completed, total_jobs, last_milestone, milestone_step)
-                {
-                    event::emit(
-                        &pipeline_arc.app,
-                        PipelineEvent::Log {
-                            level: "success".into(),
-                            message: format!("Videos: {}/{} done", completed, total_jobs),
-                        },
-                    );
-                    last_milestone = loop_control::milestone_band(completed, milestone_step);
-                }
+                event::emit(
+                    &pipeline_arc.app,
+                    PipelineEvent::Log {
+                        level: "success".into(),
+                        message: format!("Videos: {}/{} done", completed, total_jobs),
+                    },
+                );
                 idx += 1;
                 continue;
             }
@@ -531,21 +525,13 @@ impl Pipeline {
                             .await;
                     }
                     completed += 1;
-                    if loop_control::is_milestone(
-                        completed,
-                        total_jobs,
-                        last_milestone,
-                        milestone_step,
-                    ) {
-                        event::emit(
-                            &pipeline_arc.app,
-                            PipelineEvent::Log {
-                                level: "success".into(),
-                                message: format!("Videos: {}/{} done", completed, total_jobs),
-                            },
-                        );
-                        last_milestone = loop_control::milestone_band(completed, milestone_step);
-                    }
+                    event::emit(
+                        &pipeline_arc.app,
+                        PipelineEvent::Log {
+                            level: "success".into(),
+                            message: format!("Videos: {}/{} done", completed, total_jobs),
+                        },
+                    );
                     idx += 1;
                 }
                 loop_control::LoopAction::Retry => {
@@ -579,7 +565,13 @@ impl Pipeline {
         drop(stats_tx);
         let _ = stats_handle.await;
 
-        if pause_exit || control.is_paused() {
+        if control.is_cancelled() {
+            // Cancel takes precedence over pause (same convention as
+            // `RenderControl::ensure_running`): the user's last intent wins
+            // and the workspace is cleaned up rather than kept for resume.
+            workspace.cancel();
+            return Err(AppError::Cancelled("Render cancelled by user".into()));
+        } else if pause_exit || control.is_paused() {
             // Flush state immediately (bypassing the 2s throttle) so the most
             // recently finished job isn't lost when the next resume reloads it.
             // Snapshot under a short lock scope — clone, drop, then write.
@@ -593,9 +585,6 @@ impl Pipeline {
             workspace.pause();
             control.mark_terminated();
             return Err(AppError::Paused("Render paused by user".into()));
-        } else if control.is_cancelled() {
-            workspace.cancel();
-            return Err(AppError::Cancelled("Render cancelled by user".into()));
         }
 
         workspace.complete();
