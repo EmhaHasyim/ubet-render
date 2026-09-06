@@ -40,6 +40,12 @@ pub struct RenderControl {
     cleanup_notify: Notify,
 }
 
+impl Default for RenderControl {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RenderControl {
     pub fn new() -> Self {
         let (cancel_tx, cancel_rx) = watch::channel(false);
