@@ -117,7 +117,7 @@ impl Default for AudioSettings {
 impl AppConfig {
     /// Path to the persisted config file (`config.json` in the app config
     /// directory). Uses the `dirs` platform convention; falls back to
-    /// `./.ubet-render-config` when the platform dir cannot be determined.
+    /// `./ubet-render/config.json` when the platform dir cannot be determined.
     pub fn config_path() -> PathBuf {
         let base = dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
@@ -188,7 +188,7 @@ impl AppConfig {
 
     /// Persist the current configuration to disk. Creates parent directories
     /// as needed and performs an atomic write via a temp file + rename.
-    /// Directory paths are canonicalized before persisting so relative paths
+    /// Directory paths are made absolute before persisting so relative paths
     /// (e.g. \"./outputs\") never shift meaning when the process CWD changes
     /// between sessions.
     pub fn save(&self) -> Result<(), std::io::Error> {
@@ -197,7 +197,7 @@ impl AppConfig {
             std::fs::create_dir_all(parent)?;
         }
         let tmp = path.with_extension("tmp");
-        // Canonicalize directory paths so persisted config always stores
+        // Make directory paths absolute so persisted config always stores
         // absolute paths — prevents relative-path drift across sessions.
         let mut canonicalized = self.clone();
         canonicalized.directories.video =

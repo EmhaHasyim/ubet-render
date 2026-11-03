@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 /// Replace `destination` with `source` using the platform's replacement
@@ -229,16 +229,19 @@ pub fn safe_delete_sync(file: &Path) -> Result<(), std::io::Error> {
 }
 
 /// One FNV-1a stream over `data` with an explicit seed. Shared by
-/// [`hash_path`] and [`hash_path128`] so the offset/prime loop exists once.
-/// (`file_signature` keeps its own chunked loop: it must stream multi-GB
-/// video files instead of loading them fully into memory.)
-fn fnv1a(data: &[u8], seed: u64) -> u64 {
+/// [`hash_path`], [`hash_path128`], and [`file_signature`] so the
+/// offset/prime loop exists once.
+fn fnv1a_update(hash: &mut u64, data: &[u8]) {
     const PRIME: u64 = 0x100000001b3;
-    let mut hash = seed;
     for byte in data {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(PRIME);
+        *hash ^= u64::from(*byte);
+        *hash = hash.wrapping_mul(PRIME);
     }
+}
+
+fn fnv1a(data: &[u8], seed: u64) -> u64 {
+    let mut hash = seed;
+    fnv1a_update(&mut hash, data);
     hash
 }
 
@@ -254,11 +257,11 @@ pub fn hash_path(data: &[u8]) -> u64 {
 /// Size and modification time are useful fast-path metadata, but neither is
 /// sufficient for cache invalidation: applications can replace a file while
 /// preserving both values (for example, a same-size rewrite within a coarse
-/// filesystem timestamp resolution). Include the complete file content in a
-/// pair of deterministic 64-bit hashes so an in-place replacement cannot
-/// silently reuse an encoded cache entry. This is intentionally not a
-/// cryptographic integrity check; it is a cache fingerprint, not a security
-/// primitive.
+/// filesystem timestamp resolution). Hash the head and tail (256 KiB each) as
+/// two deterministic 64-bit streams so an in-place replacement changes the
+/// fingerprint. This is intentionally not a cryptographic integrity check; it
+/// is a cache fingerprint, not a security primitive. Sampling is a deliberate
+/// trade-off — see the `ponytail:` note in the body for the ceiling.
 pub fn file_signature(path: &Path) -> Result<String, std::io::Error> {
     let metadata = std::fs::metadata(path)?;
     let modified = metadata
@@ -267,25 +270,34 @@ pub fn file_signature(path: &Path) -> Result<String, std::io::Error> {
         .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
         .unwrap_or_default();
     let mut file = std::fs::File::open(path)?;
-    // Keep the streaming fingerprint deterministic across process launches
-    // and Rust toolchain versions. `DefaultHasher` is not a stable cache
-    // format, so use two explicit FNV-1a streams instead.
+    // Keep the fingerprint deterministic across process launches and Rust
+    // toolchain versions (`DefaultHasher` is not a stable cache format).
+    //
+    // ponytail: hash only the head and tail (256 KiB each) instead of the
+    // whole file — every render used to re-read the entire audio library just
+    // to build cache keys. Ceiling: a same-size, same-mtime replacement whose
+    // head *and* tail are byte-identical would reuse a stale entry. Upgrade
+    // path: verify the full file before reusing a cache entry.
     const OFFSET: u64 = 0xcbf29ce484222325;
-    const PRIME: u64 = 0x100000001b3;
+    const SAMPLE_BYTES: u64 = 256 * 1024;
     let mut first = OFFSET;
     let mut second = OFFSET ^ 0x5a5a5a5a5a5a5a5a;
-    let mut buffer = [0u8; 64 * 1024];
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        for byte in &buffer[..read] {
-            first ^= u64::from(*byte);
-            first = first.wrapping_mul(PRIME);
-            second ^= u64::from(*byte);
-            second = second.wrapping_mul(PRIME);
-        }
+    let length = metadata.len();
+    if length <= SAMPLE_BYTES * 2 {
+        let mut buffer = vec![0u8; length as usize];
+        file.read_exact(&mut buffer)?;
+        fnv1a_update(&mut first, &buffer);
+        fnv1a_update(&mut second, &buffer);
+    } else {
+        let mut head = vec![0u8; SAMPLE_BYTES as usize];
+        file.read_exact(&mut head)?;
+        fnv1a_update(&mut first, &head);
+        fnv1a_update(&mut second, &head);
+        file.seek(SeekFrom::End(-(SAMPLE_BYTES as i64)))?;
+        let mut tail = vec![0u8; SAMPLE_BYTES as usize];
+        file.read_exact(&mut tail)?;
+        fnv1a_update(&mut first, &tail);
+        fnv1a_update(&mut second, &tail);
     }
     Ok(format!(
         "{}:{}:{}:{:016x}{:016x}",
@@ -306,7 +318,9 @@ pub fn hash_path128(data: &[u8]) -> u128 {
 }
 
 pub async fn scan_files(dir: &Path, extensions: &[&str]) -> ScanFilesResult {
-    const MAX_SCAN_FILES: usize = 10_000;
+    // Same limit as the IPC validation; one constant so the scanner and the
+    // trust boundary cannot drift apart.
+    const MAX_SCAN_FILES: usize = crate::validation::limits::MAX_SOURCE_FILES;
     const MAX_VISITED_DIRS: usize = 100_000;
     match tokio::fs::metadata(dir).await {
         Ok(metadata) if metadata.is_dir() => {}
@@ -555,6 +569,25 @@ mod tests {
         std::fs::write(&path, b"other").unwrap();
         let second = file_signature(&path).unwrap();
         assert_ne!(first, second);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_file_signature_covers_head_and_tail_of_large_file() {
+        let path = std::env::temp_dir().join(format!(
+            "ubet_file_signature_large_{}.tmp",
+            std::process::id()
+        ));
+        let mut data = vec![7u8; 600 * 1024];
+        std::fs::write(&path, &data).unwrap();
+        let first = file_signature(&path).unwrap();
+
+        let last = data.len() - 1;
+        data[last] = 9;
+        std::fs::write(&path, &data).unwrap();
+        let second = file_signature(&path).unwrap();
+
+        assert_ne!(first, second, "a tail change must invalidate the signature");
         let _ = std::fs::remove_file(path);
     }
 

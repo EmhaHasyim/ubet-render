@@ -5,11 +5,10 @@ pub(crate) use parsing::{
     parse_ffprobe_frame_rate, parse_loudnorm_measurement, parse_stats, version_meets_minimum,
 };
 
-/// Combined video metadata probe — returns duration, codec, and frame rate
-/// from a single ffprobe invocation instead of three separate subprocess calls.
+/// Video metadata from a single ffprobe invocation: duration and frame rate
+/// (the two former probes merged into one round-trip).
 pub struct VideoInfo {
     pub duration: f64,
-    pub codec: Option<String>,
     pub frame_rate: f64,
 }
 
@@ -350,7 +349,7 @@ pub async fn get_video_info(app: &AppHandle, file_path: &Path) -> Result<VideoIn
             "-select_streams",
             "v:0",
             "-show_entries",
-            "stream=codec_name,r_frame_rate:format=duration",
+            "stream=r_frame_rate:format=duration",
             "-of",
             "default=noprint_wrappers=1:nokey=1",
             &path,
@@ -366,11 +365,6 @@ pub async fn get_video_info(app: &AppHandle, file_path: &Path) -> Result<VideoIn
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut lines = stdout.lines();
 
-    let codec = lines
-        .next()
-        .map(|l| l.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_lowercase());
     let frame_rate = lines
         .next()
         .and_then(|v| parse_ffprobe_frame_rate(v.trim()))
@@ -388,7 +382,6 @@ pub async fn get_video_info(app: &AppHandle, file_path: &Path) -> Result<VideoIn
 
     Ok(VideoInfo {
         duration,
-        codec,
         frame_rate,
     })
 }
@@ -601,6 +594,47 @@ pub async fn run_loudnorm_pass1(
         }
         }
     }
+}
+
+/// Functional smoke test for an encoder: encode one synthetic frame to the
+/// null muxer.
+///
+/// A hardware encoder can be compiled into the bundled build and still fail to
+/// initialise without the matching GPU or driver, so a version check alone
+/// cannot prove it works. Used to validate the selected encoder before a batch
+/// starts and to probe AV1 support at startup.
+pub(crate) async fn encoder_produces_frame(
+    app: &AppHandle,
+    encoder: &str,
+    timeout: std::time::Duration,
+) -> bool {
+    let Ok(sidecar) = app.shell().sidecar("ffmpeg") else {
+        return false;
+    };
+    let Ok((rx, child)) = sidecar
+        .args([
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=256x256",
+            "-vframes",
+            "1",
+            "-c:v",
+            encoder,
+            "-f",
+            "null",
+            "-",
+        ])
+        .spawn()
+    else {
+        return false;
+    };
+    matches!(
+        collect_output_with_timeout(rx, child, timeout).await,
+        Ok(output) if output.code == Some(0)
+    )
 }
 
 pub async fn verify_sidecar_binaries(app: &AppHandle) -> Result<(), AppError> {

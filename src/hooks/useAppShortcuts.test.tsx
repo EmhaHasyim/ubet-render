@@ -42,10 +42,16 @@ describe('useAppShortcuts', () => {
     mountShortcuts();
     await Promise.resolve();
 
+    // Each press queries the real window state, so the mock drives the
+    // toggle instead of the hook caching a value the OS can change (Esc).
+    mockWindow.isFullscreen.mockResolvedValueOnce(false);
     fireEvent.keyDown(window, { key: 'F11' });
-    fireEvent.keyDown(window, { key: 'F11' });
-
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(mockWindow.setFullscreen).toHaveBeenNthCalledWith(1, true);
+
+    mockWindow.isFullscreen.mockResolvedValueOnce(true);
+    fireEvent.keyDown(window, { key: 'F11' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(mockWindow.setFullscreen).toHaveBeenNthCalledWith(2, false);
   });
 

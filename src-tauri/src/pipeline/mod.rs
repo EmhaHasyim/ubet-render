@@ -50,12 +50,45 @@ struct ExecutionParams {
     songs_per_playlist: usize,
     min_duration_sec: u64,
     loop_count: Option<usize>,
-    encoder_selected: Option<String>,
     safe_prefix: String,
     output_ext: &'static str,
     maxrate_k: u32,
     video_cfg: crate::config::VideoSettings,
     skip_intermediate_on_codec_match: bool,
+}
+
+/// Borrowed inputs for [`Pipeline::load_resume_or_fresh`], grouped so the
+/// loader takes three arguments instead of ten (and needs no
+/// `clippy::too_many_arguments` allowance).
+struct ResumeContext<'a> {
+    state_path: &'a Path,
+    video_files: &'a [String],
+    safe_prefix: &'a str,
+    output_dir: &'a Path,
+    output_ext: &'a str,
+    input_roots: &'a [std::path::PathBuf],
+    thumb_dir: &'a Path,
+    render_timestamp: u64,
+}
+
+/// True when `encoder` denotes a hardware encoder. Such an encoder can be
+/// compiled into the bundled FFmpeg and still be unusable without the matching
+/// GPU or driver, so it needs a functional probe before a batch starts.
+fn is_hardware_encoder(encoder: &str) -> bool {
+    ["nvenc", "amf", "qsv", "_mf", "vaapi", "v4l2m2m"]
+        .iter()
+        .any(|hint| encoder.contains(hint))
+}
+
+/// Software encoder matching the codec family of `encoder`.
+fn software_fallback(encoder: &str) -> &'static str {
+    if encoder.contains("h264") {
+        "libx264"
+    } else if encoder.contains("hevc") || encoder.contains("h265") {
+        "libx265"
+    } else {
+        "libsvtav1"
+    }
 }
 
 impl Pipeline {
@@ -85,7 +118,6 @@ impl Pipeline {
             .map(|h| (h * 3600.0) as u64)
             .unwrap_or(self.config.target.min_duration_sec);
         let loop_count = ov.and_then(|o| o.loop_count);
-        let encoder_selected = ov.and_then(|o| o.encoder.clone());
         let prefix = ov
             .and_then(|o| o.output_prefix.as_deref())
             .unwrap_or(&self.config.metadata.channel_prefix);
@@ -114,11 +146,14 @@ impl Pipeline {
                 },
             );
         }
+        // Single source of truth for the target/max split: the UI only exposes
+        // `maxrate`, so the 70% headroom is derived here and cannot drift from
+        // the `bitrateTarget` the frontend mirrors into the config.
         let target_k = (maxrate_k as f64 * 0.7).ceil() as u32;
         let mut video_cfg = self.config.video.clone();
         video_cfg.bitrate_target = format!("{}k", target_k);
         video_cfg.bitrate_max = format!("{}k", maxrate_k);
-        if let Some(enc) = encoder_selected.as_deref() {
+        if let Some(enc) = ov.and_then(|o| o.encoder.as_deref()) {
             video_cfg.encoder = enc.to_string();
         }
         ExecutionParams {
@@ -128,7 +163,6 @@ impl Pipeline {
             songs_per_playlist,
             min_duration_sec,
             loop_count,
-            encoder_selected,
             safe_prefix,
             output_ext,
             maxrate_k,
@@ -229,7 +263,34 @@ impl Pipeline {
             return Err(AppError::NoAudio);
         }
 
-        let params = self.parse_params(&overrides);
+        let mut params = self.parse_params(&overrides);
+        // A bundled hardware encoder can still be unusable without the matching
+        // GPU/driver. Verify it once, before any job runs, and fall back to the
+        // software encoder instead of failing mid-batch. When the intermediate
+        // step is skipped there is nothing to encode, so no probe is needed.
+        if !params.skip_intermediate_on_codec_match
+            && is_hardware_encoder(&params.video_cfg.encoder)
+            && !crate::ffmpeg::encoder_produces_frame(
+                &self.app,
+                &params.video_cfg.encoder,
+                std::time::Duration::from_secs(8),
+            )
+            .await
+        {
+            let requested = params.video_cfg.encoder.clone();
+            let fallback = software_fallback(&requested);
+            event::emit(
+                &self.app,
+                PipelineEvent::Log {
+                    level: "warn".into(),
+                    message: format!(
+                        "Encoder '{}' is not usable on this machine; falling back to '{}'.",
+                        requested, fallback
+                    ),
+                },
+            );
+            params.video_cfg.encoder = fallback.to_string();
+        }
         let ExecutionParams {
             use_pingpong,
             audio_mode,
@@ -237,7 +298,6 @@ impl Pipeline {
             songs_per_playlist,
             min_duration_sec,
             loop_count,
-            encoder_selected,
             safe_prefix,
             output_ext,
             maxrate_k,
@@ -317,15 +377,17 @@ impl Pipeline {
         let mut initial_jobs = self
             .load_resume_or_fresh(
                 resume,
-                &state_path,
-                &video_files,
-                &safe_prefix,
-                &output_dir,
-                output_ext,
-                &input_roots,
-                &thumb_dir,
+                ResumeContext {
+                    state_path: &state_path,
+                    video_files: &video_files,
+                    safe_prefix: &safe_prefix,
+                    output_dir: &output_dir,
+                    output_ext,
+                    input_roots: &input_roots,
+                    thumb_dir: &thumb_dir,
+                    render_timestamp,
+                },
                 &mut workspace,
-                render_timestamp,
             )
             .await?;
 
@@ -371,7 +433,6 @@ impl Pipeline {
 
         let total_jobs = jobs_arc.lock().await.len();
         let pipeline_arc = Arc::new(self);
-        let encoder_arc = encoder_selected.map(Arc::new);
 
         // --- Live render-stats channel -------------------------------------
         // ffmpeg prints speed=/bitrate=/fps= on stderr; the encoder tasks send
@@ -489,7 +550,6 @@ impl Pipeline {
                 use_pingpong,
                 skip_intermediate_on_codec_match,
                 video_cfg: video_cfg.clone(),
-                encoder_selected: encoder_arc.as_deref().map(|s| s.to_string()),
                 master_pool: master_pool.clone(),
                 songs_per_playlist,
                 min_duration_sec,
@@ -667,20 +727,22 @@ impl Pipeline {
     /// Load jobs from the resume state file, falling back to a fresh batch on
     /// any validation/IO failure (quarantining the bad file). Extracted from
     /// `execute()` so the orchestrator stays readable.
-    #[allow(clippy::too_many_arguments)]
     async fn load_resume_or_fresh(
         &self,
         resume: bool,
-        state_path: &Path,
-        video_files: &[String],
-        safe_prefix: &str,
-        output_dir: &Path,
-        output_ext: &str,
-        input_roots: &[std::path::PathBuf],
-        thumb_dir: &Path,
+        ctx: ResumeContext<'_>,
         workspace: &mut WorkspaceGuard,
-        render_timestamp: u64,
     ) -> Result<Vec<RenderJob>, AppError> {
+        let ResumeContext {
+            state_path,
+            video_files,
+            safe_prefix,
+            output_dir,
+            output_ext,
+            input_roots,
+            thumb_dir,
+            render_timestamp,
+        } = ctx;
         if !(resume && state_path.exists()) {
             return Ok(self.create_initial_jobs(video_files, safe_prefix, output_dir, output_ext));
         }
@@ -799,8 +861,7 @@ impl Pipeline {
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("unknown");
-            let ext = output_ext;
-            let unique_name = format!("{}_{}_{}.{}", stem, ts, idx, ext);
+            let unique_name = format!("{}_{}_{}.{}", stem, ts, idx, output_ext);
             let output_name = if safe_prefix.is_empty() {
                 unique_name
             } else {
@@ -821,5 +882,33 @@ impl Pipeline {
             });
         }
         jobs
+    }
+}
+
+#[cfg(test)]
+mod encoder_selection_tests {
+    use super::{is_hardware_encoder, software_fallback};
+
+    #[test]
+    fn hardware_encoders_fall_back_to_the_matching_software_encoder() {
+        for (encoder, expected) in [
+            ("h264_nvenc", "libx264"),
+            ("h264_amf", "libx264"),
+            ("h264_qsv", "libx264"),
+            ("hevc_nvenc", "libx265"),
+            ("hevc_amf", "libx265"),
+            ("hevc_qsv", "libx265"),
+            ("av1_nvenc", "libsvtav1"),
+            ("av1_qsv", "libsvtav1"),
+        ] {
+            assert!(
+                is_hardware_encoder(encoder),
+                "{encoder} must count as a hardware encoder"
+            );
+            assert_eq!(software_fallback(encoder), expected);
+        }
+        assert!(!is_hardware_encoder("libx264"));
+        assert!(!is_hardware_encoder("libx265"));
+        assert!(!is_hardware_encoder("libsvtav1"));
     }
 }

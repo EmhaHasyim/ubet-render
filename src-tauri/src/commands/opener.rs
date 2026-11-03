@@ -19,11 +19,15 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 ///   reliable per-file "reveal" across desktop environments).
 ///
 /// # Security
-/// The path is restricted to the configured output directory and the temporary
-/// thumbnails directory. This prevents a compromised frontend from using the
-/// command to reveal arbitrary system files.
+/// The path is restricted to the configured output directory, the active
+/// render's output root, and the temporary thumbnails directory. This prevents
+/// a compromised frontend from using the command to reveal arbitrary system
+/// files.
 #[tauri::command]
-pub fn reveal_in_explorer(path: String) -> Result<(), String> {
+pub fn reveal_in_explorer(
+    path: String,
+    state: tauri::State<'_, crate::RenderState>,
+) -> Result<(), String> {
     // Reject traversal, control characters, and other dangerous path forms
     // before touching the filesystem.
     let _ = crate::validation::sanitize_path(&path).map_err(|e| e.to_string())?;
@@ -42,18 +46,25 @@ pub fn reveal_in_explorer(path: String) -> Result<(), String> {
     }
 
     let thumb_dir = crate::utils::fs::ubet_temp_dir().join("thumbnails");
-    // Canonicalize roots for consistent path comparison.  When
-    // canonicalize fails (e.g. the directory doesn't exist yet),
-    // fall back to validating the path with sanitize_path first,
-    // then use the absolute form so symlink traversal through the
-    // unresolved path is still caught by resolve_and_validate_path.
+    // Canonicalize roots for consistent path comparison. When canonicalize
+    // fails (e.g. the directory doesn't exist yet), fall back to the absolute
+    // form; `resolve_and_validate_path` canonicalizes the final path so
+    // symlink traversal is still caught.
     let output_root = output_dir
         .canonicalize()
         .unwrap_or_else(|_| crate::utils::fs::to_absolute(&output_dir));
     let thumb_root = thumb_dir
         .canonicalize()
         .unwrap_or_else(|_| crate::utils::fs::to_absolute(&thumb_dir));
-    let allowed_roots: Vec<PathBuf> = vec![output_root, thumb_root];
+    let mut allowed_roots: Vec<PathBuf> = vec![output_root, thumb_root];
+    // The active render's output root may differ from the persisted config:
+    // the user can pick a folder and start before the debounced `save_config`
+    // lands. `ControlGuard` clears this when the render ends.
+    if let Ok(active) = state.output_dir.lock()
+        && let Some(active) = active.as_ref()
+    {
+        allowed_roots.push(active.canonicalize().unwrap_or_else(|_| active.clone()));
+    }
 
     // Use the canonicalized, root-checked result — not the raw IPC string —
     // to close the check-then-use (TOCTOU) gap and avoid `p.is_dir()` races.

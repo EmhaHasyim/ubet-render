@@ -8,8 +8,8 @@
  * sink other than `window.console` (e.g. a Tauri-managed file) without
  * touching call sites.
  *
- * Output format (mirrors `src-tauri/src/utils/logger.rs` which writes the
- * backend log to disk):
+ * Output format (the frontend includes the date; the backend logger writes
+ * the same UTC clock with millisecond precision to disk):
  *   `[2026-07-25 14:23:01.234] [usePipeline] Hardware detection failed`
  *
  * Each logged line is also pushed to a small in-memory queue and flushed
@@ -110,8 +110,10 @@ const pad3 = (n: number): string => String(n).padStart(3, '0');
 function formatTimestamp(): string {
   // UTC, fixed-width precision so a `tail -f` of both frontend
   // console lines and the backend render log lines up by clock.
-  // Mirrors `chrono::Utc::now().format("%H:%M:%S%.3f")` in
-  // `src-tauri/src/utils/logger.rs::log_line`.
+  // Uses the same UTC clock and millisecond precision as
+  // `chrono::Utc::now().format("%H:%M:%S%.3f")` in
+  // `src-tauri/src/utils/logger.rs::log_line`; the date is included here
+  // because frontend lines are batched and flushed later.
   //
   // NOTE: uses getUTC* so timestamps are timezone-agnostic and
   // always match the Rust backend (which also logs in UTC).

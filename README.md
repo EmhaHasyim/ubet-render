@@ -47,42 +47,72 @@ Making long-form looped videos (1-hour lo-fi mixes, stream screens, ambient soun
 
 ```
 src/
-├── App.tsx                # Root component: layout shell, ErrorBoundary, tab routing
+├── App.tsx                # Root: ErrorBoundary + PipelineBridge + global dialogs
 ├── App.css                # Global styles, Tailwind plugins, DaisyUI theme, animations
 ├── index.tsx              # Entry point
 │
-├── core/                  # Pure, framework-agnostic logic
+├── assets/                # Static assets (logo)
+├── contracts/             # Cross-language fixtures (pipeline event contract)
+│
+├── core/                  # Shared logic + Tauri/DOM adapters (not all pure)
 │   ├── types.ts           # Shared TypeScript types & interfaces
 │   ├── config.ts          # Default config values, file-extension lists
 │   ├── estimate.ts        # Bitrate validation, ETA formatting
-│   └── persisted.ts       # localStorage persistence, schema versioning & migration
+│   ├── persisted.ts       # localStorage persistence, schema versioning & migration
+│   ├── logger.ts          # Console + backend log sink
+│   └── notify.ts / toast.ts / updater.ts / window.ts  # Platform adapters
 │
-├── context/               # SolidJS context providers
-│   └── pipeline.tsx        # PipelineContext + PipelineProvider (wrapped at call-site by PipelineBridge in App.tsx)
+├── context/               # SolidJS context + app wiring
+│   ├── pipeline.tsx        # PipelineContext + PipelineProvider
+│   └── PipelineBridge.tsx  # Calls usePipeline() inside the ErrorBoundary
 │
 ├── hooks/                 # Custom SolidJS hooks
 │   ├── usePipeline.ts     # Central orchestrator: wires config, hardware, DnD, IPC events
 │   ├── usePersistedConfig.ts  # Persisted settings via createStore (single reactive root)
 │   ├── useHardware.ts     # Hardware detection, encoder selection per GPU vendor
-│   └── useDragDrop.ts     # Tauri-native + HTML5 drag-and-drop (dual fallback)
+│   ├── useDragDrop.ts     # Tauri-native + HTML5 drag-and-drop (dual fallback)
+│   └── internal/          # Non-hook factories (createPipelineEventHandler, ...)
+│
+├── test/                  # Test-only infrastructure
+│   ├── setup.ts           # Vitest setup + DOM polyfills
+│   └── utils.tsx          # createMockPipeline / WithPipeline
 │
 └── components/
-    ├── index.ts           # Barrel exports
-    ├── layout/            # Page-level layout components
-    │   ├── AppHeader.tsx     # Start/Pause/Cancel controls with cancel dialog
+    ├── layout/            # App shell + dashboard/activity sections
+    │   ├── Dashboard.tsx     # Shell: titlebar, sidebar, tabs, taskbar progress
+    │   ├── Titlebar.tsx      # Custom window chrome + tab switcher
+    │   ├── Sidebar.tsx       # Tab rail with job counter
     │   ├── SettingsCard.tsx  # Sources, output, encoding, looping, features
+    │   ├── AppHeader.tsx     # Start/Pause/Cancel controls with cancel dialog
     │   ├── StatsStrip.tsx    # KPI strip (jobs, progress, live stats)
     │   ├── JobTable.tsx      # Job queue with thumbnails and progress bars
-    │   └── LogViewer.tsx     # Virtual-scrolled log viewer (2000+ lines)
+    │   ├── LogViewer.tsx     # Holds 2000 lines, renders the last 500 (batched flush)
+    │   ├── LogToolbar.tsx    # Level filter, search, copy/clear
+    │   ├── ActivityView.tsx  # Jobs + logs tab
+    │   └── InspectorRail.tsx # Start controls, progress, hardware, mini logs
     ├── media/             # Media source selection
     │   └── SourceSelector.tsx  # File picker with file list display
     └── ui/                # Small, reusable presentational components
+        ├── ConfirmDialog.tsx   # Promise-based confirmation modal
         ├── FatalScreen.tsx     # Full-screen error boundary fallback
         ├── HardwareInfo.tsx    # CPU/GPU/RAM/AV1 status card
+        ├── Icon.tsx            # Inlined Lucide SVG bodies (no icon runtime)
         ├── LogLine.tsx         # Single log line with level-based colouring
         ├── OverallProgress.tsx # Global progress bar with ETA
-        └── StatusBadge.tsx     # Pending/Processing/Done/Error badge
+        ├── ShortcutsDialog.tsx # F1 keyboard shortcut reference
+        ├── Skeleton.tsx        # Loading placeholders
+        ├── StatusBadge.tsx     # Pending/Processing/Done/Error badge
+        └── Toast.tsx           # Toast viewport
 ```
+
+### Folder Conventions
+
+- Components are `PascalCase`; hooks are `use*`; non-hook factories live in
+  `hooks/internal/`.
+- Tests are co-located as `*.test.ts(x)`; `App.test.tsx` sits next to `App.tsx`.
+- `components/layout/` is the app shell plus dashboard/activity sections;
+  `components/ui/` holds reusable primitives; `core/` holds shared logic and
+  platform adapters.
 
 ### Component Tree (simplified)
 
@@ -90,34 +120,18 @@ src/
 <App>
   <ErrorBoundary fallback={<FatalScreen />}>
     <PipelineBridge>          {/* calls usePipeline() inside the boundary */}
-      ┌─ Header bar ─────────────────────────────┐
-      │  Logo · Title · Tabs · Status badges     │
-      └───────────────────────────────────────────┘
-      ┌─ Main content ───────────────────────────┐
-      │                                          │
-      │  [Tab: Renderer]                         │
-      │  ┌─ StatsStrip ──────────────────────┐   │
-      │  │  Jobs · Done · Failed · % · Live  │   │
-      │  └───────────────────────────────────┘   │
-      │  ┌─ Grid ───────────────────────────┐   │
-      │  │  SettingsCard              │     │   │
-      │  │  (sources, options)        │     │   │
-      │  │                            │     │   │
-      │  │                     ┌──────┤     │   │
-      │  │                     │ AppHeader  │   │
-      │  │                     │ Hardware   │   │
-      │  │                     │ Progress   │   │
-      │  │                     └──────┘     │   │
-      │  └──────────────────────────────────┘   │
-      │                                          │
-      │  [Tab: Activity]                         │
-      │  ┌─ Grid ───────────────────────────┐   │
-      │  │  JobTable                 │ Logs │   │
-      │  │  (queue, progress,       │ (capped,   │
-      │  │   thumbnails)            │ (filtered) │
-      │  └──────────────────────────────────┘   │
-      └──────────────────────────────────────────┘
+      <Dashboard>
+        <Titlebar />          {/* custom chrome + Renderer / Activity tabs */}
+        <Sidebar />           {/* tab rail with job counter */}
+        <main>
+          [Tab: Renderer]     {/* StatsStrip + SettingsCard */}
+          [Tab: Activity]     {/* ActivityView: JobTable + LogToolbar/LogViewer */}
+          <InspectorRail />   {/* HardwareInfo, start controls, progress + ETA */}
+        </main>
+      </Dashboard>
     </PipelineBridge>
+    <ShortcutsDialog />        {/* F1 */}
+    <ToastViewport />
   </ErrorBoundary>
 </App>
 ```
@@ -207,18 +221,20 @@ Persisted settings use a versioned schema with a migration system:
 
 ## Scripts
 
-| Script             | Purpose                                                          |
-| ------------------ | ---------------------------------------------------------------- |
-| `bun dev`          | Start Vite dev server                                            |
-| `bun build`        | Production build                                                 |
-| `bun tauri dev`    | Tauri dev mode (desktop window)                                  |
-| `bun tauri build`  | Production desktop build                                         |
-| `bun test`         | Run all vitest tests                                             |
-| `bun lint`         | Run oxlint                                                       |
-| `bun lint:fix`     | Run oxlint with auto-fix                                         |
-| `bun format`       | Run oxfmt (formats staged `.ts`, `.tsx`, `.css`, `.json`, `.md`) |
-| `bun format:check` | Check formatting (CI)                                            |
-| `bun prepare`      | Initialize Husky hooks (auto-run after `bun install`)            |
+| Script                | Purpose                                                          |
+| --------------------- | ---------------------------------------------------------------- |
+| `bun dev`             | Start Vite dev server                                            |
+| `bun build`           | Production build                                                 |
+| `bun tauri dev`       | Tauri dev mode (desktop window)                                  |
+| `bun tauri build`     | Production desktop build                                         |
+| `bun test`            | Run all vitest tests                                             |
+| `bun lint`            | Run oxlint                                                       |
+| `bun lint:fix`        | Run oxlint with auto-fix                                         |
+| `bun format`          | Run oxfmt (formats staged `.ts`, `.tsx`, `.css`, `.json`, `.md`) |
+| `bun format:check`    | Check formatting (CI)                                            |
+| `bun bundle`          | Local release build, copies installer + signature to `build/`    |
+| `bun release:prepare` | Bump the version across all version-carrying files               |
+| `bun prepare`         | Initialize Husky hooks (auto-run after `bun install`)            |
 
 ---
 
@@ -226,6 +242,8 @@ Persisted settings use a versioned schema with a migration system:
 
 ### Prerequisites
 
+- Windows 10/11 (the NSIS installer and bundled `ffmpeg`/`ffprobe` sidecars
+  target `x86_64-pc-windows-msvc`)
 - [Bun](https://bun.sh/) v1.x+
 - [FFmpeg](https://ffmpeg.org/) + `ffprobe` in PATH
 - [Rust](https://www.rust-lang.org/) toolchain (for Tauri builds)
@@ -265,7 +283,7 @@ prints it on exit. The README intentionally avoids hard-coding the number so
 it does not drift as soon as a new test is added.
 
 ```bash
-bun run test             # Run all tests (400+ Vitest tests)
+bun run test             # Run all tests (350+ Vitest tests)
 bun run test --watch     # Watch mode
 bun run test src/core/persisted.test.ts  # Single file
 ```
@@ -280,7 +298,7 @@ bun run test src/core/persisted.test.ts  # Single file
 
 ## Project Status
 
-**Version:** 0.4.1 • **License:** MIT
+**Version:** 0.4.2 • **License:** MIT
 
 See [CHANGELOG.md](./CHANGELOG.md) for the full release history, and
 [RELEASE.md](./RELEASE.md) for how releases are cut.

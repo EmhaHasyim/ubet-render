@@ -3,10 +3,11 @@ import { Icon } from './Icon';
 import { rememberFocus } from '../../core/focus';
 
 /**
- * Single source of truth for keyboard-shortcut documentation.
- * Tracked in one place so the dialog can never drift away from
- * `App.tsx`'s keydown handler. Each entry is `{ keys, label, group }`
- * grouped semantically for visual sectioning in the dialog.
+ * Keyboard-shortcut documentation shown by the F1 dialog.
+ *
+ * Keep this list in sync with the two keydown handlers: `useAppShortcuts`
+ * (window/tab/help) and `Dashboard` (render controls). Each entry is
+ * `{ keys, label, group }`, grouped semantically for the dialog.
  */
 export interface ShortcutEntry {
   keys: string[];

@@ -1,5 +1,6 @@
 import { createSignal, ErrorBoundary, onMount } from 'solid-js';
-import { PipelineBridge, Dashboard } from './components/layout/Dashboard';
+import { Dashboard } from './components/layout/Dashboard';
+import { PipelineBridge } from './context/PipelineBridge';
 import { FatalScreen } from './components/ui/FatalScreen';
 import { ShortcutsDialog } from './components/ui/ShortcutsDialog';
 import { useAppShortcuts, type AppTabId } from './hooks/useAppShortcuts';

@@ -38,8 +38,9 @@ const variantMeta: Record<
  *
  * Mounted once near the top of the app. Positioned with DaisyUI's `toast`
  * utility so it sits over the main content without colliding with the
- * window controls. z-index 60 sits above modals (50) so feedback remains
- * visible even when a dialog is open.
+ * window controls. `z-[60]` keeps toasts above the app chrome; an open
+ * native `<dialog>.showModal()` lives in the browser's top layer, so it
+ * covers toasts regardless of z-index.
  */
 export function ToastViewport() {
   const toasts = useToasts();

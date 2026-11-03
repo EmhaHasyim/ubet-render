@@ -181,7 +181,7 @@ async fn check_av1_encoder(app: &tauri::AppHandle) -> Option<String> {
     let hw_fut = futures::future::join_all(
         ["av1_nvenc", "av1_amf", "av1_qsv"]
             .iter()
-            .map(|&encoder| probe_hw_encoder(app, encoder, probe_timeout)),
+            .map(|&encoder| crate::ffmpeg::encoder_produces_frame(app, encoder, probe_timeout)),
     );
     let svt_fut = scan_encoders_for_svt_av1(app, probe_timeout);
     let (hw_results, has_svt) = tokio::join!(hw_fut, svt_fut);
@@ -224,36 +224,6 @@ async fn run_probe(
             }
         }
     }
-}
-
-/// Run one ffmpeg hardware-encode probe. Returns `true` when the encoder
-/// produced a frame successfully within `probe_timeout`.
-async fn probe_hw_encoder(
-    app: &tauri::AppHandle,
-    encoder: &str,
-    probe_timeout: std::time::Duration,
-) -> bool {
-    let Ok(sidecar_command) = app.shell().sidecar("ffmpeg") else {
-        return false;
-    };
-    let sidecar_command = sidecar_command.args([
-        "-v",
-        "error",
-        "-f",
-        "lavfi",
-        "-i",
-        "color=c=black:s=256x256",
-        "-vframes",
-        "1",
-        "-c:v",
-        encoder,
-        "-f",
-        "null",
-        "-",
-    ]);
-    run_probe(sidecar_command, probe_timeout)
-        .await
-        .is_some_and(|(code, _)| code == Some(0))
 }
 
 /// Cheap fallback: check whether the bundled ffmpeg lists `libsvtav1`

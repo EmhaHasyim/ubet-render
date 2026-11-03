@@ -10,7 +10,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 import type { Pipeline } from '../../context/pipeline';
 import { SettingsCard } from './SettingsCard';
-import { WithPipeline } from '../test-utils';
+import { WithPipeline } from '../../test/utils';
 
 function renderCard(overrides?: Record<string, unknown>) {
   return render(() => (

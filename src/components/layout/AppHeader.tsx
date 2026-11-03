@@ -13,7 +13,8 @@ export function AppHeader(props: {
   disabledReason?: string;
   /**
    * Human-readable render estimate shown near the Start button.
-   * Example: "~45 videos · ~12 min each ≃ 9 hours". Pass undefined to hide.
+   * Example: "12 videos · ~10 songs each · 120 total · min 24h".
+   * Pass undefined to hide.
    */
   renderEstimate?: string;
 }) {

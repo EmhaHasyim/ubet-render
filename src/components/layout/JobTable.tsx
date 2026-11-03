@@ -28,11 +28,10 @@ export function JobTable(props: {
    */
   onRetry?: () => void;
 }) {
-  // Track thumbnails that failed to load in a stable Set keyed by path.
-  // A per-row `createSignal` inside the `<Index>` callback would be
-  // recreated on every jobs update (each Progress event replaces the array
-  // with fresh item objects), resetting the error state and causing the row
-  // to flicker between the placeholder and a broken image.
+  // Track thumbnails that failed to load in a Set keyed by path. Keying by
+  // path (instead of a per-row flag) gives a new job reusing the same row
+  // slot a fresh chance to load its own thumbnail; a row-level flag would
+  // keep the failure and hide the new image.
   const [failedThumbs, setFailedThumbs] = createSignal<ReadonlySet<string>>(
     new Set(),
   );
@@ -88,16 +87,21 @@ export function JobTable(props: {
           <tbody>
             <Index each={props.jobs}>
               {(job) => {
-                const thumbPath = job().thumbnailPath;
-                const thumbFailed = () =>
-                  thumbPath !== null && failedThumbs().has(thumbPath);
+                // Accessor, not a snapshot: <Index> reuses the row DOM across
+                // Progress updates, so a plain const would freeze the first
+                // thumbnail path and never pick up a later one.
+                const thumbPath = () => job().thumbnailPath;
+                const thumbFailed = () => {
+                  const path = thumbPath();
+                  return path !== null && failedThumbs().has(path);
+                };
 
                 return (
                   <tr class="border-b border-base-300/40 hover:bg-base-content/[0.04] transition-colors">
                     <td class="min-w-64">
                       <div class="flex items-center gap-3">
                         <Show
-                          when={thumbPath && !thumbFailed()}
+                          when={!!thumbPath() && !thumbFailed()}
                           fallback={
                             <div class="h-11 w-16 flex items-center justify-center rounded-md bg-base-300 text-base-content/40">
                               <Icon
@@ -109,13 +113,14 @@ export function JobTable(props: {
                           }
                         >
                           <img
-                            src={convertFileSrc(thumbPath!)}
+                            src={convertFileSrc(thumbPath()!)}
                             class="h-11 w-16 rounded-md object-cover"
                             alt=""
                             loading="lazy"
-                            onError={() =>
-                              thumbPath && markThumbFailed(thumbPath)
-                            }
+                            onError={() => {
+                              const path = thumbPath();
+                              if (path) markThumbFailed(path);
+                            }}
                           />
                         </Show>
                         <div class="min-w-0">

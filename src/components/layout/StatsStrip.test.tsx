@@ -2,7 +2,7 @@ import { render, screen } from '@solidjs/testing-library';
 import { describe, it, expect } from 'vitest';
 import type { JobProgress } from '../../core/types';
 import { StatsStrip } from './StatsStrip';
-import { WithPipeline } from '../test-utils';
+import { WithPipeline } from '../../test/utils';
 
 const sampleJobs: JobProgress[] = [
   {

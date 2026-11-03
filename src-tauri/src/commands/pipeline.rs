@@ -63,6 +63,11 @@ impl Drop for ControlGuard {
             *lock = None;
         }
         drop(lock);
+        // Only this render owned the reveal root, and `start_render` refuses to
+        // run a second one while the control slot is occupied.
+        if let Ok(mut output_dir) = state.output_dir.lock() {
+            *output_dir = None;
+        }
         self.control.mark_terminated();
         self.control.mark_cleaned();
     }
@@ -117,6 +122,21 @@ pub async fn start_render(
             return Err("A render is already in progress".into());
         }
         *lock = Some(control.clone());
+
+        // Track the effective output root for this render so `reveal_in_explorer`
+        // can accept paths inside it before `save_config` has persisted them.
+        // `ControlGuard` clears it when the render ends.
+        let output_root = crate::utils::fs::to_absolute(std::path::Path::new(
+            overrides
+                .as_ref()
+                .and_then(|ov| ov.output_path.as_deref())
+                .unwrap_or(&config.directories.output),
+        ));
+        if !crate::validation::is_system_protected_path(&output_root)
+            && let Ok(mut slot) = state.output_dir.lock()
+        {
+            *slot = Some(output_root);
+        }
     }
 
     let pipeline = Pipeline::new(app.clone(), config);
@@ -231,8 +251,9 @@ pub fn save_config(config: AppConfig) -> Result<(), String> {
     // parameters to the persisted config file.
     crate::validation::validate_app_config(&config).map_err(|e| e.to_string())?;
 
-    // Warn if encoder contains "av1" — AV1 hardware support is not guaranteed
-    // on all systems and will only be verified at render time.
+    // Warn if the encoder contains "av1": hardware support is not guaranteed on
+    // every machine. The startup AV1 probe and the render-start encoder probe
+    // verify it functionally, but the warning keeps the trade-off visible.
     if config.video.encoder.to_ascii_lowercase().contains("av1") {
         logger::log_line(
             "WARNING: AV1 encoder configured — verify hardware support before rendering.",

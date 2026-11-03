@@ -28,8 +28,6 @@ const stubWindow = {
   toggleMaximize: async () => {},
   onResized: () => Promise.resolve(() => {}),
   setProgressBar: async () => {},
-  close: async () => {},
-  onCloseRequested: () => Promise.resolve(() => {}),
 };
 
 export type SafeWindow = ReturnType<typeof getCurrentWindow>;

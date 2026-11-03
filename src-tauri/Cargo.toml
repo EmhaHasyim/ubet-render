@@ -1,8 +1,11 @@
 [package]
 name = "ubet-render"
-version = "0.4.1"
+version = "0.4.2"
+description = "Offline-first desktop renderer for looping video and audio playlists"
 authors = ["ubet"]
 edition = "2024"
+license = "MIT"
+repository = "https://github.com/EmhaHasyim/ubet-render"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

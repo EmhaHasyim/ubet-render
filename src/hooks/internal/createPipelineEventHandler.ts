@@ -5,10 +5,10 @@ import type {
   PipelineEvent,
   PipelineProgress,
   PipelineStats,
-} from '../core/types';
-import { EtaCalculator } from '../core/eta';
-import { notify } from '../core/notify';
-import { showToast } from '../core/toast';
+} from '../../core/types';
+import { EtaCalculator } from '../../core/eta';
+import { notify } from '../../core/notify';
+import { showToast } from '../../core/toast';
 
 export interface PipelineEventRuntime {
   cancelPauseReconcile: () => void;

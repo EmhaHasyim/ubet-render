@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::AppHandle;
 
-/// Runtime context for a single render job — passed via [`JobContext`] to
-/// keep the `process_single_job` parameter list manageable.
+/// Runtime context for a single render job — grouped so
+/// `process_single_job`'s parameter list stays manageable.
 pub struct JobContext<'a> {
     pub(crate) index: usize,
     pub(crate) jobs_arc: &'a Arc<tokio::sync::Mutex<Vec<RenderJob>>>,
@@ -22,45 +22,12 @@ pub struct JobContext<'a> {
     pub(crate) stats_tx: Option<tokio::sync::mpsc::Sender<RenderStats>>,
 }
 
-/// Map BOTH FFmpeg encoder names (e.g. `libsvtav1`) AND the bare / aliased
-/// codec names returned by `ffprobe` (e.g. `av1`, `libaom-av1`) to a single
-/// canonical token (`h264` / `hevc` / `av1`).  Keeping this mapping
-/// symmetrical is what makes the source-vs-target codec comparison in
-/// `process_single_job` correctly recognise an AV1 stream from HandBrake or
-/// OBS (`libaom-av1`) as AV1 even when the configured encoder is `libsvtav1`
-/// or a hardware variant — without this, the smart skip-reencode heuristic
-/// would silently fall through to a full encode pass on every codec-match
-/// file that happens to use the AOM reference encoder.
-fn map_encoder_to_codec(enc: &str) -> &str {
-    match enc {
-        "h264" | "libx264" | "h264_nvenc" | "h264_amf" | "h264_qsv" => "h264",
-        "hevc" | "libx265" | "hevc_nvenc" | "hevc_amf" | "hevc_qsv" => "hevc",
-        // Cover NVIDIA / AMD / Intel hardware encoders plus the AOM reference
-        // and SVT-AV1 software encoders, including the bare "av1" identifier
-        // FFmpeg itself emits. Additional Windows / Linux hardware paths
-        // (`av1_mf`, `av1_vaapi`, `av1_v4l2m2m`) are included so a stream
-        // produced by any of those still matches on the source side.
-        "av1" | "libaom-av1" | "aom" | "svt-av1" | "av1_nvenc" | "av1_amf" | "av1_qsv"
-        | "av1_mf" | "av1_vaapi" | "av1_v4l2m2m" | "libsvtav1" => "av1",
-        _ => enc,
-    }
-}
-
-fn requires_intermediate(skip_intermediate_on_codec_match: bool, should_reencode: bool) -> bool {
-    // OFF = always run the intermediate processing step.
-    // ON  = skip it when the source can be stream-copied (i.e. re-encode
-    //        is not required — either codec matches or the user forced
-    //        unconditional skip).
-    !skip_intermediate_on_codec_match || should_reencode
-}
-
 /// Static configuration for a single render job — extracted into a struct
 /// so `process_single_job` doesn't need 15 individual parameters.
 pub struct JobParams {
     pub(crate) use_pingpong: bool,
     pub(crate) skip_intermediate_on_codec_match: bool,
     pub(crate) video_cfg: crate::config::VideoSettings,
-    pub(crate) encoder_selected: Option<String>,
     pub(crate) master_pool: Arc<Vec<ProcessedAudio>>,
     pub(crate) songs_per_playlist: usize,
     pub(crate) min_duration_sec: u64,
@@ -94,15 +61,13 @@ pub(crate) async fn process_single_job(
         )
     };
 
-    // Single ffprobe call for duration, codec, and frame rate instead of
-    // three separate subprocess invocations (reduces startup overhead per
-    // job by ~2× the cost of spawning ffprobe). Fall back to the individual
-    // get_duration call if the combined probe fails.
-    let (input_codec, input_fps, input_duration) =
+    // Single ffprobe call for duration and frame rate instead of two separate
+    // subprocess invocations. Fall back to the standalone duration probe if the
+    // combined probe fails.
+    let (input_fps, input_duration) =
         match ffmpeg::get_video_info(app, Path::new(&input_path)).await {
-            Ok(info) => (info.codec, info.frame_rate, Ok(info.duration)),
+            Ok(info) => (info.frame_rate, Ok(info.duration)),
             Err(_) => (
-                None,
                 30.0,
                 ffmpeg::get_duration(app, Path::new(&input_path)).await,
             ),
@@ -110,45 +75,14 @@ pub(crate) async fn process_single_job(
     let input_duration = input_duration
         .map_err(|_| AppError::Pipeline(format!("Failed to detect video duration: {}", name)))?;
 
-    // When the user opts into skip-intermediate, bypass the codec
-    // comparison entirely. The source video is fed directly to the
-    // concat demuxer via stream-copy, regardless of whether the source
-    // codec matches the target encoder. This is an explicit user choice
-    // (the toggle is OFF by default) and the user accepts that the
-    // output container/codec is determined solely by the source file.
-    let should_reencode = if params.skip_intermediate_on_codec_match {
-        false
-    } else {
-        match (&input_codec, params.encoder_selected.as_deref()) {
-            (Some(in_codec), Some(enc)) => {
-                // Normalize BOTH sides via the same mapper so codec aliases
-                // returned by ffprobe (e.g. `libaom-av1`) compare equal to the
-                // encoder name chosen by the frontend (e.g. `libsvtav1`).
-                let mapped_enc = map_encoder_to_codec(enc);
-                let mapped_in = map_encoder_to_codec(in_codec);
-                mapped_in != mapped_enc
-            }
-            (Some(in_codec), None) => {
-                // No encoder override: compare against the configured default encoder
-                // to avoid unnecessary re-encoding when source already matches target.
-                let mapped_enc = map_encoder_to_codec(params.video_cfg.encoder.as_str());
-                let mapped_in = map_encoder_to_codec(in_codec);
-                mapped_in != mapped_enc
-            }
-            _ => true,
-        }
-    };
-
     let ping_pong_path;
     let created_intermediate;
     let target_dur = input_duration.max(0.001) * if params.use_pingpong { 2.0 } else { 1.0 };
 
-    // Decide whether the intermediate re-encode (the "1/2 ..." step) is
-    // required. When skip_intermediate_on_codec_match is ON, the source
-    // is stream-copied unconditionally (should_reencode is forced false).
-    // When OFF, the normal codec-matching logic applies.
-    let skip_match = params.skip_intermediate_on_codec_match;
-    let needs_intermediate = requires_intermediate(skip_match, should_reencode);
+    // `skip_intermediate_on_codec_match` is an unconditional stream-copy
+    // switch (the name is historical — it used to gate on a codec match).
+    // ON = feed the source straight into the concat demuxer, no re-encode.
+    let needs_intermediate = !params.skip_intermediate_on_codec_match;
 
     if needs_intermediate {
         {
@@ -362,147 +296,5 @@ pub(crate) async fn process_single_job(
             Ok(())
         }
         Err(e) => Err(e),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{map_encoder_to_codec, requires_intermediate};
-
-    #[test]
-    fn test_av1_aliases_normalize_to_av1() {
-        // Includes bare codec name, AOM/SVT software encoder names, the
-        // three GPU vendors' AV1 hardware encoder names, plus the Windows
-        // Media Foundation (`av1_mf`) and Linux VA-API / V4L2 (`av1_vaapi`,
-        // `av1_v4l2m2m`) paths. Every listed string must collapse to the
-        // same canonical "av1" token.
-        for enc in [
-            "av1",
-            "libaom-av1",
-            "aom",
-            "svt-av1",
-            "av1_nvenc",
-            "av1_amf",
-            "av1_qsv",
-            "av1_mf",
-            "av1_vaapi",
-            "av1_v4l2m2m",
-            "libsvtav1",
-        ] {
-            assert_eq!(
-                map_encoder_to_codec(enc),
-                "av1",
-                "AV1 alias '{}' should normalize to 'av1'",
-                enc
-            );
-        }
-    }
-
-    #[test]
-    fn test_h264_aliases_normalize_to_h264() {
-        for enc in ["h264", "libx264", "h264_nvenc", "h264_amf", "h264_qsv"] {
-            assert_eq!(
-                map_encoder_to_codec(enc),
-                "h264",
-                "H.264 alias '{}' should normalize to 'h264'",
-                enc
-            );
-        }
-    }
-
-    #[test]
-    fn test_hevc_aliases_normalize_to_hevc() {
-        for enc in ["hevc", "libx265", "hevc_nvenc", "hevc_amf", "hevc_qsv"] {
-            assert_eq!(
-                map_encoder_to_codec(enc),
-                "hevc",
-                "HEVC alias '{}' should normalize to 'hevc'",
-                enc
-            );
-        }
-    }
-
-    #[test]
-    fn test_unknown_encoder_passed_through() {
-        // Unrecognised encoders are returned unchanged so the comparison
-        // stays transparent — the caller decides whether the resulting
-        // mismatch should be treated as a re-encode trigger.
-        for enc in ["vp9", "wmv2", "mpeg4", "custom_encoder"] {
-            assert_eq!(
-                map_encoder_to_codec(enc),
-                enc,
-                "Unknown encoder '{}' should be returned as-is",
-                enc
-            );
-        }
-    }
-
-    #[test]
-    fn test_intermediate_policy_keeps_encode_for_codec_mismatch() {
-        assert!(requires_intermediate(true, true));
-    }
-
-    #[test]
-    fn test_intermediate_policy_allows_explicit_stream_copy_on_match() {
-        assert!(!requires_intermediate(true, false));
-    }
-
-    #[test]
-    fn test_intermediate_policy_defaults_to_intermediate() {
-        assert!(requires_intermediate(false, false));
-    }
-
-    #[test]
-    fn test_skip_reencode_when_aliases_match() {
-        // Cross-product check that every recognised AV1 alias compares
-        // equal to every other recognised AV1 alias. This is the precise
-        // mathematical condition under which `should_reencode` returns
-        // `false` and the user's zero-reencode toggle kicks in. If any
-        // (alias_x, alias_y) pair were forgotten in the match arm above
-        // the test would fail here, protecting the intended behavior
-        // (a HandBrake / libaom-av1 source rendered with libsvtav1 skips
-        //  the intermediate encode).
-        let av1_aliases = [
-            "av1",
-            "libaom-av1",
-            "aom",
-            "svt-av1",
-            "av1_nvenc",
-            "av1_amf",
-            "av1_qsv",
-            "av1_mf",
-            "av1_vaapi",
-            "av1_v4l2m2m",
-            "libsvtav1",
-        ];
-        for &a in &av1_aliases {
-            for &b in &av1_aliases {
-                assert_eq!(
-                    map_encoder_to_codec(a),
-                    map_encoder_to_codec(b),
-                    "AV1 alias pair ('{}', '{}') should both map to 'av1'",
-                    a,
-                    b
-                );
-                assert_eq!(
-                    map_encoder_to_codec(a),
-                    "av1",
-                    "AV1 alias '{}' should map to 'av1'",
-                    a
-                );
-            }
-        }
-        // Cross-codec mismatches stay mismatched after normalization.
-        for av1 in &av1_aliases {
-            for h264 in ["h264", "libx264", "h264_nvenc"] {
-                assert_ne!(
-                    map_encoder_to_codec(av1),
-                    map_encoder_to_codec(h264),
-                    "AV1 alias '{}' must NOT match H.264 alias '{}'",
-                    av1,
-                    h264
-                );
-            }
-        }
     }
 }

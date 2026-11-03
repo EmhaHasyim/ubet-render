@@ -1,7 +1,7 @@
 {
   "name": "ubet-render",
-  "version": "0.4.1",
-  "description": "",
+  "version": "0.4.2",
+  "description": "Offline-first desktop renderer for looping video and audio playlists",
   "license": "MIT",
   "type": "module",
   "scripts": {

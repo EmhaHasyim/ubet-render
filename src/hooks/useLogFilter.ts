@@ -1,4 +1,4 @@
-import { createMemo, createSignal } from 'solid-js';
+import { createMemo, createSignal, onCleanup } from 'solid-js';
 import {
   FILTERABLE_LEVELS,
   parseLevel,
@@ -66,6 +66,11 @@ export function useLogFilter(logs: () => string[]) {
     }, 300);
   };
 
+  onCleanup(() => {
+    if (searchTimer !== null) clearTimeout(searchTimer);
+    if (storageTimer !== null) clearTimeout(storageTimer);
+  });
+
   const filteredLogs = createMemo(() => {
     const query = debouncedQuery().trim().toLowerCase();
     const levels = enabledLevels();
@@ -84,10 +89,13 @@ export function useLogFilter(logs: () => string[]) {
     });
   });
 
+  // Must match what `filteredLogs` actually applies. Using the raw query here
+  // made the toolbar claim a filter was active during the 150 ms debounce,
+  // while the list still showed unfiltered lines.
   const isFiltering = createMemo(
     () =>
       enabledLevels().size !== FILTERABLE_LEVELS.length ||
-      searchQuery().trim().length > 0,
+      debouncedQuery().trim().length > 0,
   );
 
   return {

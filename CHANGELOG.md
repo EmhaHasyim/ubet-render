@@ -4,6 +4,59 @@ All notable changes to Ubet Render are documented in this file.
 
 ---
 
+## [0.4.2] — 2026-11-03
+
+### Fixed
+
+- **Quitting from the tray no longer discards render progress**: the app
+  cancels the active pipeline, waits up to 10 seconds for state/temp cleanup,
+  then exits.
+- **Hardware encoders are verified before a batch**: an encoder compiled into
+  the bundled FFmpeg but unusable without the matching GPU/driver now falls
+  back to software (`libx264` / `libx265` / `libsvtav1`) instead of failing
+  mid-render.
+- **Reveal in Explorer works immediately after a render**: the active output
+  root is accepted even before the debounced config save reaches disk.
+- **Window close is consistent with the tray**: the old JS close handler could
+  reopen its cancel dialog behind the native hide and pause a running render;
+  close is now always hide-to-tray.
+- **The taskbar no longer shows 100% for a paused render**, and a cancelled
+  render clears the progress bar instead of looking complete.
+- **F11 queries the real fullscreen state** rather than a cached value that
+  could go stale when the OS leaves fullscreen.
+- **Log filtering** uses the debounced query for the "filtering" indicator, so
+  the toolbar does not claim a filter is active during the 150 ms delay.
+- **Thumbnail state stays reactive** across progress updates, and failed
+  thumbnails are tracked by path so a reused row can show its new image.
+- **The final chapter always has `END > START`**, even when float accumulation
+  differs from the multiplied audio duration by an epsilon.
+- **`Titlebar` registers cleanup before its async window queries**, so an
+  unmount during startup cannot leak the resize listener.
+
+### Changed
+
+- Removed dead codec-match re-encode logic: the "skip intermediate" toggle is
+  now explicitly an unconditional stream-copy switch (the persisted field name
+  is kept for compatibility).
+- Audio cache keys use a bounded head/tail content signature (256 KiB each)
+  instead of re-reading every source file in full.
+- Thumbnail generation maps job indices once and uses async metadata instead
+  of an O(n²) scan with blocking `exists()` calls.
+- Test helpers moved to `src/test/`, non-hook factories to `hooks/internal/`,
+  and `DashboardPanels` split into `ActivityView` / `InspectorRail`.
+
+### Cleanup
+
+- Audited and corrected stale comments across Rust, TypeScript, and release
+  scripts; normalized tracked text files to LF and made the binary
+  `.gitattributes` precedence explicit.
+- README structure now matches the tree (removed the nonexistent barrel file),
+  documents folder conventions, and states the Windows-only installer/sidecar
+  target.
+- Added package metadata (`description`, `license`, `repository`).
+
+---
+
 ## [0.4.1] — 2026-09-05
 
 ### Fixed

@@ -1,4 +1,5 @@
 export const TAURI_COMMANDS = {
+  detectHardware: 'detect_hardware',
   startRender: 'start_render',
   resumeRender: 'resume_render',
   cancelRender: 'cancel_render',

@@ -1,1 +1,7 @@
+# Normalize every text file to LF in the repo and on checkout so the
+# formatter (oxfmt) and CI agree with local Windows checkouts.
+* text=auto eol=lf
+
+# Keep the bundled binaries opaque (and in LFS). This must follow the
+# catch-all above so `-text` wins for the sidecars.
 src-tauri/binaries/* filter=lfs diff=lfs merge=lfs -text

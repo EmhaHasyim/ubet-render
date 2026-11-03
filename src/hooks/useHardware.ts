@@ -2,6 +2,7 @@ import { createSignal, onMount } from 'solid-js';
 import { invoke } from '@tauri-apps/api/core';
 import type { HardwareInfo } from '../core/types';
 import { CODECS } from '../core/config';
+import { TAURI_COMMANDS } from '../core/constants';
 
 export type { HardwareInfo } from '../core/types';
 
@@ -24,7 +25,7 @@ export function useHardware(
       ramGb: number;
       av1Supported: boolean;
       av1Encoder: string | null;
-    }>('detect_hardware')
+    }>(TAURI_COMMANDS.detectHardware)
       .then((info) => {
         setHardwareInfo({
           cpuModel: info.cpuName,
@@ -52,11 +53,12 @@ export function useHardware(
       });
   });
 
-  // GPU-vendor substring → encoder is a heuristic, not a probe (kept for
-  // h264/h265, which have no startup probe). AV1 uses the backend-probed
-  // encoder name instead: a vendor match does not imply AV1 hardware
-  // (e.g. RTX 30 has no AV1 encode) and a wrong guess used to surface as
-  // a per-job FFmpeg failure mid-render.
+  // GPU-vendor substring → encoder is a heuristic, not a probe: the startup
+  // detect_hardware probe only resolves AV1. H.264/H.265 keep the heuristic
+  // because the backend re-verifies any hardware encoder before a batch and
+  // falls back to software when it cannot encode, so a wrong vendor guess
+  // costs a probe rather than a failed render. AV1 uses the probed encoder
+  // name because a vendor match does not imply AV1 hardware (e.g. RTX 30).
   const resolveEncoder = (codec: string): string => {
     const gpu = hardwareInfo()?.gpuModel.toLowerCase() || '';
     switch (codec) {

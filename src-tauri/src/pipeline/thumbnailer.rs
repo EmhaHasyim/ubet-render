@@ -2,6 +2,7 @@ use crate::ffmpeg;
 use crate::models::job::RenderJob;
 use crate::utils::event;
 use futures::StreamExt;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -53,14 +54,20 @@ pub async fn generate_thumbnails(
         })
         .await;
 
-    for (i, job) in jobs
-        .iter_mut()
-        .enumerate()
-        .filter(|(_, j)| j.video.thumbnail_path.is_none())
-    {
-        if let Some((_, _, thumb_path)) = thumb_tasks.iter().find(|(idx, _, _)| *idx == i)
-            && thumb_path.exists()
-        {
+    // Map first: the previous `find` inside a loop was O(n²) over the job list
+    // (up to 10 000 videos), and `exists()` blocked the async worker.
+    let thumbnail_by_index: HashMap<usize, std::path::PathBuf> = thumb_tasks
+        .iter()
+        .map(|(index, _, path)| (*index, path.clone()))
+        .collect();
+    for (index, job) in jobs.iter_mut().enumerate() {
+        if job.video.thumbnail_path.is_some() {
+            continue;
+        }
+        let Some(thumb_path) = thumbnail_by_index.get(&index) else {
+            continue;
+        };
+        if tokio::fs::metadata(thumb_path).await.is_ok() {
             job.video.thumbnail_path = Some(thumb_path.to_string_lossy().into_owned());
         }
     }

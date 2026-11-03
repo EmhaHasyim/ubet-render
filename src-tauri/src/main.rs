@@ -166,43 +166,10 @@ impl RenderControl {
 
 pub struct RenderState {
     pub control: Mutex<Option<Arc<RenderControl>>>,
-}
-
-#[cfg(test)]
-#[allow(clippy::items_after_test_module)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_render_control_cleanup_is_distinct_from_termination() {
-        let rc = Arc::new(RenderControl::new());
-        rc.mark_terminated();
-
-        let waiter = {
-            let rc = Arc::clone(&rc);
-            tokio::spawn(async move {
-                rc.wait_for_cleanup().await;
-                true
-            })
-        };
-        tokio::task::yield_now().await;
-        assert!(!waiter.is_finished());
-
-        rc.mark_cleaned();
-        assert!(waiter.await.unwrap());
-    }
-
-    #[test]
-    fn test_render_control_mark_terminated() {
-        let rc = RenderControl::new();
-        rc.pause();
-        rc.mark_terminated();
-        assert!(rc.is_terminated());
-        // A terminated (committed-to-exit) pipeline that happens to still be
-        // paused must not report itself as resumable.
-        assert!(rc.is_paused());
-        assert!(rc.is_terminated());
-    }
+    /// Effective output root of the active render. `reveal_in_explorer` uses
+    /// it so a path can be revealed before the render's settings have been
+    /// persisted to disk. Cleared together with the control guard.
+    pub output_dir: Mutex<Option<std::path::PathBuf>>,
 }
 
 fn main() {
@@ -215,6 +182,7 @@ fn main() {
         .setup(|app| {
             app.manage(RenderState {
                 control: Mutex::new(None),
+                output_dir: Mutex::new(None),
             });
 
             let show_i = MenuItemBuilder::with_id("show", "Show").build(app)?;
@@ -231,7 +199,24 @@ fn main() {
                         }
                     }
                     "quit" => {
-                        app.exit(0);
+                        // Quitting mid-render must not throw away progress:
+                        // cancel, wait (bounded) for the pipeline to persist its
+                        // state and remove its temp output, then exit.
+                        let app_handle = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let control = app_handle.try_state::<RenderState>().and_then(|state| {
+                                state.control.lock().ok().and_then(|slot| slot.clone())
+                            });
+                            if let Some(control) = control {
+                                control.cancel();
+                                let _ = tokio::time::timeout(
+                                    std::time::Duration::from_secs(10),
+                                    control.wait_for_cleanup(),
+                                )
+                                .await;
+                            }
+                            app_handle.exit(0);
+                        });
                     }
                     _ => (),
                 })
@@ -308,4 +293,40 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_render_control_cleanup_is_distinct_from_termination() {
+        let rc = Arc::new(RenderControl::new());
+        rc.mark_terminated();
+
+        let waiter = {
+            let rc = Arc::clone(&rc);
+            tokio::spawn(async move {
+                rc.wait_for_cleanup().await;
+                true
+            })
+        };
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished());
+
+        rc.mark_cleaned();
+        assert!(waiter.await.unwrap());
+    }
+
+    #[test]
+    fn test_render_control_mark_terminated() {
+        let rc = RenderControl::new();
+        rc.pause();
+        rc.mark_terminated();
+        assert!(rc.is_terminated());
+        // A terminated (committed-to-exit) pipeline that happens to still be
+        // paused must not report itself as resumable.
+        assert!(rc.is_paused());
+        assert!(rc.is_terminated());
+    }
 }

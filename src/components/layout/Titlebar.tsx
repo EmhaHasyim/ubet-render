@@ -42,25 +42,17 @@ export function Titlebar(props: {
   let contextMenuRef: HTMLDivElement | undefined;
   const appWindow = getSafeWindow();
 
-  onMount(async () => {
+  onMount(() => {
+    let disposed = false;
+    let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+    let unlistenResize: (() => void) | undefined;
+
     // Load saved theme preference (or smart default from OS) and apply it
     // to <html data-theme="..."> immediately. Doing this on mount keeps the
     // initial paint theme-correct without waiting for the toggle click.
     const initial = loadTheme();
     setTheme(initial);
     applyTheme(initial);
-
-    setIsMaximized(await appWindow.isMaximized());
-
-    // ── Resize listener (debounced) ──────────────────────
-    let debounceTimer: ReturnType<typeof setTimeout> | undefined;
-
-    const unlistenResize = await appWindow.onResized(() => {
-      if (debounceTimer !== undefined) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        appWindow.isMaximized().then(setIsMaximized);
-      }, 200);
-    });
 
     // ── Click outside → close context menu ───────────────
     const closeMenuOnClick = (e: MouseEvent) => {
@@ -76,12 +68,34 @@ export function Titlebar(props: {
     };
     document.addEventListener('keydown', closeMenuOnEscape);
 
-    // ── Cleanup all ──────────────────────────────────────
+    // Register cleanup before any `await`: an unmount during the async
+    // window queries must still remove the listeners.
     onCleanup(() => {
-      unlistenResize();
+      disposed = true;
+      unlistenResize?.();
       if (debounceTimer !== undefined) clearTimeout(debounceTimer);
       document.removeEventListener('click', closeMenuOnClick);
       document.removeEventListener('keydown', closeMenuOnEscape);
+    });
+
+    void (async () => {
+      const maximized = await appWindow.isMaximized();
+      if (!disposed) setIsMaximized(maximized);
+
+      // ── Resize listener (debounced) ────────────────────
+      const unlisten = await appWindow.onResized(() => {
+        if (disposed) return;
+        if (debounceTimer !== undefined) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          void appWindow.isMaximized().then((next) => {
+            if (!disposed) setIsMaximized(next);
+          });
+        }, 200);
+      });
+      if (disposed) unlisten();
+      else unlistenResize = unlisten;
+    })().catch(() => {
+      // The window may already be closing; controls remain usable.
     });
   });
 

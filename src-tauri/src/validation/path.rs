@@ -129,9 +129,14 @@ pub fn resolve_and_validate_path(
             canonical_parent.join(path.file_name().unwrap_or(path.as_os_str()))
         }
     };
+    // Fast path: callers normally pass roots that are already canonical (see
+    // `pipeline::roots`), so a plain prefix check avoids re-canonicalising
+    // every root for every file in a recursive scan (up to 10 000 per source).
     let is_allowed = allowed_roots.iter().any(|root| {
-        let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-        canonical.starts_with(canonical_root)
+        canonical.starts_with(root)
+            || root
+                .canonicalize()
+                .is_ok_and(|canonical_root| canonical.starts_with(canonical_root))
     });
     if !is_allowed {
         return Err(AppError::Pipeline(
@@ -252,5 +257,22 @@ mod tests {
     fn rejects_flag_like_file_names() {
         assert!(sanitize_path("-input.mp4").is_err());
         assert!(sanitize_path("folder/-input.mp4").is_err());
+    }
+
+    #[test]
+    fn resolve_accepts_paths_inside_canonical_roots_only() {
+        let root = std::env::temp_dir().join(format!("ubet_path_root_{}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("create root");
+        let inside = root.join("clip.mp4");
+        std::fs::write(&inside, b"x").expect("write clip");
+        let roots = vec![root.canonicalize().expect("canonical root")];
+
+        assert!(resolve_and_validate_path(&inside, &roots).is_ok());
+        assert!(
+            resolve_and_validate_path(&std::env::temp_dir().join("ubet_outside.mp4"), &roots)
+                .is_err()
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

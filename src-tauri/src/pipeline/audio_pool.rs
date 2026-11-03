@@ -37,8 +37,9 @@ use tauri::AppHandle;
 ///    measures the source via `loudnorm=...:print_format=json` and the
 ///    measured values are fed back to pass 2 (with `linear=true`) for
 ///    EBU R128-grade accuracy instead of blind single-pass application.
-///    Pass-1 measurements are cached on disk keyed by `(path, size, mtime)`
-///    so subsequent renders don't re-analyze the same file. Falls back
+///    Pass-1 measurements are cached on disk keyed by path, loudnorm target,
+///    and a content signature, so subsequent renders don't re-analyze the
+///    same file. Falls back
 ///    gracefully to single-pass if measurement or pass 2 fails.
 /// 5. **Atomic write + tmp cleanup** — every ffmpeg output is written to
 ///    a `.tmp` sibling and renamed into the final cache path only after
@@ -46,9 +47,10 @@ use tauri::AppHandle;
 ///    errored, panicked), the leftover `.tmp` is `safe_delete_sync`'d so
 ///    cancelled sessions never accumulate disk garbage.
 /// 6. **Per-track progress** — after each track finishes, a `Log` event
-///    reports `Audio N/M ready: filename (copied|normalized 2-pass|...)
+///    reports `Audio pool: N/M tracks ready (stream-copied|2-pass normalized|
+///    1-pass normalized|re-encoded)`
 ///    so the dashboard sees the pool filling up in real time instead of
-///    waiting for the final "X songs ready." line.
+///    waiting for the final summary line.
 pub async fn build_master_audio_pool(
     app: &AppHandle,
     cache_dir: &Path,
@@ -145,9 +147,9 @@ pub async fn build_master_audio_pool(
             } else {
                 "enc"
             };
-            // Hashing the full source is intentionally content-aware, but it
-            // is synchronous file I/O. Keep it off the Tokio worker so a large
-            // audio file cannot stall unrelated pipeline tasks.
+            // The signature samples the file's head and tail, but it is still
+            // synchronous file I/O. Keep it off the Tokio worker so it cannot
+            // stall unrelated pipeline tasks.
             let signature_path = original_path.clone();
             let source_signature = tokio::task::spawn_blocking(move || {
                 fs::file_signature(&signature_path)
@@ -434,9 +436,9 @@ fn can_skip_reencode(info: &AudioInfo, target_sr: u32, target_br_s: &str) -> boo
 }
 
 /// Get the cached loudnorm measurement for `input`, or run pass 1 and
-/// cache its result. Cache key is `hash(path, size, mtime_secs)` so a
-/// in-place file replacement with the same byte length correctly busts
-/// the cache via the mtime component.
+/// cache its result. The key hashes the path, the loudnorm target, and a
+/// content signature, so an in-place replacement invalidates the entry even
+/// when its length and modification time are unchanged.
 async fn get_or_compute_loudnorm_measurement(
     app: &AppHandle,
     cache_dir: &Path,
@@ -444,10 +446,10 @@ async fn get_or_compute_loudnorm_measurement(
     target: &str,
     cancel: Option<&Arc<crate::RenderControl>>,
 ) -> Result<LoudnormMeasurement, AppError> {
-    // Include the target filter parameters as well as a content-aware source
-    // signature. A changed loudnorm target must not reuse a measurement made
-    // for a previous target, and a same-size/same-mtime source replacement
-    // must invalidate the measurement too.
+    // Include the target filter parameters as well as the source signature.
+    // A changed loudnorm target must not reuse a measurement made for a
+    // previous target, and a replaced source must not reuse the old one
+    // (the signature catches replacements whose size and mtime match).
     let signature_path = input.to_path_buf();
     let source_signature = tokio::task::spawn_blocking(move || fs::file_signature(&signature_path))
         .await

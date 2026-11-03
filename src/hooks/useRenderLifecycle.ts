@@ -1,16 +1,16 @@
-import { createSignal, onCleanup, type Accessor, type Setter } from 'solid-js';
+import { createSignal, onCleanup, type Accessor } from 'solid-js';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { JobProgress, PipelineEvent } from '../core/types';
 import { isMaxrateValid } from '../core/estimate';
 import { usePipelinePersistence } from './usePipelinePersistence';
-import { createPipelineEventHandler } from './pipelineEvents';
+import { createPipelineEventHandler } from './internal/createPipelineEventHandler';
 import { useProgressTracker } from './useProgressTracker';
 import { buildAppConfig } from '../core/buildAppConfig';
 import { TAURI_COMMANDS, TAURI_EVENTS } from '../core/constants';
 import { createLogger } from '../core/logger';
 import { showToast } from '../core/toast';
-import { createRenderLifecycleResources } from './renderLifecycleResources';
+import { createRenderLifecycleResources } from './internal/createRenderLifecycleResources';
 import type { useRenderLogs } from './useRenderLogs';
 import type { useCanStart } from './useCanStart';
 import type { BackendConfigSnapshot } from '../core/buildAppConfig';
@@ -269,10 +269,7 @@ export function useRenderLifecycle({
   return {
     running,
     paused,
-    setRunning: setRunning as Setter<boolean>,
-    setPaused: setPaused as Setter<boolean>,
     jobs,
-    setJobs,
     progress,
     startRender,
     resumeRender,

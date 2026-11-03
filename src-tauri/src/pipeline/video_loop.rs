@@ -7,9 +7,6 @@ use crate::utils::event;
 use std::path::Path;
 use tauri::AppHandle;
 
-/// Escape a value for FFmpeg's FFMETADATA1 key/value format.
-/// Metadata values are not shell arguments here; FFmpeg parses reserved
-/// separators after receiving the argument, so they must be escaped in-band.
 /// Escape a file path for the FFmpeg concat demuxer's single-quoted `file`
 /// lines (`-safe 0`): backslashes become forward slashes (Windows paths),
 /// single quotes are escaped per the demuxer's `'\\''` convention, and
@@ -100,10 +97,9 @@ pub async fn create_ping_pong_video(params: PingPongVideoParams<'_>) -> Result<(
         &video_settings.encoder,
     ]);
     if video_settings.encoder.contains("nvenc") {
-        // NVENC preset: only valid for HEVC (hevc_nvenc) and AV1 (av1_nvenc).
-        // For H.264 (h264_nvenc), preset values differ (p1-p7 vs p1-p7) and
-        // `-rc vbr` with `-b:v` is the correct pattern; omitting `-preset`
-        // lets the encoder use its default (p4 = medium), which is acceptable.
+        // Apply the configured NVENC preset only for HEVC/AV1. H.264 NVENC
+        // keeps its encoder default (the configured preset is not forwarded);
+        // `-rc vbr` with `-b:v` is used for every NVENC codec.
         let is_hevc_or_av1 =
             video_settings.encoder.contains("hevc") || video_settings.encoder.contains("av1");
         if is_hevc_or_av1 {
@@ -373,7 +369,9 @@ pub async fn generate_loop_playlists(
         let end_ms = if idx + 1 < chapter_entries.len() {
             chapter_entries[idx + 1].0
         } else {
-            total_ms
+            // Float accumulation can exceed the multiplied total by an
+            // epsilon; never emit END <= START for the final chapter.
+            total_ms.max(start_ms + 1)
         };
         chapters.push_str(&format!(
             "[CHAPTER]\nTIMEBASE=1/1000\nSTART={}\nEND={}\ntitle={}\n",

@@ -23,6 +23,10 @@ pub struct OverrideConfig {
     /// When true the intermediate re-encode step is bypassed entirely —
     /// the source video is stream-copied directly into the final output
     /// regardless of codec. An explicit opt-in; false preserves ping-pong.
+    ///
+    /// The field name is historical: it used to gate the skip on a codec
+    /// match. Behaviour has been unconditional since v0.2.7, and the wire name
+    /// is kept so persisted overrides keep deserialising.
     pub skip_intermediate_on_codec_match: Option<bool>,
 }
 

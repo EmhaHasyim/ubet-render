@@ -28,8 +28,8 @@ const readJson = (p) => {
   }
 };
 const writeJson = (p, obj) => {
-  // Preserve the file's existing line endings (tauri.conf.json is CRLF,
-  // everything else is LF) so a version bump never reformats the file.
+  // Preserve each file's existing line endings so a version bump never
+  // reformats the file.
   const eol = readFileSync(p, 'utf8').includes('\r\n') ? '\r\n' : '\n';
   writeFileSync(p, `${JSON.stringify(obj, null, 2)}\n`.replaceAll('\n', eol));
 };

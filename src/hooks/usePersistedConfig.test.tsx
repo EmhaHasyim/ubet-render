@@ -2,7 +2,7 @@
  * Tests for usePersistedConfig.
  *
  * This hook only depends on SolidJS primitives and the localStorage
- * polyfill already set up in test-setup.ts — no Tauri mocking needed.
+ * polyfill already set up in test/setup.ts — no Tauri mocking needed.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { STORAGE_KEY, STORAGE_VERSION } from '../core/persisted';

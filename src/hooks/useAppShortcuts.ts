@@ -36,24 +36,6 @@ export function useAppShortcuts(setActiveTab: Setter<AppTabId>): AppShortcuts {
   const appWindow = getSafeWindow();
 
   onMount(() => {
-    // Track Tauri window fullscreen state (separate from browser
-    // document.fullscreenElement — they are different APIs).
-    //
-    // Use a mutable closure variable instead of a signal because the
-    // state is only consumed synchronously inside the F11 handler;
-    // no component needs to reactively observe it.
-    let isFullscreen = false;
-    // Async probe the initial state; on failure assume non-fullscreen.
-    appWindow
-      .isFullscreen()
-      .then((value) => {
-        isFullscreen = value;
-      })
-      .catch((err) => {
-        // IPC failed — safest default is false (windowed).
-        log.warn('isFullscreen probe failed, assuming windowed:', err);
-      });
-
     const handleKeyDown = (event: KeyboardEvent) => {
       const tag = (event.target as HTMLElement | null)?.tagName;
       const isTyping =
@@ -77,13 +59,15 @@ export function useAppShortcuts(setActiveTab: Setter<AppTabId>): AppShortcuts {
         return;
       }
 
-      // F11 → toggle Tauri window fullscreen.
+      // F11 → toggle Tauri window fullscreen. Query the real state on every
+      // press instead of caching it: the OS can leave fullscreen (Esc) without
+      // notifying us, and a cached value would make the next toggle a no-op.
       if (event.key === 'F11') {
         event.preventDefault();
-        isFullscreen = !isFullscreen;
         appWindow
-          .setFullscreen(isFullscreen)
-          .catch((err) => log.warn('setFullscreen failed:', err));
+          .isFullscreen()
+          .then((fullscreen) => appWindow.setFullscreen(!fullscreen))
+          .catch((err) => log.warn('toggle fullscreen failed:', err));
         return;
       }
 

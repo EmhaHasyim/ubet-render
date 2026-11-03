@@ -46,6 +46,10 @@ export function buildAppConfig(
       paddingSec: DEFAULT_CONFIG.target.paddingSec,
     },
     video: {
+      // `maxrate` is the only bitrate the UI exposes. Rust derives the target
+      // (70% of maxrate) in `Pipeline::parse_params`, so both fields mirror the
+      // same value here purely to satisfy the AppConfig contract — the backend
+      // rejects a target above the maximum.
       bitrateTarget: config.maxrate() || DEFAULT_CONFIG.video.bitrateTarget,
       bitrateMax: config.maxrate() || DEFAULT_CONFIG.video.bitrateMax,
       encoder: resolveEncoder(config.codec()),

@@ -5,36 +5,23 @@ import {
   onMount,
   Show,
   type Accessor,
-  type JSX,
   type Setter,
 } from 'solid-js';
 import { Icon } from '../ui/Icon';
 import { ProgressBarStatus } from '@tauri-apps/api/window';
-import { confirm } from '@tauri-apps/plugin-dialog';
 import { createLogger } from '../../core/logger';
 import { getSourcePaths } from '../../core/config';
 
 const log = createLogger('Dashboard');
 import { getSafeWindow } from '../../core/window';
-import { usePipeline } from '../../hooks/usePipeline';
 import { SettingsCard } from './SettingsCard';
 import { Sidebar } from './Sidebar';
 import { StatsStrip } from './StatsStrip';
 import { Titlebar } from './Titlebar';
-import { PipelineProvider, type Pipeline } from '../../context/pipeline';
+import { type Pipeline } from '../../context/pipeline';
 import { type AppTabId } from '../../hooks/useAppShortcuts';
-import { ActivityView, InspectorRail } from './DashboardPanels';
-
-export function PipelineBridge(props: {
-  children: (pipeline: Pipeline) => JSX.Element;
-}) {
-  const pipeline = usePipeline();
-  return (
-    <PipelineProvider value={pipeline}>
-      {props.children(pipeline)}
-    </PipelineProvider>
-  );
-}
+import { ActivityView } from './ActivityView';
+import { InspectorRail } from './InspectorRail';
 
 export function Dashboard(props: {
   pipeline: Pipeline;
@@ -75,31 +62,13 @@ export function Dashboard(props: {
       }
     };
     window.addEventListener('keydown', handleKeyDown);
-    const unlistenClose = appWindow.onCloseRequested(async (event) => {
-      if (!pipeline.running() && !pipeline.paused()) return;
-      event.preventDefault();
-      const isPaused = !pipeline.running() && pipeline.paused();
-      const ok = await confirm(
-        isPaused
-          ? 'A render is paused. Close anyway? Progress will be saved.'
-          : 'A render is in progress. Close anyway?',
-        {
-          title: isPaused ? 'Render paused' : 'Render in progress',
-          kind: 'warning',
-          okLabel: 'Close',
-          cancelLabel: isPaused ? 'Keep paused' : 'Keep rendering',
-        },
-      );
-      if (ok) {
-        if (pipeline.running()) await pipeline.pauseRender();
-        appWindow.close();
-      }
-    });
+    // Window close is "hide to tray": `main.rs` always cancels the native
+    // close and hides the window, so the render keeps running. A JS confirm
+    // handler here could not undo that hide (the Rust handler runs first) and
+    // pausing on close contradicted the tray behaviour, so the old prompt was
+    // both misleading and able to re-trigger itself after a pause.
     onCleanup(() => {
       window.removeEventListener('keydown', handleKeyDown);
-      unlistenClose
-        .then((fn) => fn())
-        .catch((err) => log.warn('unlisten close failed:', err));
     });
   });
 
@@ -126,6 +95,13 @@ export function Dashboard(props: {
     if (pipeline.running()) {
       key = `normal:${rounded}`;
       call = () => appWindow.setProgressBar({ progress: rounded });
+    } else if (pipeline.paused()) {
+      key = `paused:${rounded}`;
+      call = () =>
+        appWindow.setProgressBar({
+          status: ProgressBarStatus.Paused,
+          progress: rounded,
+        });
     } else if (pipeline.hasFailed()) {
       key = `error:${rounded}`;
       call = () =>
@@ -133,7 +109,7 @@ export function Dashboard(props: {
           status: ProgressBarStatus.Error,
           progress: rounded,
         });
-    } else if (pct > 0) {
+    } else if (pct >= 100) {
       key = 'complete';
       call = () => appWindow.setProgressBar({ progress: 100 });
     } else {
@@ -165,6 +141,11 @@ export function Dashboard(props: {
           class="h-1 shrink-0 bg-base-200"
           role="progressbar"
           aria-label="Global render progress"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(
+            Math.min(100, Math.max(0, pipeline.overallProgress() || 0)),
+          )}
         >
           <div
             class="h-full bg-primary transition-all duration-500 ease-linear"
