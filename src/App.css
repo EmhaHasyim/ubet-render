@@ -169,8 +169,8 @@
      that don't already have DaisyUI focus styles (btn, input, select,
      textarea, toggle, checkbox, radio, range). */
   :focus-visible:not(.btn):not(.input):not(.select):not(.textarea):not(
-    .toggle
-  ):not(.checkbox):not(.radio):not(.range):not([tabindex='-1']) {
+      .toggle
+    ):not(.checkbox):not(.radio):not(.range):not([tabindex='-1']) {
     outline: 2px solid
       color-mix(in oklch, var(--color-primary) 75%, transparent);
     outline-offset: 2px;

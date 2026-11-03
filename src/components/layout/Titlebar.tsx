@@ -42,6 +42,16 @@ export function Titlebar(props: {
   let contextMenuRef: HTMLDivElement | undefined;
   const appWindow = getSafeWindow();
 
+  const closeMenuOnClick = (e: MouseEvent) => {
+    if (contextMenuRef && !contextMenuRef.contains(e.target as Node)) {
+      setShowContextMenu(false);
+    }
+  };
+
+  const closeMenuOnEscape = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') setShowContextMenu(false);
+  };
+
   onMount(() => {
     let disposed = false;
     let debounceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -54,18 +64,8 @@ export function Titlebar(props: {
     setTheme(initial);
     applyTheme(initial);
 
-    // ── Click outside → close context menu ───────────────
-    const closeMenuOnClick = (e: MouseEvent) => {
-      if (contextMenuRef && !contextMenuRef.contains(e.target as Node)) {
-        setShowContextMenu(false);
-      }
-    };
+    // ── Click outside / Escape → close context menu ──────
     document.addEventListener('click', closeMenuOnClick);
-
-    // ── Escape → close context menu ──────────────────────
-    const closeMenuOnEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setShowContextMenu(false);
-    };
     document.addEventListener('keydown', closeMenuOnEscape);
 
     // Register cleanup before any `await`: an unmount during the async

@@ -31,36 +31,37 @@ export function Dashboard(props: {
   const { pipeline, activeTab, setActiveTab } = props;
   const appWindow = getSafeWindow();
 
+  const handleKeyDown = (event: KeyboardEvent) => {
+    const tag = (event.target as HTMLElement)?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    const mod = event.metaKey || event.ctrlKey;
+    if (
+      mod &&
+      event.key === 'Enter' &&
+      !pipeline.running() &&
+      !pipeline.paused() &&
+      pipeline.canStart()
+    ) {
+      event.preventDefault();
+      pipeline.startRender(false);
+    }
+    if (mod && event.key === 'p' && !event.shiftKey) {
+      event.preventDefault();
+      if (pipeline.running()) pipeline.pauseRender();
+      else if (pipeline.paused()) pipeline.resumeRender();
+    }
+    if (
+      mod &&
+      event.shiftKey &&
+      event.key === 'C' &&
+      (pipeline.running() || pipeline.paused())
+    ) {
+      event.preventDefault();
+      pipeline.cancelRender();
+    }
+  };
+
   onMount(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      const tag = (event.target as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-      const mod = event.metaKey || event.ctrlKey;
-      if (
-        mod &&
-        event.key === 'Enter' &&
-        !pipeline.running() &&
-        !pipeline.paused() &&
-        pipeline.canStart()
-      ) {
-        event.preventDefault();
-        pipeline.startRender(false);
-      }
-      if (mod && event.key === 'p' && !event.shiftKey) {
-        event.preventDefault();
-        if (pipeline.running()) pipeline.pauseRender();
-        else if (pipeline.paused()) pipeline.resumeRender();
-      }
-      if (
-        mod &&
-        event.shiftKey &&
-        event.key === 'C' &&
-        (pipeline.running() || pipeline.paused())
-      ) {
-        event.preventDefault();
-        pipeline.cancelRender();
-      }
-    };
     window.addEventListener('keydown', handleKeyDown);
     // Window close is "hide to tray": `main.rs` always cancels the native
     // close and hides the window, so the render keeps running. A JS confirm

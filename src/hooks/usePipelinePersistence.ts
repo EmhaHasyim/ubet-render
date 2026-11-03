@@ -12,6 +12,20 @@ import { showToast } from '../core/toast';
 const log = createLogger('usePipeline');
 const SAVE_DEBOUNCE_MS = 500;
 
+async function saveSnapshot(snapshot: AppConfig): Promise<boolean> {
+  try {
+    await invoke(TAURI_COMMANDS.saveConfig, { config: snapshot });
+    return true;
+  } catch (err) {
+    log.error('Failed to save backend config:', err);
+    showToast('Settings could not be saved to disk', {
+      variant: 'warning',
+      ttl: 5000,
+    });
+    return false;
+  }
+}
+
 /**
  * Persist the subset of frontend settings represented by the backend
  * AppConfig. Render-only overrides such as output format and loop mode are
@@ -36,20 +50,6 @@ export function usePipelinePersistence(
       persistTimer = null;
       void save();
     }, SAVE_DEBOUNCE_MS);
-  };
-
-  const saveSnapshot = async (snapshot: AppConfig): Promise<boolean> => {
-    try {
-      await invoke(TAURI_COMMANDS.saveConfig, { config: snapshot });
-      return true;
-    } catch (err) {
-      log.error('Failed to save backend config:', err);
-      showToast('Settings could not be saved to disk', {
-        variant: 'warning',
-        ttl: 5000,
-      });
-      return false;
-    }
   };
 
   const save = (): Promise<boolean> => {
