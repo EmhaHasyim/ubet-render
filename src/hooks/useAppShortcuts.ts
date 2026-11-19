@@ -1,10 +1,4 @@
-import {
-  createSignal,
-  onCleanup,
-  onMount,
-  type Accessor,
-  type Setter,
-} from 'solid-js';
+import { createSignal, onSettled, type Accessor, type Setter } from 'solid-js';
 import { getSafeWindow } from '../core/window';
 import { createLogger } from '../core/logger';
 
@@ -88,9 +82,9 @@ export function useAppShortcuts(setActiveTab: Setter<AppTabId>): AppShortcuts {
     }
   };
 
-  onMount(() => {
+  onSettled(() => {
     window.addEventListener('keydown', handleKeyDown);
-    onCleanup(() => window.removeEventListener('keydown', handleKeyDown));
+    return () => window.removeEventListener('keydown', handleKeyDown);
   });
 
   return {

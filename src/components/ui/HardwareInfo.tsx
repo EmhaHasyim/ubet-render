@@ -1,4 +1,4 @@
-import { Show, Index } from 'solid-js';
+import { Show, For } from 'solid-js';
 import { Icon } from './Icon';
 import { Skeleton } from './Skeleton';
 
@@ -39,7 +39,7 @@ function SkeletonRows() {
   ];
   return (
     <div class="grid grid-cols-1 gap-2">
-      <Index each={rows}>
+      <For keyed={false} each={rows}>
         {(row) => (
           <div class="flex items-start gap-3 rounded-lg border border-base-300/60 bg-base-100/50 p-2.5">
             <Icon
@@ -54,7 +54,7 @@ function SkeletonRows() {
             </div>
           </div>
         )}
-      </Index>
+      </For>
     </div>
   );
 }

@@ -8,7 +8,7 @@ pub const MAX_SONGS_PER_PLAYLIST: usize = 100;
 pub const MIN_SONGS_PER_PLAYLIST: usize = 1;
 pub const MAX_DURATION_HOURS: f64 = 24.0;
 pub const MIN_DURATION_HOURS: f64 = 0.1;
-pub const MAX_TARGET_DURATION_SEC: u64 = (MAX_DURATION_HOURS as u64) * 3600;
+pub const MAX_TARGET_DURATION_SEC: u64 = 86_400;
 pub const MAX_LOOP_COUNT: usize = 100;
 pub const MIN_LOOP_COUNT: usize = 1;
 pub const MIN_SAMPLE_RATE: u32 = 8_000;
@@ -54,12 +54,12 @@ pub const WINDOWS_RESERVED_NAMES: &[&str] = &[
 pub const LOUDNORM_DEFAULT: &str = "I=-14:LRA=11:TP=-1";
 
 /// Bounds for parsed loudnorm values (dB). Rejects absurd targets like
-/// `I=-1000` that pass syntax checks but fail late inside FFmpeg.
+/// `I=-1000` that pass syntax checks but fail late inside `FFmpeg`.
 pub const LOUDNORM_I_RANGE: (f64, f64) = (-70.0, 0.0);
 pub const LOUDNORM_LRA_RANGE: (f64, f64) = (1.0, 50.0);
 pub const LOUDNORM_TP_RANGE: (f64, f64) = (-9.0, 0.0);
 
-/// Max frontend log entries accepted per `log_to_file` call (DoS guard).
+/// Max frontend log entries accepted per `log_to_file` call (`DoS` guard).
 pub const MAX_FRONTEND_LOG_BATCH: usize = 100;
 
 #[cfg(test)]
@@ -74,24 +74,24 @@ mod ts_limit_mirror {
     const TS_SCHEMA: &str = include_str!("../../../src/core/schema.ts");
     const TS_CONFIG: &str = include_str!("../../../src/core/config.ts");
 
-    /// Parse `key: { min: X, max: Y }` out of CONFIG_LIMITS.
+    /// Parse `key: { min: X, max: Y }` out of `CONFIG_LIMITS`.
     fn ts_range(source: &str, key: &str) -> (f64, f64) {
-        let marker = format!("{}: {{", key);
+        let marker = format!("{key}: {{");
         let start = source
             .find(&marker)
-            .unwrap_or_else(|| panic!("CONFIG_LIMITS `{}` not found", key));
+            .unwrap_or_else(|| panic!("CONFIG_LIMITS `{key}` not found"));
         let body_start = start + marker.len();
         let body_end = body_start + source[body_start..].find('}').expect("unterminated range");
         let body = &source[body_start..body_end];
         (number_after(body, "min:"), number_after(body, "max:"))
     }
 
-    /// Parse `key: VALUE` (a scalar member of CONFIG_LIMITS).
+    /// Parse `key: VALUE` (a scalar member of `CONFIG_LIMITS`).
     fn ts_scalar(source: &str, key: &str) -> f64 {
-        let marker = format!("{}: ", key);
+        let marker = format!("{key}: ");
         let start = source
             .find(&marker)
-            .unwrap_or_else(|| panic!("CONFIG_LIMITS `{}` not found", key));
+            .unwrap_or_else(|| panic!("CONFIG_LIMITS `{key}` not found"));
         number_after(&source[start + marker.len()..], "")
     }
 
@@ -102,7 +102,7 @@ mod ts_limit_mirror {
         } else {
             let pos = text
                 .find(marker)
-                .unwrap_or_else(|| panic!("`{}` not found", marker));
+                .unwrap_or_else(|| panic!("`{marker}` not found"));
             &text[pos + marker.len()..]
         };
         let trimmed = hay.trim_start();

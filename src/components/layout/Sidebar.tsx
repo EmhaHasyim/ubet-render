@@ -52,8 +52,8 @@ export function Sidebar(props: {
         <button
           type="button"
           role="tab"
-          aria-selected={props.activeTab() === 'renderer'}
-          tabIndex={props.activeTab() === 'renderer' ? 0 : -1}
+          aria-selected={props.activeTab() === 'renderer' ? 'true' : 'false'}
+          tabindex={props.activeTab() === 'renderer' ? 0 : -1}
           class={navItemClass(props.activeTab() === 'renderer')}
           onClick={() => props.setActiveTab('renderer')}
         >
@@ -72,8 +72,8 @@ export function Sidebar(props: {
         <button
           type="button"
           role="tab"
-          aria-selected={props.activeTab() === 'activity'}
-          tabIndex={props.activeTab() === 'activity' ? 0 : -1}
+          aria-selected={props.activeTab() === 'activity' ? 'true' : 'false'}
+          tabindex={props.activeTab() === 'activity' ? 0 : -1}
           class={navItemClass(props.activeTab() === 'activity')}
           onClick={() => props.setActiveTab('activity')}
         >

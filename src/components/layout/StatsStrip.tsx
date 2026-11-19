@@ -1,4 +1,4 @@
-import { createMemo } from 'solid-js';
+import { createMemo, Show } from 'solid-js';
 import { Icon } from '../ui/Icon';
 import { usePipelineContext } from '../../context/pipeline';
 
@@ -41,6 +41,20 @@ export function StatsStrip() {
     Math.round(Math.min(100, Math.max(0, pipeline.overallProgress() || 0)));
   const eta = () => pipeline.overallEta() || 'Preparing...';
   const live = () => pipeline.liveStats();
+  const liveSpeed = () => {
+    const stats = live();
+    return stats ? `${stats.speed.toFixed(1)}x` : 'Idle';
+  };
+  const liveDescription = () => {
+    const stats = live();
+    if (!stats) return 'waiting for stats';
+    const bitrate = stats.bitrateKbps;
+    const bitrateText =
+      bitrate >= 1000
+        ? `${(bitrate / 1000).toFixed(1)} Mbps`
+        : `${Math.round(bitrate)} kbps`;
+    return `${stats.fps.toFixed(0)} fps · ${bitrateText}`;
+  };
 
   // --- Current video name ---
   const currentVideo = createMemo(() => {
@@ -61,92 +75,72 @@ export function StatsStrip() {
   // titlebar shows the Idle pill, so a filler banner would only waste
   // vertical space on a fullscreen desktop layout. The page starts straight
   // at pipeline step 01 instead.
-  if (total() === 0 && !live()) {
-    return null;
-  }
-
   return (
-    <div class="stats stats-vertical shadow-none sm:stats-horizontal w-full bg-base-100 border border-base-300/70 rounded-box overflow-hidden">
-      <div class={statClass}>
-        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-base-300/50 text-base-content/70">
-          <Icon icon="lucide:list-checks" width="16" height="16" />
-        </span>
-        <div class={titleClass}>Total Jobs</div>
-        <div class={valueClass}>{total()}</div>
-        <div class={descClass}>
-          {counts().processing} processing · {counts().pending} queued
-        </div>
-      </div>
-
-      <div class={statClass}>
-        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-base-300/50 text-base-content/70">
-          <Icon icon="lucide:circle-check" width="16" height="16" />
-        </span>
-        <div class={titleClass}>Done</div>
-        <div class={`${valueClass} text-success`}>{counts().done}</div>
-        <div class={descClass}>jobs done</div>
-      </div>
-
-      <div class={statClass}>
-        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-base-300/50 text-base-content/70">
-          <Icon icon="lucide:circle-x" width="16" height="16" />
-        </span>
-        <div class={titleClass}>Failed</div>
-        <div class={`${valueClass} text-error`}>{counts().failed}</div>
-        <div class={descClass}>needs attention</div>
-      </div>
-
-      <div class={statClass} aria-live="polite">
-        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-base-300/50 text-base-content/70">
-          <Icon icon="lucide:gauge" width="16" height="16" />
-        </span>
-        <div class={titleClass}>Progress</div>
-        <div class={`${valueClass} text-primary`}>{pct()}%</div>
-        <div class={descClass}>{eta()}</div>
-      </div>
-
-      <div class={statClass} aria-live="polite">
-        <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-base-300/50 text-base-content/70">
-          <Icon icon="lucide:activity" width="16" height="16" />
-        </span>
-        <div class={titleClass}>Live Render</div>
-        <div class={`${valueClass} text-secondary`}>
-          {(() => {
-            const l = live();
-            return l ? `${l.speed.toFixed(1)}x` : 'Idle';
-          })()}
-        </div>
-        <div class={descClass}>
-          {(() => {
-            const l = live();
-            if (!l) return 'waiting for stats';
-            const b = l.bitrateKbps;
-            const bStr =
-              b >= 1000
-                ? `${(b / 1000).toFixed(1)} Mbps`
-                : `${Math.round(b)} kbps`;
-            return `${l.fps.toFixed(0)} fps · ${bStr}`;
-          })()}
-        </div>
-      </div>
-
-      {/* Current video being encoded */}
-      {(() => {
-        const name = currentVideo();
-        if (!name) return null;
-        return (
-          <div class={statClass} aria-live="polite">
-            <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-base-300/50 text-base-content/70">
-              <Icon icon="lucide:film" width="16" height="16" />
-            </span>
-            <div class={titleClass}>Now Encoding</div>
-            <div class={`${valueClass} truncate text-info`} title={name}>
-              {name}
-            </div>
-            <div class={descClass}>current video</div>
+    <Show when={total() > 0 || live() !== null}>
+      <div class="stats stats-vertical shadow-none sm:stats-horizontal w-full bg-base-100 border border-base-300/70 rounded-box overflow-hidden">
+        <div class={statClass}>
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-base-300/50 text-base-content/70">
+            <Icon icon="lucide:list-checks" width="16" height="16" />
+          </span>
+          <div class={titleClass}>Total Jobs</div>
+          <div class={valueClass}>{total()}</div>
+          <div class={descClass}>
+            {counts().processing} processing · {counts().pending} queued
           </div>
-        );
-      })()}
-    </div>
+        </div>
+
+        <div class={statClass}>
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-base-300/50 text-base-content/70">
+            <Icon icon="lucide:circle-check" width="16" height="16" />
+          </span>
+          <div class={titleClass}>Done</div>
+          <div class={`${valueClass} text-success`}>{counts().done}</div>
+          <div class={descClass}>jobs done</div>
+        </div>
+
+        <div class={statClass}>
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-base-300/50 text-base-content/70">
+            <Icon icon="lucide:circle-x" width="16" height="16" />
+          </span>
+          <div class={titleClass}>Failed</div>
+          <div class={`${valueClass} text-error`}>{counts().failed}</div>
+          <div class={descClass}>needs attention</div>
+        </div>
+
+        <div class={statClass} aria-live="polite">
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-base-300/50 text-base-content/70">
+            <Icon icon="lucide:gauge" width="16" height="16" />
+          </span>
+          <div class={titleClass}>Progress</div>
+          <div class={`${valueClass} text-primary`}>{pct()}%</div>
+          <div class={descClass}>{eta()}</div>
+        </div>
+
+        <div class={statClass} aria-live="polite">
+          <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-base-300/50 text-base-content/70">
+            <Icon icon="lucide:activity" width="16" height="16" />
+          </span>
+          <div class={titleClass}>Live Render</div>
+          <div class={`${valueClass} text-secondary`}>{liveSpeed()}</div>
+          <div class={descClass}>{liveDescription()}</div>
+        </div>
+
+        {/* Current video being encoded */}
+        <Show when={currentVideo()}>
+          {(name) => (
+            <div class={statClass} aria-live="polite">
+              <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-base-300/50 text-base-content/70">
+                <Icon icon="lucide:film" width="16" height="16" />
+              </span>
+              <div class={titleClass}>Now Encoding</div>
+              <div class={`${valueClass} truncate text-info`} title={name()}>
+                {name()}
+              </div>
+              <div class={descClass}>current video</div>
+            </div>
+          )}
+        </Show>
+      </div>
+    </Show>
   );
 }

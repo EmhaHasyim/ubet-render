@@ -81,14 +81,17 @@ export function ShortcutsDialog(props: {
   // pattern as `ConfirmDialog`.
   let returnFocus: (() => void) | null = null;
 
-  createEffect(() => {
-    if (props.isOpen && dialogRef) {
-      returnFocus = rememberFocus();
-      dialogRef.showModal();
-    } else if (!props.isOpen && dialogRef?.open) {
-      dialogRef.close();
-    }
-  });
+  createEffect(
+    () => props.isOpen,
+    (isOpen) => {
+      if (isOpen && dialogRef) {
+        returnFocus = rememberFocus();
+        dialogRef.showModal();
+      } else if (!isOpen && dialogRef?.open) {
+        dialogRef.close();
+      }
+    },
+  );
 
   const handleCloseClick = () => {
     if (dialogRef?.open) {

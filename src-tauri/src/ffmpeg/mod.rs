@@ -21,9 +21,9 @@ use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 
 #[cfg(windows)]
-use std::os::windows::process::CommandExt;
+use crate::utils::process::CREATE_NO_WINDOW;
 #[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x08000000;
+use std::os::windows::process::CommandExt;
 
 use crate::error::AppError;
 use crate::models::job::RenderStats;
@@ -31,7 +31,7 @@ use crate::models::media::{AudioInfo, LoudnormMeasurement};
 
 const DEFAULT_PROCESS_TIMEOUT_SEC: u64 = 86_400;
 const PROBE_TIMEOUT_SEC: u64 = 60;
-const LOUDNORM_IDLE_TIMEOUT_SEC: u64 = 300;
+const SIDECAR_IDLE_TIMEOUT_SEC: u64 = 300;
 
 struct ChildGuard(Option<CommandChild>);
 
@@ -49,9 +49,9 @@ impl Drop for ChildGuard {
     }
 }
 
-/// Terminate FFmpeg and, on Windows, its descendant process tree.
+/// Terminate `FFmpeg` and, on Windows, its descendant process tree.
 ///
-/// `CommandChild::kill()` only targets the direct process. FFmpeg normally
+/// `CommandChild::kill()` only targets the direct process. `FFmpeg` normally
 /// remains a single process, but a bundled/helper invocation can create
 /// descendants; `taskkill /T /F` gives cancellation and timeout a stronger
 /// Windows guarantee. The direct kill remains the fallback if the system tool
@@ -60,10 +60,7 @@ fn terminate_child(child: CommandChild) {
     #[cfg(windows)]
     {
         let pid = child.pid().to_string();
-        let taskkill = std::env::var_os("SystemRoot")
-            .map(std::path::PathBuf::from)
-            .map(|root| root.join("System32").join("taskkill.exe"))
-            .unwrap_or_else(|| std::path::PathBuf::from("taskkill.exe"));
+        let taskkill = crate::utils::process::system32_dir().join("taskkill.exe");
         let mut taskkill_command = std::process::Command::new(taskkill);
         taskkill_command.args(["/PID", &pid, "/T", "/F"]);
         taskkill_command.creation_flags(CREATE_NO_WINDOW);
@@ -127,7 +124,7 @@ pub async fn run_with_timeout<S: AsRef<OsStr>>(
 
     let mut last_stderr = "Unknown ffmpeg error".to_string();
     let timeout_dur = std::time::Duration::from_secs(max_timeout_sec.max(1));
-    let idle_timeout = std::time::Duration::from_secs(LOUDNORM_IDLE_TIMEOUT_SEC);
+    let idle_timeout = std::time::Duration::from_secs(SIDECAR_IDLE_TIMEOUT_SEC);
     // Keep a fixed absolute deadline. Activity may reset the idle deadline,
     // but must never extend the total lifetime of a render indefinitely.
     let absolute_deadline = tokio::time::Instant::now() + timeout_dur;
@@ -146,11 +143,11 @@ pub async fn run_with_timeout<S: AsRef<OsStr>>(
         tokio::select! {
             _ = tokio::time::sleep_until(absolute_deadline) => {
                 child_guard.terminate();
-                return Err(AppError::Ffmpeg(format!("FFmpeg process timed out ({}s limit)", max_timeout_sec)));
+                return Err(AppError::Ffmpeg(format!("FFmpeg process timed out ({max_timeout_sec}s limit)")));
             }
             _ = tokio::time::sleep_until(idle_deadline) => {
                 child_guard.terminate();
-                return Err(AppError::Ffmpeg(format!("FFmpeg process idle timeout ({}s limit)", LOUDNORM_IDLE_TIMEOUT_SEC)));
+                return Err(AppError::Ffmpeg(format!("FFmpeg process idle timeout ({SIDECAR_IDLE_TIMEOUT_SEC}s limit)")));
             }
             event_res = rx.recv() => {
                 match event_res {
@@ -212,8 +209,7 @@ pub async fn run_with_timeout<S: AsRef<OsStr>>(
                         // dropped the receiver). Report this as a failure rather than
                         // a false success.
                         return Err(AppError::Ffmpeg(format!(
-                            "FFmpeg process ended without a completion signal: {}",
-                            last_stderr
+                            "FFmpeg process ended without a completion signal: {last_stderr}"
                         )));
                     }
                 }
@@ -250,7 +246,7 @@ struct CapturedOutput {
 
 /// Collects a sidecar's output with both an absolute deadline and an idle
 /// deadline. The child is explicitly killed on every failure path so a timed
-/// out probe cannot leave a background FFmpeg process behind.
+/// out probe cannot leave a background `FFmpeg` process behind.
 async fn collect_output_with_timeout(
     mut rx: Receiver<CommandEvent>,
     child: CommandChild,
@@ -258,7 +254,7 @@ async fn collect_output_with_timeout(
 ) -> Result<CapturedOutput, AppError> {
     let mut child_guard = ChildGuard(Some(child));
     let absolute_deadline = tokio::time::Instant::now() + timeout;
-    let idle_timeout = std::time::Duration::from_secs(LOUDNORM_IDLE_TIMEOUT_SEC);
+    let idle_timeout = std::time::Duration::from_secs(SIDECAR_IDLE_TIMEOUT_SEC);
     let mut idle_deadline = tokio::time::Instant::now() + idle_timeout;
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
@@ -276,8 +272,7 @@ async fn collect_output_with_timeout(
             _ = tokio::time::sleep_until(idle_deadline) => {
                 child_guard.terminate();
                 return Err(AppError::Ffmpeg(format!(
-                    "Sidecar process idle timeout ({}s limit)",
-                    LOUDNORM_IDLE_TIMEOUT_SEC,
+                    "Sidecar process idle timeout ({SIDECAR_IDLE_TIMEOUT_SEC}s limit)",
                 )));
             }
             event_res = rx.recv() => {
@@ -369,11 +364,10 @@ pub async fn get_video_info(app: &AppHandle, file_path: &Path) -> Result<VideoIn
         .next()
         .and_then(|v| parse_ffprobe_frame_rate(v.trim()))
         .unwrap_or(30.0);
-    let trimmed = lines.next().map(|l| l.trim()).unwrap_or("");
+    let trimmed = lines.next().map(str::trim).unwrap_or("");
     let duration: f64 = trimmed.parse().map_err(|_| {
         AppError::Ffmpeg(format!(
-            "Failed to parse duration from ffprobe: '{}'",
-            trimmed
+            "Failed to parse duration from ffprobe: '{trimmed}'"
         ))
     })?;
     if duration <= 0.0 {
@@ -413,8 +407,7 @@ pub async fn get_duration(app: &AppHandle, file_path: &Path) -> Result<f64, AppE
     let trimmed = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let duration: f64 = trimmed.parse().map_err(|_| {
         AppError::Ffmpeg(format!(
-            "Failed to parse duration from ffprobe: '{}'",
-            trimmed
+            "Failed to parse duration from ffprobe: '{trimmed}'"
         ))
     })?;
     if duration <= 0.0 {
@@ -483,7 +476,7 @@ pub async fn run_loudnorm_pass1(
     // The loudnorm filter syntax is `loudnorm=I=...:LRA=...:TP=...`; we
     // append `print_format=json` so ffmpeg writes the measurement JSON
     // instead of applying the target blindly.
-    let filter = format!("loudnorm={}:print_format=json", target);
+    let filter = format!("loudnorm={target}:print_format=json");
     let args: Vec<&str> = vec![
         "-hide_banner",
         "-i",
@@ -513,7 +506,7 @@ pub async fn run_loudnorm_pass1(
     let mut last_problem = String::new();
     let absolute_deadline =
         tokio::time::Instant::now() + std::time::Duration::from_secs(DEFAULT_PROCESS_TIMEOUT_SEC);
-    let idle_timeout = std::time::Duration::from_secs(LOUDNORM_IDLE_TIMEOUT_SEC);
+    let idle_timeout = std::time::Duration::from_secs(SIDECAR_IDLE_TIMEOUT_SEC);
     let mut idle_deadline = tokio::time::Instant::now() + idle_timeout;
 
     loop {
@@ -528,15 +521,13 @@ pub async fn run_loudnorm_pass1(
             _ = tokio::time::sleep_until(absolute_deadline) => {
                 child_guard.terminate();
                 return Err(AppError::Ffmpeg(format!(
-                    "loudnorm pass1 timed out ({}s limit)",
-                    DEFAULT_PROCESS_TIMEOUT_SEC,
+                    "loudnorm pass1 timed out ({DEFAULT_PROCESS_TIMEOUT_SEC}s limit)",
                 )));
             }
             _ = tokio::time::sleep_until(idle_deadline) => {
                 child_guard.terminate();
                 return Err(AppError::Ffmpeg(format!(
-                    "loudnorm pass1 idle timeout ({}s limit)",
-                    LOUDNORM_IDLE_TIMEOUT_SEC,
+                    "loudnorm pass1 idle timeout ({SIDECAR_IDLE_TIMEOUT_SEC}s limit)",
                 )));
             }
             event_res = rx.recv() => match event_res {
@@ -574,8 +565,7 @@ pub async fn run_loudnorm_pass1(
                     return Ok(m);
                 }
                 return Err(AppError::Ffmpeg(format!(
-                    "loudnorm pass1 produced no JSON: {}",
-                    last_problem
+                    "loudnorm pass1 produced no JSON: {last_problem}"
                 )));
             }
             Some(CommandEvent::Error(e)) => {
@@ -587,8 +577,7 @@ pub async fn run_loudnorm_pass1(
             }
             None => {
                 return Err(AppError::Ffmpeg(format!(
-                    "FFmpeg closed mid loudnorm pass1: {}",
-                    last_problem
+                    "FFmpeg closed mid loudnorm pass1: {last_problem}"
                 )));
             }
         }
@@ -667,14 +656,12 @@ async fn verify_version(app: &AppHandle, name: &str, prefix: &str) -> Result<(),
         Some(_version) => {
             let (min_major, min_minor) = MIN_FFMPEG_VERSION;
             Err(AppError::Ffmpeg(format!(
-                "Bundled {} binary is too old (requires at least {}.{}*, got '{}'). \
-                 The binary may have been tampered with or is outdated.",
-                name, min_major, min_minor, first_line
+                "Bundled {name} binary is too old (requires at least {min_major}.{min_minor}*, got '{first_line}'). \
+                 The binary may have been tampered with or is outdated."
             )))
         }
         None => Err(AppError::Ffmpeg(format!(
-            "Could not parse {} version from output: '{}'",
-            name, first_line
+            "Could not parse {name} version from output: '{first_line}'"
         ))),
     }
 }

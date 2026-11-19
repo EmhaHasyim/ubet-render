@@ -98,7 +98,7 @@ pub(super) fn quarantine_state_file(path: &Path, timestamp: u64) -> bool {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or(timestamp as u128);
-    let quarantine = path.with_file_name(format!("{}.invalid-{}-{}", file_name, timestamp, nonce));
+    let quarantine = path.with_file_name(format!("{file_name}.invalid-{timestamp}-{nonce}"));
     match std::fs::rename(path, &quarantine) {
         Ok(()) => true,
         Err(error) => {

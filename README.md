@@ -47,7 +47,7 @@ Making long-form looped videos (1-hour lo-fi mixes, stream screens, ambient soun
 
 ```
 src/
-├── App.tsx                # Root: ErrorBoundary + PipelineBridge + global dialogs
+├── App.tsx                # Root: Errored + PipelineBridge + global dialogs
 ├── App.css                # Global styles, Tailwind plugins, DaisyUI theme, animations
 ├── index.tsx              # Entry point
 │
@@ -64,7 +64,7 @@ src/
 │
 ├── context/               # SolidJS context + app wiring
 │   ├── pipeline.tsx        # PipelineContext + PipelineProvider
-│   └── PipelineBridge.tsx  # Calls usePipeline() inside the ErrorBoundary
+│   └── PipelineBridge.tsx  # Calls usePipeline() inside the Errored boundary
 │
 ├── hooks/                 # Custom SolidJS hooks
 │   ├── usePipeline.ts     # Central orchestrator: wires config, hardware, DnD, IPC events
@@ -118,10 +118,10 @@ src/
 
 ```
 <App>
-  <ErrorBoundary fallback={<FatalScreen />}>
-    <PipelineBridge>          {/* calls usePipeline() inside the boundary */}
+  <Errored fallback={(err, reset) => <FatalScreen error={err()} reset={reset} />}>
+    <PipelineBridge>          {/* calls usePipeline() inside the Errored boundary */}
       <Dashboard>
-        <Titlebar />          {/* custom chrome + Renderer / Activity tabs */}
+        <Titlebar />          {/* custom chrome + window controls */}
         <Sidebar />           {/* tab rail with job counter */}
         <main>
           [Tab: Renderer]     {/* StatsStrip + SettingsCard */}
@@ -132,7 +132,7 @@ src/
     </PipelineBridge>
     <ShortcutsDialog />        {/* F1 */}
     <ToastViewport />
-  </ErrorBoundary>
+  </Errored>
 </App>
 ```
 
@@ -190,9 +190,9 @@ To avoid GC pressure during high-frequency FFmpeg output:
   %-per-ms render rate; every progress event feeds one sample and
   `estimateRemaining()` projects the remainder from the EMA.
 
-### 3. Error Boundary + Recoverable Pipeline Bridge
+### 3. Errored Boundary + Recoverable Pipeline Bridge
 
-- `<ErrorBoundary>` wraps the entire app and displays `<FatalScreen>` on uncaught errors.
+- `<Errored>` wraps the entire app and displays `<FatalScreen>` on uncaught errors.
 - `usePipeline()` is called inside a dedicated `PipelineBridge` component so that, if it throws during initialisation (corrupt localStorage, missing Tauri IPC, etc.), the boundary catches it and renders `<FatalScreen>`. The "Try Again" button remounts the bridge and retries the call without losing the application shell.
 - Every sub-hook (`useHardware`, `useDragDrop`, `usePersistedConfig`) is wrapped in its own `try-catch` so one failure doesn't cascade.
 
@@ -298,7 +298,7 @@ bun run test src/core/persisted.test.ts  # Single file
 
 ## Project Status
 
-**Version:** 0.4.2 • **License:** MIT
+**Version:** 0.4.3 • **License:** MIT
 
 See [CHANGELOG.md](./CHANGELOG.md) for the full release history, and
 [RELEASE.md](./RELEASE.md) for how releases are cut.

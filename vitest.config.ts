@@ -1,12 +1,12 @@
 import { defineConfig } from 'vitest/config';
-import solidPlugin from 'vite-plugin-solid';
+import solidPlugin from '@solidjs/vite-plugin';
 import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig({
   plugins: [
     solidPlugin({
-      // Disable HMR in test mode — prevents "@solid-refresh" error
-      hot: false,
+      // Disable HMR/refresh in test mode — prevents "@solid-refresh" error
+      refresh: false,
     }),
     tailwindcss(),
   ],

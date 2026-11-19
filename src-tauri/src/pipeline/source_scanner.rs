@@ -9,7 +9,7 @@ use tauri::AppHandle;
 
 pub async fn scan_source_files(
     app: &AppHandle,
-    overrides: &Option<OverrideConfig>,
+    overrides: Option<&OverrideConfig>,
     default_dir: &Path,
     media_type: &str,
     allowed_roots: &[PathBuf],
@@ -19,7 +19,7 @@ pub async fn scan_source_files(
         "audio" => AUDIO_EXTENSIONS,
         _ => &[],
     };
-    let source = match (media_type, overrides.as_ref()) {
+    let source = match (media_type, overrides) {
         ("video", Some(ov)) => ov.video_source.as_ref(),
         ("audio", Some(ov)) => ov.audio_source.as_ref(),
         _ => None,
@@ -33,55 +33,7 @@ pub async fn scan_source_files(
             scan_and_validate_dir(app, &fs::to_absolute(p), extensions, allowed_roots).await?
         }
         Some(MediaSource::Files { paths }) => {
-            let mut all_files = Vec::new();
-            for p_str in paths {
-                if let Err(error) = crate::validation::sanitize_path(p_str) {
-                    event::emit(
-                        app,
-                        PipelineEvent::Log {
-                            level: "warn".into(),
-                            message: format!(
-                                "Skipping path with invalid characters or traversal: {} ({})",
-                                p_str, error
-                            ),
-                        },
-                    );
-                    continue;
-                }
-                let p = fs::to_absolute(Path::new(p_str));
-                if p.is_dir() {
-                    let _ = crate::validation::resolve_and_validate_path(&p, allowed_roots)?;
-                    all_files
-                        .extend(scan_and_validate_dir(app, &p, extensions, allowed_roots).await?);
-                } else if p.is_file() {
-                    let lower = p_str.to_lowercase();
-                    if extensions.iter().any(|ext| lower.ends_with(ext))
-                        && crate::validation::resolve_and_validate_path(&p, allowed_roots).is_ok()
-                    {
-                        all_files.push(p.to_string_lossy().to_string());
-                    } else {
-                        event::emit(
-                            app,
-                            PipelineEvent::Log {
-                                level: "warn".into(),
-                                message: format!(
-                                    "Skipping disallowed or unsupported file: {}",
-                                    p_str
-                                ),
-                            },
-                        );
-                    }
-                } else {
-                    event::emit(
-                        app,
-                        PipelineEvent::Log {
-                            level: "warn".into(),
-                            message: format!("Skipping missing path: {}", p_str),
-                        },
-                    );
-                }
-            }
-            all_files
+            scan_explicit_files(app, paths, extensions, allowed_roots).await?
         }
         None => {
             let _ = crate::validation::resolve_and_validate_path(default_dir, allowed_roots)?;
@@ -127,6 +79,58 @@ pub async fn scan_source_files(
     Ok(deduped)
 }
 
+async fn scan_explicit_files(
+    app: &AppHandle,
+    paths: &[String],
+    extensions: &[&str],
+    allowed_roots: &[PathBuf],
+) -> Result<Vec<String>, AppError> {
+    let mut all_files = Vec::new();
+    for p_str in paths {
+        if let Err(error) = crate::validation::sanitize_path(p_str) {
+            event::emit(
+                app,
+                PipelineEvent::Log {
+                    level: "warn".into(),
+                    message: format!(
+                        "Skipping path with invalid characters or traversal: {p_str} ({error})"
+                    ),
+                },
+            );
+            continue;
+        }
+        let p = fs::to_absolute(Path::new(p_str));
+        if p.is_dir() {
+            let _ = crate::validation::resolve_and_validate_path(&p, allowed_roots)?;
+            all_files.extend(scan_and_validate_dir(app, &p, extensions, allowed_roots).await?);
+        } else if p.is_file() {
+            let lower = p_str.to_lowercase();
+            if extensions.iter().any(|ext| lower.ends_with(ext))
+                && crate::validation::resolve_and_validate_path(&p, allowed_roots).is_ok()
+            {
+                all_files.push(p.to_string_lossy().to_string());
+            } else {
+                event::emit(
+                    app,
+                    PipelineEvent::Log {
+                        level: "warn".into(),
+                        message: format!("Skipping disallowed or unsupported file: {p_str}"),
+                    },
+                );
+            }
+        } else {
+            event::emit(
+                app,
+                PipelineEvent::Log {
+                    level: "warn".into(),
+                    message: format!("Skipping missing path: {p_str}"),
+                },
+            );
+        }
+    }
+    Ok(all_files)
+}
+
 async fn scan_and_validate_dir(
     app: &AppHandle,
     dir: &Path,
@@ -147,7 +151,7 @@ async fn scan_and_validate_dir(
             app,
             PipelineEvent::Log {
                 level: "error".into(),
-                message: format!("{}; render aborted to avoid incomplete output", reason),
+                message: format!("{reason}; render aborted to avoid incomplete output"),
             },
         );
         return Err(AppError::Pipeline(reason));
@@ -163,7 +167,7 @@ async fn scan_and_validate_dir(
                 app,
                 PipelineEvent::Log {
                     level: "warn".into(),
-                    message: format!("Skipping file with invalid path characters: {}", path_str),
+                    message: format!("Skipping file with invalid path characters: {path_str}"),
                 },
             );
             continue;
@@ -176,7 +180,7 @@ async fn scan_and_validate_dir(
                 app,
                 PipelineEvent::Log {
                     level: "warn".into(),
-                    message: format!("Skipping file outside allowed directory: {}", path_str),
+                    message: format!("Skipping file outside allowed directory: {path_str}"),
                 },
             );
         }

@@ -1,7 +1,7 @@
 import { createSignal, onCleanup, type Accessor } from 'solid-js';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { JobProgress, PipelineEvent } from '../core/types';
+import type { JobProgress, MediaSource, PipelineEvent } from '../core/types';
 import { isMaxrateValid } from '../core/estimate';
 import { usePipelinePersistence } from './usePipelinePersistence';
 import { createPipelineEventHandler } from './internal/createPipelineEventHandler';
@@ -23,8 +23,8 @@ const PAUSE_ACK_TIMEOUT_MS = 5000;
 interface LifecycleConfig {
   maxrate: Accessor<string>;
   codec: Accessor<string>;
-  videoSource: Accessor<unknown>;
-  audioSource: Accessor<unknown>;
+  videoSource: Accessor<MediaSource | null>;
+  audioSource: Accessor<MediaSource | null>;
   outputPath: Accessor<string>;
   outputPrefix: Accessor<string>;
   songsPerPlaylist: Accessor<number>;
@@ -198,24 +198,14 @@ export function useRenderLifecycle({
     cancelPauseReconcile();
     progress.setOverallEta('Cancelling...');
     try {
-      const accepted = await invoke<boolean>(TAURI_COMMANDS.cancelRender);
-      if (accepted) {
-        // The backend command waits for the render task and its guard to
-        // terminate before returning true. This is a completion acknowledgement
-        // rather than a request acknowledgement, so the local lifecycle can
-        // finish safely even if the terminal event is delayed or lost.
-        setRunning(false);
-        setPaused(false);
-        progress.setOverallEta('Render cancelled');
-        safeUnlisten();
-      } else {
-        // No backend pipeline exists anymore, so there will be no terminal
-        // event to wait for. Finish the local lifecycle immediately.
-        setRunning(false);
-        setPaused(false);
-        progress.setOverallEta('Render cancelled');
-        safeUnlisten();
-      }
+      // The backend resolves true only after the render task and its guard
+      // have terminated; false means no pipeline exists. Both are terminal,
+      // so the local lifecycle can finish without waiting for an event.
+      await invoke<boolean>(TAURI_COMMANDS.cancelRender);
+      setRunning(false);
+      setPaused(false);
+      progress.setOverallEta('Render cancelled');
+      safeUnlisten();
     } catch (err) {
       // A failed command did not prove that the backend stopped. Keep the
       // listener and the running state so a late terminal event remains

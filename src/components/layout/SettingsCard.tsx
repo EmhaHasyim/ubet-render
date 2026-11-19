@@ -29,12 +29,16 @@ export function SettingsCard() {
       : '';
 
   const chooseOutput = async () => {
-    const selected = await open({
-      directory: true,
-      multiple: false,
-      defaultPath: pipeline.outputPath() || undefined,
-    });
-    if (selected) pipeline.setOutputPath(selected as string);
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        defaultPath: pipeline.outputPath() || undefined,
+      });
+      if (selected) pipeline.setOutputPath(selected as string);
+    } catch (e) {
+      log.error('Failed to open folder picker:', e);
+    }
   };
 
   const revealFile = async () => {

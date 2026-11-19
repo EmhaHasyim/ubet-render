@@ -25,7 +25,7 @@ const THEME_STORAGE_KEY = 'ubetrender-theme';
  * Load the user's preferred theme. Falls back to the OS `prefers-color-scheme`
  * media query on first launch and to `'business'` (dark) thereafter.
  *
- * Called from a SolidJS component's `onMount` so it doesn't run in SSR.
+ * Called once during client startup, before the first render.
  */
 export function loadTheme(): Theme {
   try {

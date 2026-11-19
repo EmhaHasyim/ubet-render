@@ -1,9 +1,9 @@
 import {
   createEffect,
+  createMemo,
   createSignal,
   For,
-  onCleanup,
-  onMount,
+  onSettled,
   Show,
 } from 'solid-js';
 import { Icon } from '../ui/Icon';
@@ -31,20 +31,24 @@ export function LogViewer(props: { logs: string[] }) {
     handleSearchInput,
   } = filter;
 
-  const visibleLogs = () => {
+  const visibleLogs = createMemo(() => {
     const all = filteredLogs();
     return all.length > RENDER_LIMIT ? all.slice(-RENDER_LIMIT) : all;
-  };
-  const hiddenCount = () => filteredLogs().length - visibleLogs().length;
+  });
+  const hiddenCount = createMemo(
+    () => filteredLogs().length - visibleLogs().length,
+  );
 
   // Reset scroll position ONLY on coarse-grained filter changes (chip
   // toggle). Tracking `filteredLogs()` directly would fire on every raw log
   // line — yanking the user back to the top mid-inspect every time ffmpeg
   // emits a newline; tracking `searchQuery()` would fire on every keystroke.
-  createEffect(() => {
-    enabledLevels();
-    if (containerRef) containerRef.scrollTop = 0;
-  });
+  createEffect(
+    () => enabledLevels(),
+    () => {
+      if (containerRef) containerRef.scrollTop = 0;
+    },
+  );
 
   const handleScroll = () => {
     if (!containerRef) return;
@@ -60,7 +64,7 @@ export function LogViewer(props: { logs: string[] }) {
   let rAFId = 0;
 
   // Keep the view pinned to the bottom on resize while auto-scrolling.
-  onMount(() => {
+  onSettled(() => {
     const observer = new ResizeObserver(() => {
       if (shouldAutoScroll()) {
         rAFId = requestAnimationFrame(() => {
@@ -70,28 +74,29 @@ export function LogViewer(props: { logs: string[] }) {
       }
     });
     observer.observe(containerRef);
-    onCleanup(() => {
+    return () => {
       observer.disconnect();
       cancelAnimationFrame(rAFId);
-    });
+    };
   });
 
   // Auto-scroll to bottom when new logs arrive and the user hasn't scrolled up.
-  createEffect(() => {
-    filteredLogs();
-
-    const id = requestAnimationFrame(() => {
-      if (!containerRef) return;
-      // Re-check shouldAutoScroll inside the rAF callback — by the time the
-      // frame paints, a concurrent user scroll may have toggled it off.
-      // Reading the signal here (not in the outer effect body) avoids a race
-      // where new logs arrive between the user scrolling up and the next
-      // handleScroll firing.
-      if (!shouldAutoScroll()) return;
-      containerRef.scrollTop = containerRef.scrollHeight;
-    });
-    onCleanup(() => cancelAnimationFrame(id));
-  });
+  createEffect(
+    () => filteredLogs(),
+    () => {
+      const id = requestAnimationFrame(() => {
+        if (!containerRef) return;
+        // Re-check shouldAutoScroll inside the rAF callback — by the time the
+        // frame paints, a concurrent user scroll may have toggled it off.
+        // Reading the signal here (not in the outer effect body) avoids a race
+        // where new logs arrive between the user scrolling up and the next
+        // handleScroll firing.
+        if (!shouldAutoScroll()) return;
+        containerRef.scrollTop = containerRef.scrollHeight;
+      });
+      return () => cancelAnimationFrame(id);
+    },
+  );
 
   return (
     <section class="panel flex min-h-0 min-w-0 flex-col overflow-hidden">

@@ -55,14 +55,13 @@ pub async fn atomic_write(path: &Path, contents: Vec<u8>) -> Result<(), std::io:
     tokio::task::spawn_blocking(move || {
         use std::io::Write;
 
-        let file_name = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "artifact".into());
+        let file_name = path.file_name().map_or_else(
+            || "artifact".into(),
+            |name| name.to_string_lossy().into_owned(),
+        );
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or_default();
+            .map_or(0, |duration| duration.as_nanos());
         let temp = path.with_file_name(format!(
             ".{}.tmp-{}-{}",
             file_name,
@@ -82,7 +81,17 @@ pub async fn atomic_write(path: &Path, contents: Vec<u8>) -> Result<(), std::io:
         result
     })
     .await
-    .map_err(|error| std::io::Error::other(format!("atomic write task failed: {}", error)))?
+    .map_err(|error| std::io::Error::other(format!("atomic write task failed: {error}")))?
+}
+
+/// Async wrapper around [`atomic_replace`] for callers on the Tokio runtime.
+/// The blocking rename runs on the blocking pool like [`atomic_write`].
+pub async fn atomic_replace_async(source: &Path, destination: &Path) -> Result<(), std::io::Error> {
+    let source = source.to_path_buf();
+    let destination = destination.to_path_buf();
+    tokio::task::spawn_blocking(move || atomic_replace(&source, &destination))
+        .await
+        .map_err(|error| std::io::Error::other(format!("atomic replace task failed: {error}")))?
 }
 
 #[cfg(test)]
@@ -372,7 +381,12 @@ pub async fn scan_files(dir: &Path, extensions: &[&str]) -> ScanFilesResult {
                 continue;
             }
             if file_type.is_file() {
-                let name = entry.file_name().to_string_lossy().to_string();
+                // Skip non-UTF-8 names explicitly: the IPC/persistence layer
+                // and FFmpeg argument APIs are UTF-8, so `to_string_lossy()`
+                // would silently point at a different (mangled) path.
+                let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+                    continue;
+                };
                 let lower = name.to_lowercase();
                 if extensions.iter().any(|ext| lower.ends_with(ext)) {
                     if files.len() >= MAX_SCAN_FILES {
@@ -382,7 +396,10 @@ pub async fn scan_files(dir: &Path, extensions: &[&str]) -> ScanFilesResult {
                             incomplete,
                         };
                     }
-                    files.push(entry.path().to_string_lossy().to_string());
+                    let Some(path) = entry.path().to_str().map(str::to_owned) else {
+                        continue;
+                    };
+                    files.push(path);
                 }
             } else if file_type.is_dir() {
                 let canonical = match tokio::fs::canonicalize(entry.path()).await {

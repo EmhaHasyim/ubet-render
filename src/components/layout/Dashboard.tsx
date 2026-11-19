@@ -1,8 +1,7 @@
 import {
   createEffect,
   createMemo,
-  onCleanup,
-  onMount,
+  onSettled,
   Show,
   type Accessor,
   type Setter,
@@ -11,8 +10,6 @@ import { Icon } from '../ui/Icon';
 import { ProgressBarStatus } from '@tauri-apps/api/window';
 import { createLogger } from '../../core/logger';
 import { getSourcePaths } from '../../core/config';
-
-const log = createLogger('Dashboard');
 import { getSafeWindow } from '../../core/window';
 import { SettingsCard } from './SettingsCard';
 import { Sidebar } from './Sidebar';
@@ -23,12 +20,18 @@ import { type AppTabId } from '../../hooks/useAppShortcuts';
 import { ActivityView } from './ActivityView';
 import { InspectorRail } from './InspectorRail';
 
+const log = createLogger('Dashboard');
+
 export function Dashboard(props: {
   pipeline: Pipeline;
   activeTab: Accessor<AppTabId>;
   setActiveTab: Setter<AppTabId>;
 }) {
-  const { pipeline, activeTab, setActiveTab } = props;
+  // `pipeline` is a stable context object. Keep the tab accessor lazy so it
+  // continues to track the parent signal instead of freezing its first value.
+  const pipeline = props.pipeline;
+  const activeTab = () => props.activeTab();
+  const setActiveTab = props.setActiveTab;
   const appWindow = getSafeWindow();
 
   const handleKeyDown = (event: KeyboardEvent) => {
@@ -61,16 +64,14 @@ export function Dashboard(props: {
     }
   };
 
-  onMount(() => {
+  onSettled(() => {
     window.addEventListener('keydown', handleKeyDown);
     // Window close is "hide to tray": `main.rs` always cancels the native
     // close and hides the window, so the render keeps running. A JS confirm
     // handler here could not undo that hide (the Rust handler runs first) and
     // pausing on close contradicted the tray behaviour, so the old prompt was
     // both misleading and able to re-trigger itself after a pause.
-    onCleanup(() => {
-      window.removeEventListener('keydown', handleKeyDown);
-    });
+    return () => window.removeEventListener('keydown', handleKeyDown);
   });
 
   const renderEstimate = createMemo(() => {
@@ -88,45 +89,52 @@ export function Dashboard(props: {
   });
 
   let lastSentTaskbar = '';
-  createEffect(() => {
-    const pct = pipeline.overallProgress();
-    const rounded = Math.round(Math.min(100, pct || 0));
-    let key: string;
-    let call: () => Promise<unknown>;
-    if (pipeline.running()) {
-      key = `normal:${rounded}`;
-      call = () => appWindow.setProgressBar({ progress: rounded });
-    } else if (pipeline.paused()) {
-      key = `paused:${rounded}`;
-      call = () =>
-        appWindow.setProgressBar({
-          status: ProgressBarStatus.Paused,
-          progress: rounded,
-        });
-    } else if (pipeline.hasFailed()) {
-      key = `error:${rounded}`;
-      call = () =>
-        appWindow.setProgressBar({
-          status: ProgressBarStatus.Error,
-          progress: rounded,
-        });
-    } else if (pct >= 100) {
-      key = 'complete';
-      call = () => appWindow.setProgressBar({ progress: 100 });
-    } else {
-      key = 'none';
-      call = () => appWindow.setProgressBar({ status: ProgressBarStatus.None });
-    }
-    if (key === lastSentTaskbar) return;
-    lastSentTaskbar = key;
-    call().catch((err) => log.warn('setProgressBar failed:', err));
-  });
+  createEffect(
+    () => ({
+      pct: pipeline.overallProgress(),
+      running: pipeline.running(),
+      paused: pipeline.paused(),
+      failed: pipeline.hasFailed(),
+    }),
+    (state) => {
+      const rounded = Math.round(Math.min(100, state.pct || 0));
+      let key: string;
+      let call: () => Promise<unknown>;
+      if (state.running) {
+        key = `normal:${rounded}`;
+        call = () => appWindow.setProgressBar({ progress: rounded });
+      } else if (state.paused) {
+        key = `paused:${rounded}`;
+        call = () =>
+          appWindow.setProgressBar({
+            status: ProgressBarStatus.Paused,
+            progress: rounded,
+          });
+      } else if (state.failed) {
+        key = `error:${rounded}`;
+        call = () =>
+          appWindow.setProgressBar({
+            status: ProgressBarStatus.Error,
+            progress: rounded,
+          });
+      } else if (state.pct >= 100) {
+        key = 'complete';
+        call = () => appWindow.setProgressBar({ progress: 100 });
+      } else {
+        key = 'none';
+        call = () =>
+          appWindow.setProgressBar({ status: ProgressBarStatus.None });
+      }
+      if (key === lastSentTaskbar) return;
+      lastSentTaskbar = key;
+      call().catch((err) => log.warn('setProgressBar failed:', err));
+    },
+  );
 
   return (
     <div class="flex h-screen flex-col overflow-hidden bg-base-200 text-base-content">
       <Titlebar
         activeTab={activeTab}
-        setActiveTab={setActiveTab}
         running={pipeline.running()}
         paused={pipeline.paused()}
         jobCount={pipeline.jobs().length}

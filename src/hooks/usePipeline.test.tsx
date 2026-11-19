@@ -19,7 +19,7 @@ vi.mock('@tauri-apps/plugin-notification', () => ({
   sendNotification: vi.fn(),
 }));
 
-import { createRoot } from 'solid-js';
+import { createRoot, flush } from 'solid-js';
 import { usePipeline } from './usePipeline';
 
 function mountHook<T>(fn: () => T): T {
@@ -31,7 +31,7 @@ function mountHook<T>(fn: () => T): T {
   return result;
 }
 
-/** Mount inside a rendered component so onMount fires. */
+/** Mount inside a rendered component so onSettled fires. */
 function mountRenderedHook<T>(useFn: () => T): { ref: T } {
   let result!: T;
   render(() => {
@@ -87,6 +87,7 @@ describe('usePipeline', () => {
     p.setCodec('h265');
     p.setMaxrate('8000k');
     p.setAudioMode('normalize');
+    flush();
     expect(p.codec()).toBe('h265');
     expect(p.maxrate()).toBe('8000k');
     expect(p.audioMode()).toBe('normalize');
@@ -115,13 +116,14 @@ describe('usePipeline', () => {
       return undefined;
     });
 
-    // Use rendered mount so onMount fires (detect_hardware runs)
+    // Use rendered mount so onSettled fires (detect_hardware runs)
     const { ref: p } = mountRenderedHook(() => usePipeline());
 
     // Set paths so pathsReady() → true
     p.setVideoSource({ type: 'files', paths: ['/v/test.mp4'] });
     p.setAudioSource({ type: 'files', paths: ['/a/test.mp3'] });
     p.setOutputPath('/out');
+    flush();
 
     // Wait for detect_hardware to resolve, then start
     await vi.waitFor(() => {
@@ -159,6 +161,7 @@ describe('usePipeline', () => {
       p.setVideoSource({ type: 'files', paths: ['/v.mp4'] });
       p.setAudioSource({ type: 'files', paths: ['/a.mp3'] });
       p.setOutputPath('/o');
+      flush();
 
       await vi.waitFor(() => expect(p.hardwareInfo()).not.toBeNull());
 

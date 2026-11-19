@@ -17,15 +17,14 @@ vi.mock('@tauri-apps/api/window', () => ({
   })),
 }));
 
-import { createSignal } from 'solid-js';
+import { createSignal, flush } from 'solid-js';
 import { Titlebar } from './Titlebar';
 import type { AppTabId } from '../../hooks/useAppShortcuts';
 
 function renderTitlebar(overrides?: Partial<Parameters<typeof Titlebar>[0]>) {
-  const [activeTab, setActiveTab] = createSignal<AppTabId>('renderer');
+  const [activeTab] = createSignal<AppTabId>('renderer');
   const props = {
     activeTab,
-    setActiveTab,
     running: false,
     paused: false,
     jobCount: 0,
@@ -63,7 +62,7 @@ describe('Titlebar', () => {
   it('calls minimize on minimize button click', async () => {
     renderTitlebar();
     screen.getByLabelText('Minimize').click();
-    // SolidJS async onMount hasn't resolved yet, but click handler is sync
+    // SolidJS async onSettled hasn't resolved yet, but click handler is sync
     expect(mockMinimize).toHaveBeenCalled();
   });
 
@@ -87,6 +86,7 @@ describe('Titlebar', () => {
     expect(dragRegion).toBeTruthy();
 
     dragRegion.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true }));
+    flush();
 
     expect(screen.getByText('Minimize')).toBeTruthy();
     expect(screen.getByText('Hide to tray')).toBeTruthy();

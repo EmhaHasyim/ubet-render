@@ -1,6 +1,7 @@
 import { render, screen } from '@solidjs/testing-library';
+import { createSignal, flush } from 'solid-js';
 import { describe, it, expect } from 'vitest';
-import type { JobProgress } from '../../core/types';
+import type { JobProgress, PipelineStats } from '../../core/types';
 import { StatsStrip } from './StatsStrip';
 import { WithPipeline } from '../../test/utils';
 
@@ -54,6 +55,50 @@ describe('StatsStrip', () => {
     ));
     expect(container.querySelector('.stats')).toBeNull();
     expect(container.textContent).toBe('');
+  });
+
+  it('appears when the first jobs arrive after mounting', () => {
+    const [jobs, setJobs] = createSignal<JobProgress[]>([]);
+    render(() => (
+      <WithPipeline overrides={{ jobs }}>
+        <StatsStrip />
+      </WithPipeline>
+    ));
+
+    expect(screen.queryByText('jobs done')).toBeNull();
+
+    setJobs(sampleJobs);
+    flush();
+
+    expect(screen.getByText('4')).toBeTruthy();
+    expect(screen.getByText('jobs done')).toBeTruthy();
+  });
+
+  it('updates live stats and the current video after mounting', () => {
+    const [live, setLive] = createSignal<PipelineStats | null>({
+      speed: 1,
+      bitrateKbps: 500,
+      fps: 30,
+    });
+    const [jobs, setJobs] = createSignal<JobProgress[]>([sampleJobs[0]!]);
+
+    render(() => (
+      <WithPipeline overrides={{ liveStats: live, jobs }}>
+        <StatsStrip />
+      </WithPipeline>
+    ));
+
+    expect(screen.getByText('1.0x')).toBeTruthy();
+    expect(screen.queryByText('Now Encoding')).toBeNull();
+
+    setLive({ speed: 12.5, bitrateKbps: 8500, fps: 60 });
+    setJobs([sampleJobs[1]!]);
+    flush();
+
+    expect(screen.getByText('12.5x')).toBeTruthy();
+    expect(screen.getByText('60 fps · 8.5 Mbps')).toBeTruthy();
+    expect(screen.getByText('Now Encoding')).toBeTruthy();
+    expect(screen.getByText('loop.mp4')).toBeTruthy();
   });
 
   it('shows total, done, failed, processing counts', () => {

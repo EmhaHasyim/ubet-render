@@ -1,4 +1,5 @@
 import { render, screen } from '@solidjs/testing-library';
+import { flush } from 'solid-js';
 import { describe, it, expect, vi } from 'vitest';
 import { AppHeader } from './AppHeader';
 
@@ -91,6 +92,7 @@ describe('AppHeader', () => {
   it('opens cancel dialog when Cancel button clicked', () => {
     renderHeader({ running: true });
     screen.getByText('Cancel render').click();
+    flush();
     expect(screen.getByText('Cancel render?')).toBeTruthy();
     expect(screen.getByText(/FFmpeg process/i)).toBeTruthy();
   });
@@ -98,6 +100,7 @@ describe('AppHeader', () => {
   it('calls onCancel and closes dialog when confirm Cancel clicked', () => {
     const { props } = renderHeader({ running: true });
     screen.getByText('Cancel render').click();
+    flush();
     expect(screen.getByText('Cancel render?')).toBeTruthy(); // dialog visible
 
     // Two buttons match /cancel render/i: the trigger and the confirmation.

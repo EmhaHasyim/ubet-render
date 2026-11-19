@@ -34,7 +34,7 @@ pub struct VideoFile {
 #[derive(Debug, Clone)]
 pub struct AudioInfo {
     pub codec: String,
-    /// FFmpeg profile name for the first audio stream (e.g. `LC` for AAC-LC,
+    /// `FFmpeg` profile name for the first audio stream (e.g. `LC` for AAC-LC,
     /// `HE-AAC`/`HE-AACv2` for SBR/PS variants). `None` when unreported.
     pub profile: Option<String>,
     pub sample_rate: u32,
@@ -42,9 +42,9 @@ pub struct AudioInfo {
     pub bit_rate: Option<u32>,
 }
 
-/// Subset of FFmpeg's `loudnorm` JSON print-format we actually consume.
+/// Subset of `FFmpeg`'s `loudnorm` JSON print-format we actually consume.
 ///
-/// The five fields below are what pass 2 of FFmpeg's EBU R128 loudnorm
+/// The five fields below are what pass 2 of `FFmpeg`'s EBU R128 loudnorm
 /// filter requires to apply accurate, two-pass normalization.  All values
 /// are stored as `f64` because the JSON comes back as decimal strings
 /// (e.g. `"-23.81"`).

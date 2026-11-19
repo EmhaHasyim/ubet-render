@@ -1,11 +1,12 @@
 import { createMemo, type Accessor } from 'solid-js';
 import { isMaxrateValid } from '../core/estimate';
 import { CODECS, getSourcePaths } from '../core/config';
+import type { MediaSource } from '../core/types';
 import type { HardwareInfo } from './useHardware';
 
 interface StartReadinessConfig {
-  videoSource: Accessor<import('../core/types').MediaSource | null>;
-  audioSource: Accessor<import('../core/types').MediaSource | null>;
+  videoSource: Accessor<MediaSource | null>;
+  audioSource: Accessor<MediaSource | null>;
   outputPath: Accessor<string>;
   maxrate: Accessor<string>;
   codec: Accessor<string>;

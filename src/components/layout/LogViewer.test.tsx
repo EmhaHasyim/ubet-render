@@ -1,4 +1,5 @@
 import { render, screen, fireEvent } from '@solidjs/testing-library';
+import { flush } from 'solid-js';
 import { describe, it, expect } from 'vitest';
 import { LogViewer } from './LogViewer';
 
@@ -42,6 +43,7 @@ describe('LogViewer', () => {
 
     // Turn the INFO chip off. INFO lines disappear…
     fireEvent.click(screen.getByTestId('log-filter-info'));
+    flush();
     expect(screen.queryByText('[INFO] starting')).toBeNull();
 
     // …but SUCCESS has no toggle chip of its own, so its lines must stay

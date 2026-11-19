@@ -1,5 +1,5 @@
 import './App.css';
-import { render } from 'solid-js/web';
+import { render } from '@solidjs/web';
 import App from './App';
 import { applyTheme, loadTheme } from './core/theme';
 

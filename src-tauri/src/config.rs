@@ -133,7 +133,7 @@ impl AppConfig {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or_default();
-        let backup = path.with_file_name(format!("config.invalid.{}.{}.json", stamp, nonce));
+        let backup = path.with_file_name(format!("config.invalid.{stamp}.{nonce}.json"));
         match std::fs::rename(path, &backup) {
             Ok(()) => crate::utils::logger::log_line(&format!(
                 "Moved invalid config '{}' to '{}'.",
@@ -196,7 +196,20 @@ impl AppConfig {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let tmp = path.with_extension("tmp");
+        // Unique per write so two concurrent `save_config` calls cannot
+        // interleave their JSON through the same temporary file.
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+        let tmp = path.with_file_name(format!(
+            ".{}.tmp-{}-{}",
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("config.json"),
+            std::process::id(),
+            nonce
+        ));
         // Make directory paths absolute so persisted config always stores
         // absolute paths — prevents relative-path drift across sessions.
         let mut canonicalized = self.clone();

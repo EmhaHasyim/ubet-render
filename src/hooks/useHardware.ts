@@ -1,4 +1,4 @@
-import { createSignal, onMount } from 'solid-js';
+import { createSignal, onCleanup, onSettled } from 'solid-js';
 import { invoke } from '@tauri-apps/api/core';
 import type { HardwareInfo } from '../core/types';
 import { CODECS } from '../core/config';
@@ -13,8 +13,12 @@ export function useHardware(
   const [hardwareInfo, setHardwareInfo] = createSignal<HardwareInfo | null>(
     null,
   );
+  let disposed = false;
+  onCleanup(() => {
+    disposed = true;
+  });
 
-  onMount(() => {
+  onSettled(() => {
     // Read the codec again when the async probe resolves. The user may
     // change it while the IPC call is in flight; a stale captured value must
     // never overwrite a newer selection.
@@ -27,6 +31,7 @@ export function useHardware(
       av1Encoder: string | null;
     }>(TAURI_COMMANDS.detectHardware)
       .then((info) => {
+        if (disposed) return;
         setHardwareInfo({
           cpuModel: info.cpuName,
           gpuModel: info.gpuName,
@@ -40,6 +45,7 @@ export function useHardware(
         }
       })
       .catch(() => {
+        if (disposed) return;
         if (currentCodec() === CODECS.av1) {
           setCodec(CODECS.h265);
         }

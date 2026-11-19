@@ -2,7 +2,7 @@ use crate::error::AppError;
 use crate::models::job::RenderStats;
 use crate::models::media::{AudioInfo, LoudnormMeasurement};
 
-/// Minimum supported FFmpeg major/minor version.
+/// Minimum supported `FFmpeg` major/minor version.
 pub(crate) const MIN_FFMPEG_VERSION: (u32, u32) = (8, 1);
 
 pub(crate) fn extract_time(line: &str) -> Option<f64> {
@@ -76,7 +76,7 @@ pub(crate) fn parse_stats(line: &str) -> Option<RenderStats> {
     }
 }
 
-/// Parse an ffprobe r_frame_rate value (fraction "30000/1001" or float "29.97").
+/// Parse an ffprobe `r_frame_rate` value (fraction "30000/1001" or float "29.97").
 pub(crate) fn parse_ffprobe_frame_rate(value: &str) -> Option<f64> {
     if let Some((num, den)) = value.split_once('/') {
         let n: f64 = num.trim().parse().ok()?;
@@ -99,8 +99,7 @@ pub(crate) fn parse_audio_probe_value(
 ) -> Result<AudioInfo, AppError> {
     let json: serde_json::Value = serde_json::from_str(stdout).map_err(|e| {
         AppError::Ffmpeg(format!(
-            "ffprobe JSON parse failed for '{}': {}",
-            source_label, e
+            "ffprobe JSON parse failed for '{source_label}': {e}"
         ))
     })?;
 
@@ -108,7 +107,7 @@ pub(crate) fn parse_audio_probe_value(
         .get("streams")
         .and_then(|s| s.as_array())
         .and_then(|arr| arr.first())
-        .ok_or_else(|| AppError::Ffmpeg(format!("No audio stream found in '{}'", source_label)))?;
+        .ok_or_else(|| AppError::Ffmpeg(format!("No audio stream found in '{source_label}'")))?;
 
     let codec = stream
         .get("codec_name")
@@ -128,12 +127,12 @@ pub(crate) fn parse_audio_probe_value(
         .get("sample_rate")
         .and_then(|v| v.as_str())
         .and_then(|s| s.parse::<u32>().ok())
-        .ok_or_else(|| AppError::Ffmpeg(format!("Missing sample_rate in '{}'", source_label)))?;
+        .ok_or_else(|| AppError::Ffmpeg(format!("Missing sample_rate in '{source_label}'")))?;
 
     let channels = stream
         .get("channels")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| AppError::Ffmpeg(format!("Missing channels in '{}'", source_label)))?
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| AppError::Ffmpeg(format!("Missing channels in '{source_label}'")))?
         as u32;
 
     let bit_rate = stream
@@ -146,7 +145,7 @@ pub(crate) fn parse_audio_probe_value(
         .and_then(|f| f.get("duration"))
         .and_then(|v| v.as_str())
         .and_then(|s| s.parse::<f64>().ok())
-        .ok_or_else(|| AppError::Ffmpeg(format!("Missing duration in '{}'", source_label)))?;
+        .ok_or_else(|| AppError::Ffmpeg(format!("Missing duration in '{source_label}'")))?;
 
     if duration <= 0.0 {
         return Err(AppError::InvalidDuration(source_label.to_string()));
@@ -163,7 +162,7 @@ pub(crate) fn parse_audio_probe_value(
 
 /// Pass 1 of EBU R128 two-pass loudnorm.
 ///
-/// Parses the loudnorm JSON block emitted by FFmpeg.
+/// Parses the loudnorm JSON block emitted by `FFmpeg`.
 ///
 /// Required fields (matching `LoudnormMeasurement`): `input_i`,
 /// `input_tp`, `input_lra`, `input_thresh`, `target_offset`. Any missing

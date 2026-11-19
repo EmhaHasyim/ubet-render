@@ -11,19 +11,30 @@ use tauri::AppHandle;
 /// without throttling the pipeline would clone + serialize the entire job list
 /// on every line.
 const EMIT_INTERVAL_MS: u64 = 120;
+/// Minimum gap between coalesced state persistence attempts.
+const SAVE_INTERVAL_MS: u64 = 2_000;
 
 /// Manages render-state persistence and progress emission for the pipeline.
 pub struct StateManager {
-    last_save_sec: AtomicU64,
+    /// Monotonic clock used for both throttles. Wall-clock jumps (NTP or a
+    /// manual change) must not suppress saves for the rest of a render.
+    started: std::time::Instant,
+    /// Earliest monotonic timestamp (ms since `started`) for the next save.
+    next_save_ms: AtomicU64,
     last_emit_ms: AtomicU64,
 }
 
 impl StateManager {
     pub fn new() -> Self {
         Self {
-            last_save_sec: AtomicU64::new(0),
+            started: std::time::Instant::now(),
+            next_save_ms: AtomicU64::new(0),
             last_emit_ms: AtomicU64::new(0),
         }
+    }
+
+    fn now_ms(&self) -> u64 {
+        u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
 
     pub async fn save_state(&self, state_path: &Path, jobs: &[RenderJob]) -> Result<(), AppError> {
@@ -34,9 +45,19 @@ impl StateManager {
     /// off the async executor. `RenderJob` itself derives `Serialize`.
     async fn save_state_jobs(&self, state_path: &Path, jobs: &[RenderJob]) -> Result<(), AppError> {
         let json = serde_json::to_string(jobs).map_err(|e| AppError::Pipeline(e.to_string()))?;
-        crate::utils::fs::atomic_write(state_path, json.into_bytes())
+        let result = crate::utils::fs::atomic_write(state_path, json.into_bytes())
             .await
-            .map_err(AppError::Io)
+            .map_err(AppError::Io);
+        if let Err(error) = &result {
+            // Callers treat persistence as best-effort; log here so a full or
+            // read-only disk is visible instead of silently losing progress.
+            crate::utils::logger::log_line(&format!(
+                "Failed to persist render state '{}': {}",
+                state_path.display(),
+                error
+            ));
+        }
+        result
     }
 
     pub async fn save_state_from_arc(
@@ -44,20 +65,21 @@ impl StateManager {
         state_path: &Path,
         jobs_arc: &Arc<tokio::sync::Mutex<Vec<RenderJob>>>,
     ) -> Result<(), AppError> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let last = self.last_save_sec.load(Ordering::Acquire);
-        if now.saturating_sub(last) < 2 {
+        let now_ms = self.now_ms();
+        // `next_save_ms` is a deadline, not a "last attempt" timestamp: an
+        // initial value of 0 allows the first save, and resetting it to 0 on
+        // failure makes the next caller retry immediately.
+        let deadline = self.next_save_ms.load(Ordering::Acquire);
+        if now_ms < deadline {
             return Ok(());
         }
         // Use compare_exchange to avoid double-save when two concurrent callers
         // race through the guard above. Only one caller succeeds; the other
         // bails out, avoiding a redundant disk write.
+        let next = now_ms.saturating_add(SAVE_INTERVAL_MS);
         if self
-            .last_save_sec
-            .compare_exchange(last, now, Ordering::SeqCst, Ordering::Acquire)
+            .next_save_ms
+            .compare_exchange(deadline, next, Ordering::SeqCst, Ordering::Acquire)
             .is_err()
         {
             return Ok(());
@@ -65,7 +87,14 @@ impl StateManager {
         // Clone the job list while holding the lock, then release it before
         // the blocking file write to avoid stalling progress updates.
         let jobs = jobs_arc.lock().await.clone();
-        self.save_state_jobs(state_path, &jobs).await
+        let result = self.save_state_jobs(state_path, &jobs).await;
+        if result.is_err() {
+            // A failed write must not consume the throttle window: callers
+            // mostly ignore this error, so the next attempt has to retry
+            // immediately instead of being silently skipped for up to 2s.
+            self.next_save_ms.store(0, Ordering::Release);
+        }
+        result
     }
 
     pub async fn emit_progress_from_arc(
@@ -112,10 +141,7 @@ impl StateManager {
         app: &AppHandle,
         jobs_arc: &Arc<tokio::sync::Mutex<Vec<RenderJob>>>,
     ) {
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
+        let now_ms = self.now_ms();
         let last = self.last_emit_ms.load(Ordering::Acquire);
         if now_ms.saturating_sub(last) < EMIT_INTERVAL_MS {
             return;
@@ -177,5 +203,37 @@ mod tests {
 
         assert_eq!(restored[0].timestamps, jobs[0].timestamps);
         let _ = std::fs::remove_file(state_path);
+    }
+
+    #[tokio::test]
+    async fn failed_save_does_not_consume_throttle_window() {
+        let missing_parent = std::env::temp_dir().join(format!(
+            "ubet_state_missing_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let state_path = missing_parent.join("state.json");
+        let jobs_arc = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let manager = StateManager::new();
+
+        assert!(
+            manager
+                .save_state_from_arc(&state_path, &jobs_arc)
+                .await
+                .is_err(),
+            "saving into a missing directory should fail"
+        );
+        // The second attempt must retry instead of being skipped by the 2s
+        // throttle after the first write failed.
+        assert!(
+            manager
+                .save_state_from_arc(&state_path, &jobs_arc)
+                .await
+                .is_err(),
+            "a failed save must not throttle the next attempt"
+        );
     }
 }

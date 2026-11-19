@@ -21,7 +21,7 @@ pub async fn generate_thumbnails(
             (
                 i,
                 j.video.input_path.clone(),
-                thumb_dir.join(format!("thumb_{}_{}.jpg", thumb_id, i)),
+                thumb_dir.join(format!("thumb_{thumb_id}_{i}.jpg")),
             )
         })
         .collect();
@@ -36,7 +36,7 @@ pub async fn generate_thumbnails(
                 if control_clone.is_cancelled() {
                     return;
                 }
-                if !thumb_path.exists() {
+                if tokio::fs::metadata(&thumb_path).await.is_err() {
                     let args = build_thumbnail_args(&input_path, &thumb_path);
                     if let Err(e) =
                         ffmpeg::run(&self_app, &args, None, Some(control_clone), None).await
@@ -45,7 +45,7 @@ pub async fn generate_thumbnails(
                             &self_app,
                             crate::models::job::PipelineEvent::Log {
                                 level: "warn".into(),
-                                message: format!("Thumbnail failed for job {}: {}", i, e),
+                                message: format!("Thumbnail failed for job {i}: {e}"),
                             },
                         );
                     }

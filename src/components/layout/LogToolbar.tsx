@@ -111,7 +111,7 @@ export function LogToolbar(props: {
                   <button
                     type="button"
                     class={`badge join-item badge-sm gap-1 cursor-pointer transition-colors ${enabled() ? chip.activeClass : chip.inactiveClass}`}
-                    aria-pressed={enabled()}
+                    aria-pressed={enabled() ? 'true' : 'false'}
                     aria-label={`Toggle ${chip.label} log level`}
                     data-testid={`log-filter-${chip.level.toLowerCase()}`}
                     onClick={() => props.controls.toggleLevel(chip.level)}

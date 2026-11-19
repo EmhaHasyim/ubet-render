@@ -25,7 +25,7 @@ function mountHook<T>(fn: () => T): T {
 }
 
 /**
- * Mount a hook that uses onMount by rendering it inside a component.
+ * Mount a hook that uses onSettled by rendering it inside a component.
  * Returns `{ ref }` where `ref` is the hook's return value.
  */
 function mountMountedHook<T>(useFn: () => T): { ref: T } {

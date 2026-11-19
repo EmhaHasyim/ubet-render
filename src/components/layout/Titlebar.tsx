@@ -1,11 +1,4 @@
-import {
-  createSignal,
-  onCleanup,
-  onMount,
-  Show,
-  type Accessor,
-  type Setter,
-} from 'solid-js';
+import { createSignal, onSettled, Show, type Accessor } from 'solid-js';
 import { Icon } from '../ui/Icon';
 import {
   applyTheme,
@@ -31,7 +24,6 @@ const PAGE_LABELS: Record<AppTabId, string> = {
  */
 export function Titlebar(props: {
   activeTab: Accessor<AppTabId>;
-  setActiveTab: Setter<AppTabId>;
   running: boolean;
   paused: boolean;
   jobCount: number;
@@ -52,7 +44,7 @@ export function Titlebar(props: {
     if (e.key === 'Escape') setShowContextMenu(false);
   };
 
-  onMount(() => {
+  onSettled(() => {
     let disposed = false;
     let debounceTimer: ReturnType<typeof setTimeout> | undefined;
     let unlistenResize: (() => void) | undefined;
@@ -70,13 +62,13 @@ export function Titlebar(props: {
 
     // Register cleanup before any `await`: an unmount during the async
     // window queries must still remove the listeners.
-    onCleanup(() => {
+    const cleanup = () => {
       disposed = true;
       unlistenResize?.();
       if (debounceTimer !== undefined) clearTimeout(debounceTimer);
       document.removeEventListener('click', closeMenuOnClick);
       document.removeEventListener('keydown', closeMenuOnEscape);
-    });
+    };
 
     void (async () => {
       const maximized = await appWindow.isMaximized();
@@ -97,6 +89,8 @@ export function Titlebar(props: {
     })().catch(() => {
       // The window may already be closing; controls remain usable.
     });
+
+    return cleanup;
   });
 
   // Window-control actions are fire-and-forget: swallow rejections so a
@@ -242,7 +236,7 @@ export function Titlebar(props: {
           class={controlClass}
           onClick={handleMinimize}
           aria-label="Minimize"
-          tabIndex={-1}
+          tabindex={-1}
         >
           <Icon icon="lucide:minus" width="16" height="16" />
         </button>
@@ -251,7 +245,7 @@ export function Titlebar(props: {
           class={controlClass}
           onClick={handleToggleMaximize}
           aria-label={isMaximized() ? 'Restore' : 'Maximize'}
-          tabIndex={-1}
+          tabindex={-1}
         >
           <Icon
             icon={isMaximized() ? 'lucide:copy' : 'lucide:square'}
@@ -264,7 +258,7 @@ export function Titlebar(props: {
           class={`${controlClass} hover:bg-error hover:text-error-content`}
           onClick={handleClose}
           aria-label="Close to tray"
-          tabIndex={-1}
+          tabindex={-1}
         >
           <Icon icon="lucide:x" width="16" height="16" />
         </button>

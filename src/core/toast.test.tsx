@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen } from '@solidjs/testing-library';
+import { flush } from 'solid-js';
 import { ToastViewport } from '../components/ui/Toast';
 import { dismissToast, showToast, useToasts } from './toast';
 
@@ -7,6 +8,7 @@ beforeEach(() => {
   // Clear any toasts left over from prior tests — module-scope signals persist.
   const cur = useToasts()();
   for (const t of cur) dismissToast(t.id);
+  flush();
   vi.useRealTimers();
 });
 
@@ -14,12 +16,14 @@ describe('toast store API', () => {
   it('adds a toast to the queue', () => {
     render(() => <ToastViewport />);
     showToast('Saved', { variant: 'success' });
+    flush();
     expect(screen.getByText('Saved')).toBeTruthy();
   });
 
   it('uses the supplied variant for icon and alert class', () => {
     render(() => <ToastViewport />);
     showToast('Failure', { variant: 'error', ttl: 0 });
+    flush();
     const alert = screen.getByRole('alert');
     expect(alert.className).toContain('alert-error');
   });
@@ -27,21 +31,26 @@ describe('toast store API', () => {
   it('status (non-warning/error) alerts use role="status"', () => {
     render(() => <ToastViewport />);
     showToast('Info', { variant: 'info', ttl: 0 });
+    flush();
     expect(screen.getByRole('status')).toBeTruthy();
   });
 
   it('dismissToast removes a toast from the queue', () => {
     render(() => <ToastViewport />);
     const id = showToast('Dismiss me', { ttl: 0 });
+    flush();
     expect(screen.getByText('Dismiss me')).toBeTruthy();
     dismissToast(id);
+    flush();
     expect(screen.queryByText('Dismiss me')).toBeNull();
   });
 
   it('exposes a manual dismiss button inside the toast', () => {
     render(() => <ToastViewport />);
     showToast('Tap to close', { ttl: 0 });
+    flush();
     screen.getByLabelText('Dismiss notification').click();
+    flush();
     expect(screen.queryByText('Tap to close')).toBeNull();
   });
 
@@ -50,6 +59,7 @@ describe('toast store API', () => {
     const a = showToast('A', { ttl: 0 });
     const b = showToast('B', { ttl: 0 });
     const c = showToast('C', { ttl: 0 });
+    flush();
     expect(b).toBeGreaterThan(a);
     expect(c).toBeGreaterThan(b);
   });
@@ -60,9 +70,11 @@ describe('toast auto-dismiss timing', () => {
     vi.useFakeTimers();
     render(() => <ToastViewport />);
     showToast('Timed', { ttl: 200 });
+    flush();
 
     expect(screen.getByText('Timed')).toBeTruthy();
     await vi.advanceTimersByTimeAsync(250);
+    flush();
     expect(screen.queryByText('Timed')).toBeNull();
   });
 
@@ -70,8 +82,10 @@ describe('toast auto-dismiss timing', () => {
     vi.useFakeTimers();
     render(() => <ToastViewport />);
     showToast('Sticky', { ttl: 0 });
+    flush();
     expect(screen.getByText('Sticky')).toBeTruthy();
     vi.advanceTimersByTime(60_000);
+    flush();
     expect(screen.getByText('Sticky')).toBeTruthy();
   });
 
@@ -79,9 +93,11 @@ describe('toast auto-dismiss timing', () => {
     vi.useFakeTimers();
     render(() => <ToastViewport />);
     showToast('Default');
+    flush();
     expect(screen.getByText('Default')).toBeTruthy();
 
     await vi.advanceTimersByTimeAsync(3500);
+    flush();
     expect(screen.queryByText('Default')).toBeNull();
   });
 });

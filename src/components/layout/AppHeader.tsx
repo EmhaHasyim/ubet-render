@@ -29,15 +29,18 @@ export function AppHeader(props: {
   // after the dialog closes — standard a11y pattern.
   let returnFocus: (() => void) | null = null;
 
-  createEffect(() => {
-    // Show the dialog as soon as it enters the DOM; close on signal toggle.
-    if (showCancelDialog() && cancelModalRef) {
-      returnFocus = rememberFocus();
-      cancelModalRef.showModal();
-    } else if (!showCancelDialog() && cancelModalRef?.open) {
-      cancelModalRef.close();
-    }
-  });
+  createEffect(
+    () => showCancelDialog(),
+    (isOpen) => {
+      // Show the dialog as soon as it enters the DOM; close on signal toggle.
+      if (isOpen && cancelModalRef) {
+        returnFocus = rememberFocus();
+        cancelModalRef.showModal();
+      } else if (!isOpen && cancelModalRef?.open) {
+        cancelModalRef.close();
+      }
+    },
+  );
 
   // Close event: only restore focus. The "Keep rendering" backdrop button
   // flips showCancelDialog=false via <form method="dialog">, so this

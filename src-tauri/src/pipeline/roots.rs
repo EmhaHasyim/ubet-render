@@ -35,8 +35,7 @@ fn add_override_source_roots(
         MediaSource::Folder { path } => {
             if crate::validation::is_system_protected_path(Path::new(path)) {
                 return Err(AppError::Pipeline(format!(
-                    "{} source resolves inside a system-protected location: {}",
-                    media_label, path,
+                    "{media_label} source resolves inside a system-protected location: {path}",
                 )));
             }
             let root = canonicalize_for_root(fs::to_absolute(Path::new(path)));
@@ -48,8 +47,7 @@ fn add_override_source_roots(
                 if let Some(parent) = Path::new(p).parent() {
                     if crate::validation::is_system_protected_path(parent) {
                         return Err(AppError::Pipeline(format!(
-                            "{} source resolves inside a system-protected location: {}",
-                            media_label, p,
+                            "{media_label} source resolves inside a system-protected location: {p}",
                         )));
                     }
                     let root = canonicalize_for_root(fs::to_absolute(parent));

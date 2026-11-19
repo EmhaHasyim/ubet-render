@@ -1,5 +1,5 @@
 import { render, screen, fireEvent } from '@solidjs/testing-library';
-import { createSignal } from 'solid-js';
+import { createSignal, flush } from 'solid-js';
 import { describe, it, expect, vi } from 'vitest';
 import type { JobProgress } from '../../core/types';
 import { JobTable } from './JobTable';
@@ -150,6 +150,7 @@ describe('JobTable', () => {
     // Simulate the next Progress event: a brand-new jobs array (new object
     // identity) carrying the same thumbnail path.
     setJobs([{ ...withThumb[0]!, progressPercent: 20 }]);
+    flush();
 
     // The broken image must stay replaced by the placeholder icon.
     expect(container.querySelectorAll('img').length).toBe(0);

@@ -41,7 +41,7 @@ export function LoopingSection(props: {
       </div>
 
       <Show when={props.loopMode() === 'duration'}>
-        <label class="form-control">
+        <div class="form-control">
           <span class="label py-1">
             <span class="label-text font-medium">Minimum duration</span>
           </span>
@@ -62,7 +62,7 @@ export function LoopingSection(props: {
             />
             <span class="text-sm text-base-content/60">hours</span>
           </label>
-        </label>
+        </div>
       </Show>
 
       <Show when={props.loopMode() === 'count'}>

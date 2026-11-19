@@ -1,4 +1,4 @@
-import { createSignal, onMount, onCleanup } from 'solid-js';
+import { createSignal, onSettled, onCleanup } from 'solid-js';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import type { UnlistenFn } from '@tauri-apps/api/event';
 import type { MediaSource } from '../core/types';
@@ -31,6 +31,7 @@ export function useDragDrop(
 ) {
   const [dragHover, setDragHover] = createSignal<DropZone | null>(null);
   let unlistenDrag: UnlistenFn | null = null;
+  let disposed = false;
 
   // Single dispatch shared by HTML5 and Tauri-native drop handlers.
   // Zone/extension branching lives in the pure `dispatchDropPaths`
@@ -87,50 +88,67 @@ export function useDragDrop(
   };
 
   // ------------------------------------------------------------------
-  // Single onMount: set up BOTH Tauri native DnD AND HTML5 fallback.
+  // Single onSettled: set up BOTH Tauri native DnD AND HTML5 fallback.
   // HTML5 listeners are no-ops in Tauri because the webview intercepts
   // OS-level drag events before they reach the DOM.
   // ------------------------------------------------------------------
-  onMount(async () => {
-    // ── HTML5 fallback listeners ──────────────────────────────────
-    document.addEventListener('dragover', onDragOver);
-    document.addEventListener('dragleave', onDragLeave);
-    document.addEventListener('drop', onDrop);
+  onSettled(() => {
+    if (disposed) return;
+    void (async () => {
+      // ── HTML5 fallback listeners ──────────────────────────────────
+      document.addEventListener('dragover', onDragOver);
+      document.addEventListener('dragleave', onDragLeave);
+      document.addEventListener('drop', onDrop);
 
-    // ── Tauri native DnD (primary) ───────────────────────────────
-    try {
-      const appWindow = getCurrentWindow();
-      unlistenDrag = await appWindow.onDragDropEvent((event) => {
-        try {
-          if (event.payload.type === 'over' || event.payload.type === 'enter') {
-            const { x, y } = scalePoint(
-              event.payload.position.x,
-              event.payload.position.y,
-              window.devicePixelRatio || 1,
-            );
-            setDragHover(hitTestDropzone(x, y));
-          } else if (event.payload.type === 'leave') {
-            setDragHover(null);
-          } else if (event.payload.type === 'drop') {
-            setDragHover(null);
-            const paths = event.payload.paths;
-            const { x, y } = scalePoint(
-              event.payload.position.x,
-              event.payload.position.y,
-              window.devicePixelRatio || 1,
-            );
-            dispatchDrop(paths, x, y);
+      // ── Tauri native DnD (primary) ───────────────────────────────
+      try {
+        const appWindow = getCurrentWindow();
+        const unlisten = await appWindow.onDragDropEvent((event) => {
+          if (disposed) return;
+          try {
+            if (
+              event.payload.type === 'over' ||
+              event.payload.type === 'enter'
+            ) {
+              const { x, y } = scalePoint(
+                event.payload.position.x,
+                event.payload.position.y,
+                window.devicePixelRatio || 1,
+              );
+              setDragHover(hitTestDropzone(x, y));
+            } else if (event.payload.type === 'leave') {
+              setDragHover(null);
+            } else if (event.payload.type === 'drop') {
+              setDragHover(null);
+              const paths = event.payload.paths;
+              const { x, y } = scalePoint(
+                event.payload.position.x,
+                event.payload.position.y,
+                window.devicePixelRatio || 1,
+              );
+              dispatchDrop(paths, x, y);
+            }
+          } catch (err) {
+            log.error('Tauri event handler error:', err);
           }
-        } catch (err) {
-          log.error('Tauri event handler error:', err);
+        });
+        if (disposed) {
+          try {
+            unlisten();
+          } catch (err) {
+            log.warn('unlisten drag-drop failed:', err);
+          }
+        } else {
+          unlistenDrag = unlisten;
         }
-      });
-    } catch (err) {
-      log.error('Tauri DnD unavailable — will use HTML5 fallback:', err);
-    }
+      } catch (err) {
+        log.error('Tauri DnD unavailable — will use HTML5 fallback:', err);
+      }
+    })();
   });
 
   onCleanup(() => {
+    disposed = true;
     // Cleanup Tauri native DnD listener
     if (unlistenDrag) {
       try {

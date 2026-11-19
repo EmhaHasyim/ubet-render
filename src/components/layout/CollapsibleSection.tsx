@@ -1,4 +1,5 @@
-import { createSignal, onMount, type JSX } from 'solid-js';
+import { createSignal, onSettled } from 'solid-js';
+import type { JSX } from '@solidjs/web';
 import { safeSetStorageItem } from '../../core/storage';
 
 /**
@@ -66,7 +67,7 @@ export function CollapsibleSection(props: {
 
   const [expanded, setExpanded] = createSignal(readExpanded());
 
-  onMount(() => {
+  onSettled(() => {
     // Re-read on mount in case another tab changed it.
     setExpanded(readExpanded());
   });

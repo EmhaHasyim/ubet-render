@@ -1,9 +1,10 @@
 /**
- * Tests untuk App.tsx — Dashboard rendering, ErrorBoundary, tab switching.
+ * Tests untuk App.tsx — Dashboard rendering, Errored boundary, tab switching.
  * Menggunakan mock Tauri API.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen } from '@solidjs/testing-library';
+import { flush } from 'solid-js';
 
 // ---------------------------------------------------------------------------
 // Mocks — must be at top level
@@ -30,7 +31,7 @@ vi.mock('@tauri-apps/api/window', () => ({
   // Tauri 2 ProgressBarStatus enum (mirrors @tauri-apps/api/window).
   // Required by `Dashboard.tsx`'s taskbar progress indicator. Without this
   // the module-resolution fails and rendering falls through to the
-  // ErrorBoundary's <FatalScreen>.
+  // Errored boundary's <FatalScreen>.
   ProgressBarStatus: {
     None: 'none',
     Normal: 'normal',
@@ -110,6 +111,7 @@ describe('App', () => {
     render(() => <App />);
     const activityTab = screen.getByText('Activity');
     activityTab.click();
+    flush();
 
     expect(screen.getByText('Jobs and logs.')).toBeTruthy();
     expect(screen.getByText('Jobs')).toBeTruthy();
@@ -120,10 +122,12 @@ describe('App', () => {
     render(() => <App />);
     // Go to Activity
     screen.getByText('Activity').click();
+    flush();
     expect(screen.getByText('Back to setup')).toBeTruthy();
 
     // Go back
     screen.getByText('Back to setup').click();
+    flush();
     expect(screen.getAllByText('Render setup').length).toBeGreaterThanOrEqual(
       1,
     );
@@ -133,6 +137,7 @@ describe('App', () => {
     render(() => <App />);
 
     fireEvent.keyDown(window, { key: '2', ctrlKey: true });
+    flush();
 
     expect(screen.getByText('Jobs and logs.')).toBeTruthy();
   });

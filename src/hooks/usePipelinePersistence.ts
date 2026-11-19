@@ -72,21 +72,13 @@ export function usePipelinePersistence(
     return saveInFlight;
   };
 
-  createEffect(() => {
-    void [
-      config.codec(),
-      config.maxrate(),
-      config.songsPerPlaylist(),
-      config.minDurationHours(),
-      config.outputPrefix(),
-      config.outputPath(),
-      config.embedChapters(),
-      config.audioMode(),
-    ];
-
-    latestConfig = buildAppConfig(config, resolveEncoder);
-    schedulePersist();
-  });
+  createEffect(
+    () => buildAppConfig(config, resolveEncoder),
+    (snapshot) => {
+      latestConfig = snapshot;
+      schedulePersist();
+    },
+  );
 
   const flush = async (): Promise<boolean> => {
     if (persistTimer !== null) {

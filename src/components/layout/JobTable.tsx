@@ -1,4 +1,4 @@
-import { createSignal, Index, Show } from 'solid-js';
+import { createSignal, For, Show } from 'solid-js';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { Icon } from '../ui/Icon';
 import { TAURI_COMMANDS } from '../../core/constants';
@@ -85,9 +85,9 @@ export function JobTable(props: {
             </tr>
           </thead>
           <tbody>
-            <Index each={props.jobs}>
+            <For keyed={false} each={props.jobs}>
               {(job) => {
-                // Accessor, not a snapshot: <Index> reuses the row DOM across
+                // Accessor, not a snapshot: <For keyed={false}> reuses the row DOM across
                 // Progress updates, so a plain const would freeze the first
                 // thumbnail path and never pick up a later one.
                 const thumbPath = () => job().thumbnailPath;
@@ -194,7 +194,7 @@ export function JobTable(props: {
                   </tr>
                 );
               }}
-            </Index>
+            </For>
           </tbody>
         </table>
       </div>

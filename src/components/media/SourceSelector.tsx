@@ -45,18 +45,24 @@ export function SourceSelector(props: SourceSelectorProps) {
       }
     }
 
-    const selected = await open({
-      multiple: true,
-      defaultPath: currentDefault,
-      filters: [
-        {
-          name: props.label,
-          extensions: props.allowedExtensions.map((ext) =>
-            ext.replace('.', ''),
-          ),
-        },
-      ],
-    });
+    let selected: string | string[] | null;
+    try {
+      selected = await open({
+        multiple: true,
+        defaultPath: currentDefault,
+        filters: [
+          {
+            name: props.label,
+            extensions: props.allowedExtensions.map((ext) =>
+              ext.replace('.', ''),
+            ),
+          },
+        ],
+      });
+    } catch (e) {
+      log.error('Failed to open file picker:', e);
+      return;
+    }
 
     if (!selected) return;
 

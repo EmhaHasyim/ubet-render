@@ -1,3 +1,5 @@
+import { Show } from 'solid-js';
+
 /**
  * Inline lucide icons (MIT). Bodies extracted once from @iconify-json/lucide
  * and bundled directly — no icon runtime, no 556KB JSON import, no CSP/CDN
@@ -10,22 +12,27 @@ export function Icon(props: {
   width?: string;
   height?: string;
 }) {
-  const body = ICON_BODIES[props.icon.replace(/^lucide:/, '')];
-  if (!body) return null;
+  // Read props.icon inside the JSX tracking scope: component bodies run once,
+  // so a top-level lookup would freeze the icon at its initial value.
+  const body = () => ICON_BODIES[props.icon.replace(/^lucide:/, '')];
   return (
-    <svg
-      viewBox="0 0 24 24"
-      class={props.class}
-      width={props.width ?? '1em'}
-      height={props.height ?? '1em'}
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-      aria-hidden="true"
-      innerHTML={body}
-    />
+    <Show when={body()}>
+      {(content) => (
+        <svg
+          viewBox="0 0 24 24"
+          class={props.class}
+          width={props.width ?? '1em'}
+          height={props.height ?? '1em'}
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+          innerHTML={content()}
+        />
+      )}
+    </Show>
   );
 }
 

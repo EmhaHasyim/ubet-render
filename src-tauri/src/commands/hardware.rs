@@ -6,9 +6,9 @@ use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::{Command as ShellCommand, CommandEvent};
 
 #[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
+use crate::utils::process::{CREATE_NO_WINDOW, system32_dir};
 #[cfg(target_os = "windows")]
-const CREATE_NO_WINDOW: u32 = 0x08000000;
+use std::os::windows::process::CommandExt;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -32,10 +32,9 @@ pub async fn detect_hardware(app: tauri::AppHandle) -> HardwareInfo {
         let cpu_name = sys
             .cpus()
             .first()
-            .map(|c| c.brand().to_string())
-            .unwrap_or_else(|| "Unknown".to_string());
+            .map_or_else(|| "Unknown".to_string(), |c| c.brand().to_string());
 
-        let ram_gb = (sys.total_memory() as f64 / (1024.0 * 1024.0 * 1024.0)).round() as u64;
+        let ram_gb = sys.total_memory() / (1024 * 1024 * 1024);
 
         let gpu_name = get_gpu_name();
         (cpu_name, ram_gb, gpu_name)
@@ -59,10 +58,7 @@ fn get_gpu_name() -> String {
     #[cfg(target_os = "windows")]
     {
         // Absolute System32 paths so a PATH hijack cannot redirect GPU probes.
-        let system32 = std::env::var_os("SystemRoot")
-            .map(std::path::PathBuf::from)
-            .map(|r| r.join("System32"))
-            .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows\System32"));
+        let system32 = system32_dir();
         let mut ps_cmd = Command::new(
             system32
                 .join("WindowsPowerShell")
@@ -160,7 +156,7 @@ fn parse_gpu_names(stdout: &str) -> Vec<String> {
 }
 
 /// Cached probe result so the (potentially slow) AV1 probe runs at most
-/// once per app session. Without a cache, every remount (e.g. ErrorBoundary
+/// once per app session. Without a cache, every remount (e.g. `ErrorBoundary`
 /// "Try Again") would re-run up to four ffmpeg subprocesses and could stall
 /// rendering startup for tens of seconds.
 static AV1_ENCODER_CACHE: OnceLock<Option<String>> = OnceLock::new();
@@ -207,7 +203,7 @@ async fn run_probe(
     loop {
         tokio::select! {
             _ = tokio::time::sleep_until(deadline) => {
-                let _ = child.take().map(|process| process.kill());
+                let _ = child.take().map(tauri_plugin_shell::process::CommandChild::kill);
                 return None;
             }
             event = rx.recv() => match event {
@@ -218,7 +214,7 @@ async fn run_probe(
                 Some(CommandEvent::Error(_)) => {}
                 Some(_) => {}
                 None => {
-                    let _ = child.take().map(|process| process.kill());
+                    let _ = child.take().map(tauri_plugin_shell::process::CommandChild::kill);
                     return None;
                 }
             }

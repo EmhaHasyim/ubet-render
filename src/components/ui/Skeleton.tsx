@@ -40,7 +40,7 @@ export function Skeleton(props: SkeletonProps) {
   return (
     <div
       class={`skeleton-shimmer ${radiusClass[props.variant ?? 'text']} ${props.class ?? ''}`}
-      aria-hidden={!props.label}
+      aria-hidden={props.label ? 'false' : 'true'}
       {...(props.label ? { role: 'status', 'aria-label': props.label } : {})}
     />
   );

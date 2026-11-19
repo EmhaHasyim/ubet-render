@@ -42,7 +42,7 @@ fn prune_old_logs(log_dir: &std::path::Path, retention_days: u64) {
         };
         // Compare exact day deltas so the cutoff is precisely `retention_days`
         // (num_days() truncates and would keep files up to ~8 days old).
-        let cutoff = chrono::Duration::days(retention_days as i64);
+        let cutoff = chrono::Duration::days(i64::try_from(retention_days).unwrap_or(i64::MAX));
         if today.signed_duration_since(dt.date()) >= cutoff {
             let _ = std::fs::remove_file(&path);
         }

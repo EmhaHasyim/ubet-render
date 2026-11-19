@@ -11,6 +11,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render } from '@solidjs/testing-library';
+import { flush } from 'solid-js';
 
 // ---------------------------------------------------------------------------
 // Mocks — must be at top level (vitest hoists vi.mock)
@@ -58,10 +59,11 @@ function emitEvent(payload: unknown) {
   const cb = listenHandlers.get('pipeline-event');
   if (!cb) throw new Error('No pipeline-event listener registered');
   cb({ payload });
+  flush();
 }
 
 /**
- * Mount the pipeline hook inside a rendered component so `onMount` fires.
+ * Mount the pipeline hook inside a rendered component so `onSettled` fires.
  * Returns the hook's signal bag.
  */
 function mountPipeline() {
@@ -141,6 +143,7 @@ describe('usePipeline — integration (end-to-end render lifecycle)', () => {
     p.setVideoSource({ type: 'files', paths: ['/v/test.mp4'] });
     p.setAudioSource({ type: 'files', paths: ['/a/test.mp3'] });
     p.setOutputPath('/out');
+    flush();
 
     expect(p.canStart()).toBe(true);
   });
@@ -173,6 +176,7 @@ describe('usePipeline — integration (end-to-end render lifecycle)', () => {
     p.setVideoSource({ type: 'files', paths: ['/v/video.mp4'] });
     p.setAudioSource({ type: 'files', paths: ['/a/audio.mp3'] });
     p.setOutputPath('/out');
+    flush();
     expect(p.canStart()).toBe(true);
 
     // ---- Start render ----
@@ -284,6 +288,7 @@ describe('usePipeline — integration (end-to-end render lifecycle)', () => {
     p.setVideoSource({ type: 'files', paths: ['/v/vid.mp4'] });
     p.setAudioSource({ type: 'files', paths: ['/a/aud.mp3'] });
     p.setOutputPath('/out');
+    flush();
 
     await p.startRender();
     expect(p.running()).toBe(true);
@@ -309,6 +314,7 @@ describe('usePipeline — integration (end-to-end render lifecycle)', () => {
     p.setVideoSource({ type: 'files', paths: ['/v/vid.mp4'] });
     p.setAudioSource({ type: 'files', paths: ['/a/aud.mp3'] });
     p.setOutputPath('/out');
+    flush();
 
     await p.startRender();
     expect(p.running()).toBe(true);
@@ -344,6 +350,7 @@ describe('usePipeline — integration (end-to-end render lifecycle)', () => {
     p.setVideoSource({ type: 'files', paths: ['/v/vid.mp4'] });
     p.setAudioSource({ type: 'files', paths: ['/a/aud.mp3'] });
     p.setOutputPath('/out');
+    flush();
     await p.startRender();
 
     await p.cancelRender();
@@ -381,6 +388,7 @@ describe('usePipeline — integration (end-to-end render lifecycle)', () => {
       p.setVideoSource({ type: 'files', paths: ['/v/vid.mp4'] });
       p.setAudioSource({ type: 'files', paths: ['/a/aud.mp3'] });
       p.setOutputPath('/out');
+      flush();
 
       await p.startRender();
       emitEvent({ type: 'Paused' });
@@ -431,6 +439,7 @@ describe('usePipeline — integration (end-to-end render lifecycle)', () => {
       p.setVideoSource({ type: 'files', paths: ['/v/vid.mp4'] });
       p.setAudioSource({ type: 'files', paths: ['/a/aud.mp3'] });
       p.setOutputPath('/out');
+      flush();
 
       await p.startRender();
       emitEvent({ type: 'Paused' });
@@ -501,6 +510,7 @@ describe('usePipeline — integration (end-to-end render lifecycle)', () => {
       p.setVideoSource({ type: 'files', paths: ['/v/vid.mp4'] });
       p.setAudioSource({ type: 'files', paths: ['/a/aud.mp3'] });
       p.setOutputPath('/out');
+      flush();
 
       await p.startRender();
 
@@ -587,6 +597,7 @@ describe('usePipeline — integration (end-to-end render lifecycle)', () => {
     p.setVideoSource({ type: 'files', paths: ['/v/vid.mp4'] });
     p.setAudioSource({ type: 'files', paths: ['/a/aud.mp3'] });
     p.setOutputPath('/out');
+    flush();
 
     await p.startRender();
     expect(p.running()).toBe(true);
@@ -616,6 +627,7 @@ describe('usePipeline — integration (end-to-end render lifecycle)', () => {
     p.setLoopCount(5);
     p.setUsePingpong(false);
     p.setEmbedChapters(false);
+    flush();
 
     expect(p.codec()).toBe('h265');
     expect(p.maxrate()).toBe('8000k');

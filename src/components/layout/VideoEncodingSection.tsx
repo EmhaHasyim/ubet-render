@@ -50,7 +50,7 @@ export function VideoEncodingSection(props: {
           value={props.maxrate()}
           onInput={(e) => props.onMaxrateChange(e.currentTarget.value)}
           onBlur={(e) => props.onMaxrateBlur(e.currentTarget.value)}
-          aria-invalid={!props.maxrateValid()}
+          aria-invalid={props.maxrateValid() ? 'false' : 'true'}
         />
         <Show when={!props.maxrateValid()}>
           <span class="mt-1 text-xs text-error">

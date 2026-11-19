@@ -35,17 +35,24 @@ fn format_pipeline_event(event: &PipelineEvent) -> String {
             total,
             failed,
         } => {
-            format!("DONE {}/{} completed, {} failed", completed, total, failed)
+            format!("DONE {completed}/{total} completed, {failed} failed")
         }
         PipelineEvent::Cancelled(msg) => {
-            format!("CANCELLED: {}", msg)
+            format!("CANCELLED: {msg}")
         }
         PipelineEvent::Paused => "PAUSED".to_string(),
         PipelineEvent::FatalError(msg) => {
-            format!("FATAL: {}", msg)
+            format!("FATAL: {msg}")
         }
-        // Unreachable in production: `emit` filters Progress/Stats before
-        // calling the formatter. Kept as a wildcard for exhaustive matching.
-        _ => String::new(),
+        // Normally filtered out by `emit`, but formatted meaningfully so a
+        // future caller or a changed filter cannot produce blank log lines.
+        PipelineEvent::Progress {
+            total, completed, ..
+        } => format!("PROGRESS {completed}/{total} jobs"),
+        PipelineEvent::Stats {
+            speed,
+            bitrate_kbps,
+            fps,
+        } => format!("STATS {speed:.2}x, {bitrate_kbps:.0} kbps, {fps:.2} fps"),
     }
 }

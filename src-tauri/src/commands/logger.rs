@@ -1,7 +1,7 @@
 use crate::utils::logger;
 use serde::Deserialize;
 
-/// Frontend log entry forwarded from the SolidJS `createLogger()` logger so
+/// Frontend log entry forwarded from the `SolidJS` `createLogger()` logger so
 /// frontend-side diagnostics land in the same `{TEMP}/ubet-render/logs/render_*.log`
 /// file the backend writes to.
 ///
@@ -32,6 +32,6 @@ pub fn log_to_file(entries: Vec<FrontendLogEntry>) {
         let message = entry.message.replace(['\n', '\r'], " ");
         // Truncate pathological single lines (10KB cap keeps the file readable).
         let message = message.chars().take(10_000).collect::<String>();
-        logger::log_line(&format!("[frontend] [{}] [{}] {}", context, level, message));
+        logger::log_line(&format!("[frontend] [{context}] [{level}] {message}"));
     }
 }

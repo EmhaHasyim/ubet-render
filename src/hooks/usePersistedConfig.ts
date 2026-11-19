@@ -1,5 +1,4 @@
-import { createEffect, onCleanup } from 'solid-js';
-import { createStore } from 'solid-js/store';
+import { createEffect, createStore, onCleanup } from 'solid-js';
 import {
   STORAGE_KEY,
   STORAGE_VERSION,
@@ -12,6 +11,7 @@ import {
   snapshotFromState,
   type SchemaState,
 } from '../core/schema';
+import type { MediaSource } from '../core/types';
 
 // ── State interface ────────────────────────────────────────────────────
 // Derived from the single-source schema: one field descriptor in
@@ -68,20 +68,22 @@ export function usePersistedConfig() {
   // the most recent field change would be silently lost).
   let latestSnapshot: PersistedConfig | null = null;
 
-  createEffect(() => {
-    const snapshot: PersistedConfig = snapshotFromState(state, STORAGE_VERSION);
-    latestSnapshot = snapshot;
-    // Clear any pending timer before setting a new one — avoids creating
-    // N timers when the user changes N fields rapidly.
-    if (persistTimer !== null) clearTimeout(persistTimer);
-    persistTimer = setTimeout(() => {
-      persistTimer = null;
-      writeSnapshot(snapshot);
-    }, 300);
-  });
+  createEffect(
+    () => snapshotFromState(state, STORAGE_VERSION),
+    (snapshot: PersistedConfig) => {
+      latestSnapshot = snapshot;
+      // Clear any pending timer before setting a new one — avoids creating
+      // N timers when the user changes N fields rapidly.
+      if (persistTimer !== null) clearTimeout(persistTimer);
+      persistTimer = setTimeout(() => {
+        persistTimer = null;
+        writeSnapshot(snapshot);
+      }, 300);
+    },
+  );
 
   // Flush any pending debounced write on unmount so the last field change
-  // isn't lost (e.g. when the ErrorBoundary remounts the pipeline).
+  // isn't lost (e.g. when the Errored boundary remounts the pipeline).
   onCleanup(() => {
     if (persistTimer !== null) {
       clearTimeout(persistTimer);
@@ -114,26 +116,65 @@ export function usePersistedConfig() {
     skipIntermediateOnCodecMatch: () => state.skipIntermediateOnCodecMatch,
 
     // ---- Setters (numeric ones clamp to schema bounds = backend limits) ----
-    setVideoSource: (v: import('../core/types').MediaSource | null) =>
-      setState('videoSource', v),
-    setAudioSource: (v: import('../core/types').MediaSource | null) =>
-      setState('audioSource', v),
-    setOutputPath: (v: string) => setState('outputPath', v),
-    setOutputPrefix: (v: string) => setState('outputPrefix', v),
-    setMaxrate: (v: string) => setState('maxrate', v),
-    setUsePingpong: (v: boolean) => setState('usePingpong', v),
+    setVideoSource: (v: MediaSource | null) =>
+      setState((s) => {
+        s.videoSource = v;
+      }),
+    setAudioSource: (v: MediaSource | null) =>
+      setState((s) => {
+        s.audioSource = v;
+      }),
+    setOutputPath: (v: string) =>
+      setState((s) => {
+        s.outputPath = v;
+      }),
+    setOutputPrefix: (v: string) =>
+      setState((s) => {
+        s.outputPrefix = v;
+      }),
+    setMaxrate: (v: string) =>
+      setState((s) => {
+        s.maxrate = v;
+      }),
+    setUsePingpong: (v: boolean) =>
+      setState((s) => {
+        s.usePingpong = v;
+      }),
     setSongsPerPlaylist: (v: number) =>
-      setState('songsPerPlaylist', clampInt(v, CONFIG_LIMITS.songsPerPlaylist)),
+      setState((s) => {
+        s.songsPerPlaylist = clampInt(v, CONFIG_LIMITS.songsPerPlaylist);
+      }),
     setMinDurationHours: (v: number) =>
-      setState('minDurationHours', clampNum(v, CONFIG_LIMITS.durationHours)),
-    setLoopMode: (v: 'duration' | 'count') => setState('loopMode', v),
+      setState((s) => {
+        s.minDurationHours = clampNum(v, CONFIG_LIMITS.durationHours);
+      }),
+    setLoopMode: (v: 'duration' | 'count') =>
+      setState((s) => {
+        s.loopMode = v;
+      }),
     setLoopCount: (v: number) =>
-      setState('loopCount', clampInt(v, CONFIG_LIMITS.loopCount)),
-    setCodec: (v: string) => setState('codec', v),
-    setAudioMode: (v: 'original' | 'normalize') => setState('audioMode', v),
-    setEmbedChapters: (v: boolean) => setState('embedChapters', v),
-    setOutputFormat: (v: 'mp4' | 'mkv') => setState('outputFormat', v),
+      setState((s) => {
+        s.loopCount = clampInt(v, CONFIG_LIMITS.loopCount);
+      }),
+    setCodec: (v: string) =>
+      setState((s) => {
+        s.codec = v;
+      }),
+    setAudioMode: (v: 'original' | 'normalize') =>
+      setState((s) => {
+        s.audioMode = v;
+      }),
+    setEmbedChapters: (v: boolean) =>
+      setState((s) => {
+        s.embedChapters = v;
+      }),
+    setOutputFormat: (v: 'mp4' | 'mkv') =>
+      setState((s) => {
+        s.outputFormat = v;
+      }),
     setSkipIntermediateOnCodecMatch: (v: boolean) =>
-      setState('skipIntermediateOnCodecMatch', v),
+      setState((s) => {
+        s.skipIntermediateOnCodecMatch = v;
+      }),
   };
 }

@@ -10,10 +10,11 @@ pub mod thumbnailer;
 pub mod video_loop;
 pub mod workspace_guard;
 
+mod prepare;
+
 use crate::config::AppConfig;
 use crate::error::AppError;
 use crate::models::job::{JobState, PipelineEvent, RenderJob, RenderStats};
-use crate::models::media::VideoFile;
 use crate::models::settings::OverrideConfig;
 use crate::utils::event;
 use crate::utils::fs;
@@ -22,6 +23,7 @@ use estimator::{
     sanitize_filename_component,
 };
 pub use job_processor::{JobContext, JobParams};
+use prepare::ResumeContext;
 use roots::ResolvedRoots;
 use std::path::Path;
 use std::sync::Arc;
@@ -57,22 +59,8 @@ struct ExecutionParams {
     skip_intermediate_on_codec_match: bool,
 }
 
-/// Borrowed inputs for [`Pipeline::load_resume_or_fresh`], grouped so the
-/// loader takes three arguments instead of ten (and needs no
-/// `clippy::too_many_arguments` allowance).
-struct ResumeContext<'a> {
-    state_path: &'a Path,
-    video_files: &'a [String],
-    safe_prefix: &'a str,
-    output_dir: &'a Path,
-    output_ext: &'a str,
-    input_roots: &'a [std::path::PathBuf],
-    thumb_dir: &'a Path,
-    render_timestamp: u64,
-}
-
 /// True when `encoder` denotes a hardware encoder. Such an encoder can be
-/// compiled into the bundled FFmpeg and still be unusable without the matching
+/// compiled into the bundled `FFmpeg` and still be unusable without the matching
 /// GPU or driver, so it needs a functional probe before a batch starts.
 fn is_hardware_encoder(encoder: &str) -> bool {
     ["nvenc", "amf", "qsv", "_mf", "vaapi", "v4l2m2m"]
@@ -142,7 +130,7 @@ impl Pipeline {
                 &self.app,
                 PipelineEvent::Log {
                     level: "warn".into(),
-                    message: format!("Invalid bitrate '{}', falling back to 4000k", maxrate_str),
+                    message: format!("Invalid bitrate '{maxrate_str}', falling back to 4000k"),
                 },
             );
         }
@@ -151,8 +139,8 @@ impl Pipeline {
         // the `bitrateTarget` the frontend mirrors into the config.
         let target_k = (maxrate_k as f64 * 0.7).ceil() as u32;
         let mut video_cfg = self.config.video.clone();
-        video_cfg.bitrate_target = format!("{}k", target_k);
-        video_cfg.bitrate_max = format!("{}k", maxrate_k);
+        video_cfg.bitrate_target = format!("{target_k}k");
+        video_cfg.bitrate_max = format!("{maxrate_k}k");
         if let Some(enc) = ov.and_then(|o| o.encoder.as_deref()) {
             video_cfg.encoder = enc.to_string();
         }
@@ -227,7 +215,7 @@ impl Pipeline {
 
         let video_files = source_scanner::scan_source_files(
             &self.app,
-            &overrides,
+            overrides.as_ref(),
             Path::new(&self.config.directories.video),
             "video",
             &input_roots,
@@ -235,7 +223,7 @@ impl Pipeline {
         .await?;
         let audio_files = source_scanner::scan_source_files(
             &self.app,
-            &overrides,
+            overrides.as_ref(),
             Path::new(&self.config.directories.audio),
             "audio",
             &input_roots,
@@ -284,8 +272,7 @@ impl Pipeline {
                 PipelineEvent::Log {
                     level: "warn".into(),
                     message: format!(
-                        "Encoder '{}' is not usable on this machine; falling back to '{}'.",
-                        requested, fallback
+                        "Encoder '{requested}' is not usable on this machine; falling back to '{fallback}'."
                     ),
                 },
             );
@@ -512,10 +499,11 @@ impl Pipeline {
                 break;
             }
 
-            let skip = {
+            let (job_state, output_path) = {
                 let lock = jobs_arc.lock().await;
-                loop_control::should_skip_job(&lock[idx])
+                (lock[idx].state.clone(), lock[idx].video.output_path.clone())
             };
+            let skip = loop_control::should_skip_job(&job_state, &output_path).await;
 
             if skip {
                 pipeline_arc
@@ -531,7 +519,7 @@ impl Pipeline {
                     &pipeline_arc.app,
                     PipelineEvent::Log {
                         level: "success".into(),
-                        message: format!("Videos: {}/{} done", completed, total_jobs),
+                        message: format!("Videos: {completed}/{total_jobs} done"),
                     },
                 );
                 idx += 1;
@@ -589,7 +577,7 @@ impl Pipeline {
                         &pipeline_arc.app,
                         PipelineEvent::Log {
                             level: "success".into(),
-                            message: format!("Videos: {}/{} done", completed, total_jobs),
+                            message: format!("Videos: {completed}/{total_jobs} done"),
                         },
                     );
                     idx += 1;
@@ -681,8 +669,7 @@ impl Pipeline {
                     PipelineEvent::Log {
                         level: "warn".into(),
                         message: format!(
-                            "Render completed, but all_timestamps.txt could not be written: {}",
-                            error
+                            "Render completed, but all_timestamps.txt could not be written: {error}"
                         ),
                     },
                 );
@@ -709,8 +696,7 @@ impl Pipeline {
             PipelineEvent::Log {
                 level: "info".into(),
                 message: format!(
-                    "Render finished: {}/{} completed, {} failed",
-                    completed, total_jobs, failed
+                    "Render finished: {completed}/{total_jobs} completed, {failed} failed"
                 ),
             },
         );
@@ -722,166 +708,6 @@ impl Pipeline {
                 failed,
             },
         );
-    }
-
-    /// Load jobs from the resume state file, falling back to a fresh batch on
-    /// any validation/IO failure (quarantining the bad file). Extracted from
-    /// `execute()` so the orchestrator stays readable.
-    async fn load_resume_or_fresh(
-        &self,
-        resume: bool,
-        ctx: ResumeContext<'_>,
-        workspace: &mut WorkspaceGuard,
-    ) -> Result<Vec<RenderJob>, AppError> {
-        let ResumeContext {
-            state_path,
-            video_files,
-            safe_prefix,
-            output_dir,
-            output_ext,
-            input_roots,
-            thumb_dir,
-            render_timestamp,
-        } = ctx;
-        if !(resume && state_path.exists()) {
-            return Ok(self.create_initial_jobs(video_files, safe_prefix, output_dir, output_ext));
-        }
-        let content = match tokio::fs::read_to_string(state_path).await {
-            Ok(c) => c,
-            Err(error) => {
-                event::emit(
-                    &self.app,
-                    PipelineEvent::Log {
-                        level: "warn".into(),
-                        message: format!("Unable to read saved render state: {}", error),
-                    },
-                );
-                return Ok(self.create_initial_jobs(
-                    video_files,
-                    safe_prefix,
-                    output_dir,
-                    output_ext,
-                ));
-            }
-        };
-        let mut saved_jobs: Vec<RenderJob> = match serde_json::from_str(&content) {
-            Ok(j) => j,
-            Err(error) => {
-                event::emit(
-                    &self.app,
-                    PipelineEvent::Log {
-                        level: "warn".into(),
-                        message: format!(
-                            "Saved render state is invalid ({}); quarantining it and starting a fresh batch.",
-                            error
-                        ),
-                    },
-                );
-                if !quarantine_state_file(state_path, render_timestamp) {
-                    workspace.cancel();
-                    return Err(AppError::Pipeline(
-                        "Invalid render state could not be quarantined".into(),
-                    ));
-                }
-                return Ok(self.create_initial_jobs(
-                    video_files,
-                    safe_prefix,
-                    output_dir,
-                    output_ext,
-                ));
-            }
-        };
-        if let Err(error) = crate::validation::validate_resumed_jobs(
-            &saved_jobs,
-            output_dir,
-            input_roots,
-            thumb_dir,
-        ) {
-            event::emit(
-                &self.app,
-                PipelineEvent::Log {
-                    level: "warn".into(),
-                    message: format!(
-                        "Saved render state failed validation ({}); quarantining it and starting a fresh batch.",
-                        error
-                    ),
-                },
-            );
-            if !quarantine_state_file(state_path, render_timestamp) {
-                workspace.cancel();
-                return Err(AppError::Pipeline(
-                    "Invalid render state could not be quarantined".into(),
-                ));
-            }
-            return Ok(self.create_initial_jobs(video_files, safe_prefix, output_dir, output_ext));
-        }
-        for j in &mut saved_jobs {
-            if j.state != JobState::Done {
-                j.state = JobState::Pending;
-                j.progress_percent = 0;
-                j.current_step = "Pending".into();
-                j.error = None;
-            }
-        }
-        event::emit(
-            &self.app,
-            PipelineEvent::Log {
-                level: "info".into(),
-                message: "Resuming previous render state...".into(),
-            },
-        );
-        Ok(saved_jobs)
-    }
-
-    fn create_initial_jobs(
-        &self,
-        video_files: &[String],
-        safe_prefix: &str,
-        output_dir: &Path,
-        output_ext: &str,
-    ) -> Vec<RenderJob> {
-        let mut jobs = Vec::new();
-        // Include a process-local high-resolution nonce in every fresh batch
-        // name. Second-level timestamps alone collide when a user starts a
-        // second render immediately after the first one finishes.
-        let wall_clock = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or_default();
-        let ts = format!("{}_{}_{}", wall_clock, std::process::id(), nonce);
-        for (idx, path_str) in video_files.iter().enumerate() {
-            let input_path = Path::new(path_str);
-            let name = input_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-                .to_string();
-            let stem = Path::new(&name)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("unknown");
-            let unique_name = format!("{}_{}_{}.{}", stem, ts, idx, output_ext);
-            let output_name = if safe_prefix.is_empty() {
-                unique_name
-            } else {
-                format!("{}_{}", safe_prefix, unique_name)
-            };
-            jobs.push(RenderJob {
-                video: VideoFile {
-                    name,
-                    input_path: path_str.clone(),
-                    output_path: output_dir.join(&output_name).to_string_lossy().to_string(),
-                    thumbnail_path: None,
-                },
-                state: JobState::Pending,
-                progress_percent: 0,
-                current_step: "Waiting for turn".into(),
-                error: None,
-                timestamps: Vec::new(),
-            });
-        }
-        jobs
     }
 }
 

@@ -1,4 +1,11 @@
-import { createEffect, type Accessor } from 'solid-js';
+import {
+  createEffect,
+  createMemo,
+  For,
+  onCleanup,
+  Show,
+  type Accessor,
+} from 'solid-js';
 import { Icon } from '../ui/Icon';
 import { AppHeader } from './AppHeader';
 import { HardwareInfo } from '../ui/HardwareInfo';
@@ -43,14 +50,19 @@ export function InspectorRail(props: {
 
 function MiniLogViewer(props: { logs: string[] }) {
   let scrollRef!: HTMLDivElement;
-  const visible = () => props.logs.slice(-8);
+  const visible = createMemo(() => props.logs.slice(-8));
 
-  createEffect(() => {
-    props.logs;
-    requestAnimationFrame(() => {
-      if (scrollRef) scrollRef.scrollTop = scrollRef.scrollHeight;
-    });
-  });
+  let rafId = 0;
+  createEffect(
+    () => props.logs,
+    () => {
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        if (scrollRef) scrollRef.scrollTop = scrollRef.scrollHeight;
+      });
+    },
+  );
+  onCleanup(() => cancelAnimationFrame(rafId));
 
   return (
     <section class="panel flex min-h-0 flex-col overflow-hidden">
@@ -72,17 +84,22 @@ function MiniLogViewer(props: { logs: string[] }) {
         ref={scrollRef}
         class="max-h-40 overflow-y-auto border-t border-base-300/40 bg-base-200/60 p-2.5 font-mono text-xs leading-relaxed text-base-content/70 custom-scrollbar"
       >
-        {visible().length === 0 ? (
-          <p class="py-2 text-center text-[0.65rem] text-base-content/55">
-            Waiting for logs...
-          </p>
-        ) : (
-          visible().map((line) => (
-            <pre class="whitespace-pre-wrap break-words">
-              <code>{line}</code>
-            </pre>
-          ))
-        )}
+        <Show
+          when={visible().length > 0}
+          fallback={
+            <p class="py-2 text-center text-[0.65rem] text-base-content/55">
+              Waiting for logs...
+            </p>
+          }
+        >
+          <For each={visible()}>
+            {(line) => (
+              <pre class="whitespace-pre-wrap break-words">
+                <code>{line}</code>
+              </pre>
+            )}
+          </For>
+        </Show>
       </div>
     </section>
   );

@@ -7,7 +7,7 @@ use crate::utils::event;
 use std::path::Path;
 use tauri::AppHandle;
 
-/// Escape a file path for the FFmpeg concat demuxer's single-quoted `file`
+/// Escape a file path for the `FFmpeg` concat demuxer's single-quoted `file`
 /// lines (`-safe 0`): backslashes become forward slashes (Windows paths),
 /// single quotes are escaped per the demuxer's `'\\''` convention, and
 /// newlines/carriage returns are replaced with a space.
@@ -84,7 +84,7 @@ pub async fn create_ping_pong_video(params: PingPongVideoParams<'_>) -> Result<(
         .parse::<u32>()
         .unwrap_or(5000);
     let bufsize_k = maxrate_k * 2;
-    let bufsize = format!("{}k", bufsize_k);
+    let bufsize = format!("{bufsize_k}k");
     let is_hw_encoder = video_settings.encoder.contains("nvenc")
         || video_settings.encoder.contains("amf")
         || video_settings.encoder.contains("qsv");
@@ -158,11 +158,10 @@ fn build_base_filter(use_pingpong: bool) -> String {
     );
     if use_pingpong {
         format!(
-            "[0:v]{},unsharp=3:3:1.0:3:3:0.0[upscaled];[upscaled]split[s1][s2];[s2]reverse[r];[s1][r]concat=n=2:v=1[v_base]",
-            scale_pad
+            "[0:v]{scale_pad},unsharp=3:3:1.0:3:3:0.0[upscaled];[upscaled]split[s1][s2];[s2]reverse[r];[s1][r]concat=n=2:v=1[v_base]"
         )
     } else {
-        format!("[0:v]{},unsharp=3:3:1.0:3:3:0.0[v_base]", scale_pad)
+        format!("[0:v]{scale_pad},unsharp=3:3:1.0:3:3:0.0[v_base]")
     }
 }
 
@@ -172,9 +171,9 @@ fn format_timestamp(seconds: f64, force_hours: bool) -> String {
     let m = (total_secs % 3600) / 60;
     let s = total_secs % 60;
     if force_hours || h > 0 {
-        format!("{:02}:{:02}:{:02}", h, m, s)
+        format!("{h:02}:{m:02}:{s:02}")
     } else {
-        format!("{:02}:{:02}", m, s)
+        format!("{m:02}:{s:02}")
     }
 }
 
@@ -227,8 +226,7 @@ pub async fn generate_loop_playlists(
             PipelineEvent::Log {
                 level: "warn".into(),
                 message: format!(
-                    "Loop repeat count capped at {} to bound playlist and chapter work. Output duration may be shorter than requested.",
-                    max_repeat_count
+                    "Loop repeat count capped at {max_repeat_count} to bound playlist and chapter work. Output duration may be shorter than requested."
                 ),
             },
         );
@@ -345,8 +343,7 @@ pub async fn generate_loop_playlists(
             PipelineEvent::Log {
                 level: "warn".into(),
                 message: format!(
-                    "Video repeat count capped at {} to bound playlist size. Output duration may be shorter than requested.",
-                    MAX_REPEAT_COUNT
+                    "Video repeat count capped at {MAX_REPEAT_COUNT} to bound playlist size. Output duration may be shorter than requested."
                 ),
             },
         );
@@ -356,7 +353,7 @@ pub async fn generate_loop_playlists(
         let mut writer = tokio::io::BufWriter::new(file);
         use tokio::io::AsyncWriteExt;
         let ping_pong_path_str = escape_concat_path(&ping_pong_path.to_string_lossy());
-        let video_line = format!("file '{}'\n", ping_pong_path_str);
+        let video_line = format!("file '{ping_pong_path_str}'\n");
         for _ in 0..video_repeat_count {
             writer.write_all(video_line.as_bytes()).await?;
         }
@@ -374,8 +371,7 @@ pub async fn generate_loop_playlists(
             total_ms.max(start_ms + 1)
         };
         chapters.push_str(&format!(
-            "[CHAPTER]\nTIMEBASE=1/1000\nSTART={}\nEND={}\ntitle={}\n",
-            start_ms, end_ms, title
+            "[CHAPTER]\nTIMEBASE=1/1000\nSTART={start_ms}\nEND={end_ms}\ntitle={title}\n"
         ));
     }
 
@@ -509,25 +505,21 @@ mod tests {
         // Backslash directory separators → forward slashes
         assert!(
             result.starts_with("C:/"),
-            "Path should start with C:/, got: {}",
-            result
+            "Path should start with C:/, got: {result}"
         );
         assert!(
             result.contains("/My Videos/"),
-            "Directory slashes should be forward: {}",
-            result
+            "Directory slashes should be forward: {result}"
         );
         // Single quote is escaped as `'\''` (contains backslash)
         assert!(
             result.contains("it'"),
-            "Single quote escape should preserve 'it': {}",
-            result
+            "Single quote escape should preserve 'it': {result}"
         );
         // Newline replaced by space before `.mp4`
         assert!(
             result.contains(" .mp4"),
-            "Newline should be replaced by space: {}",
-            result
+            "Newline should be replaced by space: {result}"
         );
     }
 

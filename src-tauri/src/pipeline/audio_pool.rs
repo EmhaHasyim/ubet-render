@@ -12,6 +12,220 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tauri::AppHandle;
 
+/// Per-track worker context. Cloned cheaply per item (all heavy fields are
+/// `Arc`s or clonable handles) so the track pipeline can be read on its own.
+#[derive(Clone)]
+struct TrackProcessor {
+    app: AppHandle,
+    cache_dir: Arc<PathBuf>,
+    cancel_control: Option<Arc<crate::RenderControl>>,
+    loudnorm_params: String,
+    bitrate: String,
+    sample_rate: u32,
+    normalize: bool,
+    processed: Arc<AtomicUsize>,
+    emitted_max: Arc<AtomicUsize>,
+    total: usize,
+}
+
+impl TrackProcessor {
+    async fn process(&self, song: String) -> Result<ProcessedAudio, AppError> {
+        // Pre-flight cancel before spawning any heavyweight probe.
+        if let Some(c) = self.cancel_control.as_ref() {
+            c.ensure_running()?;
+        }
+
+        let original_path = PathBuf::from(&song);
+        let original_name = original_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+
+        // Single ffprobe round-trip. Failure here is non-fatal: we degrade to
+        // a straight single-pass encode.
+        let info = ffmpeg::get_audio_info(&self.app, &original_path).await.ok();
+        let can_smart_skip = info
+            .as_ref()
+            .is_some_and(|i| can_skip_reencode(i, self.sample_rate, &self.bitrate));
+        // Loudnorm must still apply to AAC sources in normalize mode.
+        let use_smart_skip = can_smart_skip && !self.normalize;
+
+        let mode_tag = if use_smart_skip {
+            "skip"
+        } else if self.normalize {
+            "2pass"
+        } else {
+            "enc"
+        };
+        // Signature sampling is synchronous file I/O; keep it off the runtime.
+        let signature_path = original_path.clone();
+        let source_signature =
+            tokio::task::spawn_blocking(move || fs::file_signature(&signature_path))
+                .await
+                .map_err(|error| {
+                    AppError::Pipeline(format!("Audio signature task failed: {error}"))
+                })?
+                .map_err(AppError::Io)?;
+        let cache_key = format!(
+            "audio-cache-v2|{}|{}|{}|{}|{}|{}",
+            song, source_signature, self.bitrate, self.sample_rate, self.loudnorm_params, mode_tag
+        );
+        let file_hash = fs::hash_path128(cache_key.as_bytes());
+        let cache_path = self
+            .cache_dir
+            .join(format!("master_audio_{file_hash:032x}.m4a"));
+
+        let measurement = if self.normalize && !use_smart_skip {
+            get_or_compute_loudnorm_measurement(
+                &self.app,
+                self.cache_dir.as_ref(),
+                &original_path,
+                &self.loudnorm_params,
+                self.cancel_control.as_ref(),
+            )
+            .await
+            .ok()
+        } else {
+            None
+        };
+        let effective_loudnorm =
+            loudnorm_filter(measurement.as_ref(), &self.loudnorm_params, self.normalize);
+
+        // A zero-byte cache file is an incomplete prior write, not a hit.
+        let cache_is_usable = tokio::fs::metadata(&cache_path)
+            .await
+            .is_ok_and(|m| m.len() > 0);
+
+        if !cache_is_usable {
+            let tmp_path = self
+                .cache_dir
+                .join(format!("master_audio_{file_hash:032x}.m4a.tmp"));
+            let args = build_encode_args(
+                &original_path.to_string_lossy(),
+                &tmp_path.to_string_lossy(),
+                self.sample_rate,
+                &self.bitrate,
+                use_smart_skip,
+                effective_loudnorm.as_deref(),
+            );
+            let run_result =
+                ffmpeg::run(&self.app, &args, None, self.cancel_control.clone(), None).await;
+            if run_result.is_err() {
+                cleanup_temp_file_sync(&tmp_path);
+            }
+            run_result?;
+
+            if let Err(e) = fs::atomic_replace_async(&tmp_path, &cache_path).await {
+                cleanup_temp_file_sync(&tmp_path);
+                return Err(AppError::Io(e));
+            }
+        }
+
+        let duration = ffmpeg::get_duration(&self.app, &cache_path).await?;
+        if duration <= 0.0 {
+            return Err(AppError::InvalidDuration(song));
+        }
+
+        self.report_progress(use_smart_skip, measurement.is_some());
+        Ok(ProcessedAudio {
+            path: cache_path.to_string_lossy().to_string(),
+            duration,
+            original_name,
+        })
+    }
+
+    fn report_progress(&self, use_smart_skip: bool, measured: bool) {
+        let completed = self.processed.fetch_add(1, Ordering::Relaxed) + 1;
+        // Completions arrive concurrently; only the highest counter is printed
+        // so a late track never emits a lower number.
+        let previous = self.emitted_max.fetch_max(completed, Ordering::Relaxed);
+        if completed <= previous {
+            return;
+        }
+        let mode_summary = if use_smart_skip {
+            "stream-copied"
+        } else if measured {
+            "2-pass normalized"
+        } else if self.normalize {
+            "1-pass normalized"
+        } else {
+            "re-encoded"
+        };
+        event::emit(
+            &self.app,
+            crate::models::job::PipelineEvent::Log {
+                level: "info".into(),
+                message: format!(
+                    "Audio pool: {}/{} tracks ready ({})",
+                    completed, self.total, mode_summary
+                ),
+            },
+        );
+    }
+}
+
+/// Build the FFmpeg argument list for one cache file.
+fn build_encode_args(
+    input_path: &str,
+    output_path: &str,
+    sample_rate: u32,
+    bitrate: &str,
+    use_smart_skip: bool,
+    loudnorm: Option<&str>,
+) -> Vec<String> {
+    let mut args: Vec<String> = Vec::with_capacity(20);
+    args.push("-y".into());
+    args.push("-i".into());
+    args.push(input_path.into());
+    args.push("-vn".into());
+    if use_smart_skip {
+        args.push("-c:a".into());
+        args.push("copy".into());
+    } else {
+        // Explicit layout + encoder settings. `-ar`/`-ac` before `-c:a` keeps
+        // FFmpeg 8.x's audio-only M4A muxer initialisation deterministic.
+        args.push("-ar".into());
+        args.push(sample_rate.to_string());
+        args.push("-ac".into());
+        args.push("2".into());
+        args.push("-c:a".into());
+        args.push("aac".into());
+        args.push("-b:a".into());
+        args.push(bitrate.into());
+    }
+    if let Some(filter) = loudnorm {
+        args.push("-af".into());
+        args.push(filter.into());
+    }
+    // Deterministic first-audio-stream mapping for exotic containers.
+    args.push("-map".into());
+    args.push("0:a:0?".into());
+    // Explicit MP4 muxer: the `.m4a` extension alone is not reliable with
+    // explicit `-ar`/`-ac` on FFmpeg 8.x.
+    args.push("-f".into());
+    args.push("mp4".into());
+    args.push(output_path.into());
+    args
+}
+
+/// Two-pass loudnorm filter when a measurement is available, one-pass when
+/// normalization was requested without one, and no filter otherwise.
+fn loudnorm_filter(
+    measurement: Option<&LoudnormMeasurement>,
+    target: &str,
+    normalize: bool,
+) -> Option<String> {
+    match measurement {
+        Some(m) => Some(format!(
+            "loudnorm={}:measured_I={}:measured_LRA={}:measured_TP={}:measured_thresh={}:offset={}:linear=true",
+            target, m.input_i, m.input_lra, m.input_tp, m.input_thresh, m.target_offset
+        )),
+        None if normalize => Some(format!("loudnorm={target}")),
+        None => None,
+    }
+}
+
 /// Build the master audio pool used by the video render step.
 ///
 /// Improvements over the historical single-pass implementation:
@@ -59,9 +273,6 @@ pub async fn build_master_audio_pool(
     audio_mode: &str,
     cancel_control: Option<Arc<crate::RenderControl>>,
 ) -> Result<Arc<Vec<ProcessedAudio>>, AppError> {
-    // FEATURE 1: dedupe before dispatch. The scanner above already
-    // canonicalizes, so exact-string equality is sufficient to catch user
-    // duplicates from drag-and-drop / explicit file listings. No extra IO.
     let dedup_files = dedupe_paths(audio_files);
     let dupes = audio_files.len() - dedup_files.len();
     if dupes > 0 {
@@ -81,249 +292,28 @@ pub async fn build_master_audio_pool(
     // Auto-scale concurrency: respect user config but never exceed
     // `available_parallelism × 2` so I/O-bound audio encode does not
     // saturate the CPU.
-    let max_parallel = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4);
+    let max_parallel = std::thread::available_parallelism().map_or(4, std::num::NonZero::get);
     let concurrent = settings
         .concurrent_prep
         .max(1)
         .min(max_parallel.saturating_mul(2));
 
-    let processed = Arc::new(AtomicUsize::new(0));
-    let total = dedup_files.len();
-    // Highest completed count emitted so far. Completions arrive
-    // concurrently, so this guard keeps the printed counters monotonic
-    // (a late slower track never prints a lower number after a higher one).
-    let emitted_max = Arc::new(AtomicUsize::new(0));
-    let cache_dir_arc = Arc::new(cache_dir.to_path_buf());
-
-    let loudnorm_params = settings.loudnorm_params.clone();
-    let bitrate = settings.bitrate.clone();
-    let sample_rate = settings.sample_rate;
-    let normalize = audio_mode.eq_ignore_ascii_case("normalize");
+    let processor = TrackProcessor {
+        app: app.clone(),
+        cache_dir: Arc::new(cache_dir.to_path_buf()),
+        cancel_control,
+        loudnorm_params: settings.loudnorm_params.clone(),
+        bitrate: settings.bitrate.clone(),
+        sample_rate: settings.sample_rate,
+        normalize: audio_mode.eq_ignore_ascii_case("normalize"),
+        processed: Arc::new(AtomicUsize::new(0)),
+        emitted_max: Arc::new(AtomicUsize::new(0)),
+        total: dedup_files.len(),
+    };
 
     let mut stream = stream::iter(dedup_files.into_iter().map(move |song| {
-        let cache_dir = Arc::clone(&cache_dir_arc);
-        let cancel_control = cancel_control.clone();
-        let app_clone = app.clone();
-        let lp = loudnorm_params.clone();
-        let br = bitrate.clone();
-        let processed = Arc::clone(&processed);
-        let emitted_max = Arc::clone(&emitted_max);
-        async move {
-            // Pre-flight cancel before spawning any heavyweight probe.
-            if let Some(c) = cancel_control.as_ref() {
-                c.ensure_running()?;
-            }
-
-            let original_path = PathBuf::from(&song);
-            let original_name = original_path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-
-            // FEATURE 2 + 6: single ffprobe round-trip. Failure here is
-            // non-fatal: we degrade to straight single-pass encode.
-            let info: Option<AudioInfo> =
-                ffmpeg::get_audio_info(&app_clone, &original_path).await.ok();
-
-            let can_smart_skip = info
-                .as_ref()
-                .map(|i| can_skip_reencode(i, sample_rate, &br))
-                .unwrap_or(false);
-            // When normalization is active, smart-skip is suppressed
-            // because loudnorm must still apply to AAC sources to honor
-            // the user's `-14 LUFS` target.
-            let use_smart_skip = can_smart_skip && !normalize;
-
-            // Cache key includes a schema version, source file signature, and
-            // mode tag. Replacing a file at the same path must never reuse an
-            // older encoded result, even when the output settings are equal.
-            let mode_tag = if use_smart_skip {
-                "skip"
-            } else if normalize {
-                "2pass"
-            } else {
-                "enc"
-            };
-            // The signature samples the file's head and tail, but it is still
-            // synchronous file I/O. Keep it off the Tokio worker so it cannot
-            // stall unrelated pipeline tasks.
-            let signature_path = original_path.clone();
-            let source_signature = tokio::task::spawn_blocking(move || {
-                fs::file_signature(&signature_path)
-            })
-            .await
-            .map_err(|error| AppError::Pipeline(format!("Audio signature task failed: {}", error)))?
-            .map_err(AppError::Io)?;
-            let cache_key = format!(
-                "audio-cache-v2|{}|{}|{}|{}|{}|{}",
-                song, source_signature, br, sample_rate, lp, mode_tag
-            );
-            let file_hash = fs::hash_path128(cache_key.as_bytes());
-            let cache_path = cache_dir.join(format!("master_audio_{:032x}.m4a", file_hash));
-
-            // FEATURE 4 (two-pass loudnorm): compute (or fetch cached)
-            // measurement. Fallback to single-pass if measurement extract
-            // fails or pass 2 fails — never silently drop the user's
-            // normalization request.
-            let measurement = if normalize && !use_smart_skip {
-                get_or_compute_loudnorm_measurement(
-                    &app_clone,
-                    cache_dir.as_ref(),
-                    &original_path,
-                    &lp,
-                    cancel_control.as_ref(),
-                )
-                .await
-                .ok()
-            } else {
-                None
-            };
-            let effective_loudnorm: Option<String> = match &measurement {
-                Some(m) => Some(format!(
-                    "loudnorm={}:measured_I={}:measured_LRA={}:measured_TP={}:measured_thresh={}:offset={}:linear=true",
-                    lp,
-                    m.input_i,
-                    m.input_lra,
-                    m.input_tp,
-                    m.input_thresh,
-                    m.target_offset
-                )),
-                None if normalize => Some(format!("loudnorm={}", lp)),
-                _ => None,
-            };
-
-            // Single-stat cache check (async so the executor is not blocked
-            // per track): zero-byte (incomplete from a prior cancel) is
-            // treated as a miss; racing removal collapses into `false`.
-            let cache_is_usable = tokio::fs::metadata(&cache_path)
-                .await
-                .map(|m| m.len() > 0)
-                .unwrap_or(false);
-
-            if !cache_is_usable {
-                // FEATURE 5 (atomic write): write to `.tmp` then rename so
-                // a cancel mid-encode never leaves a corrupt cache file
-                // that `Path::exists()` would falsely consider valid.
-                let tmp_path =
-                    cache_dir.join(format!("master_audio_{:032x}.m4a.tmp", file_hash));
-
-                let input_path_str = original_path.to_string_lossy().into_owned();
-                let output_path_str = tmp_path.to_string_lossy().into_owned();
-                let sample_rate_str = sample_rate.to_string();
-
-                let mut args: Vec<String> = Vec::with_capacity(20);
-                args.push("-y".into());
-                args.push("-i".into());
-                args.push(input_path_str);
-                args.push("-vn".into());
-                if use_smart_skip {
-                    args.push("-c:a".into());
-                    args.push("copy".into());
-                } else {
-                    // Output layout + sample-rate + channels are stated BEFORE
-                    // the encoder so the FFmpeg muxer initialiser sees a
-                    // complete picture of the wanted stream shape up front.
-                    // For .m4a (auto-detected as the MP4 container) this
-                    // avoids a class of "Error opening output files: Invalid
-                    // argument" failures on FFmpeg >= 8.x where auto-mapping
-                    // + auto-muxer selection for audio-only M4A was dropping
-                    // audio-track config silently during `avformat_alloc_output_context2`.
-                    // Laying -ar/-ac/-b:a out before -c:a is purely for
-                    // readability / determinism; FFmpeg accepts either order.
-                    args.push("-ar".into());
-                    args.push(sample_rate_str);
-                    // FEATURE 6: explicit -ac 2 keeps the output profile
-                    // strict-stereo regardless of source layout (mono
-                    // duplicates to L+R, 5.1 downmixes via ffmpeg's
-                    // default). Probe is informational only — flipping
-                    // this default would break downstream concat copies.
-                    args.push("-ac".into());
-                    args.push("2".into());
-                    args.push("-c:a".into());
-                    args.push("aac".into());
-                    args.push("-b:a".into());
-                    args.push(br.clone());
-                }
-                if let Some(ref filt) = effective_loudnorm {
-                    args.push("-af".into());
-                    args.push(filt.clone());
-                }
-                // Explicit `-map 0:a:0?` makes the audio-stream selection
-                // deterministic when an `-af` filter graph is in play. Without
-                // it FFmpeg's auto-mapping can pick a non-audio stream on
-                // exotic sources (e.g. cover-art-only M4A) and the muxer
-                // setup for `.m4a` then fails with
-                // `Error opening output files: Invalid argument`.
-                // The `?` suffix keeps the mapping best-effort so an
-                // accidental zero-audio-streams input fails with a clearer
-                // downstream error rather than a muxer initialisation error.
-                args.push("-map".into());
-                args.push("0:a:0?".into());
-                // Explicit `-f mp4` selects the MP4 muxer up front. The `.m4a`
-                // extension triggers the same auto-selection normally, but
-                // FFmpeg 8.x's audio-only M4A writer init requires an explicit
-                // format hint when combined with explicit `-ar`/`-ac` output
-                // flags; without `-f` we observed sporadic
-                // `Error opening output files: Invalid argument` from the
-                // bundled sidecar.
-                args.push("-f".into());
-                args.push("mp4".into());
-                args.push(output_path_str);
-
-                let run_result =
-                    ffmpeg::run(&app_clone, &args, None, cancel_control.clone(), None).await;
-                if run_result.is_err() {
-                    cleanup_temp_file_sync(&tmp_path);
-                }
-                run_result?;
-
-                if let Err(e) = fs::atomic_replace(&tmp_path, &cache_path) {
-                    cleanup_temp_file_sync(&tmp_path);
-                    return Err(AppError::Io(e));
-                }
-            }
-
-            let duration = ffmpeg::get_duration(&app_clone, &cache_path).await?;
-            if duration <= 0.0 {
-                return Err(AppError::InvalidDuration(song));
-            }
-
-            let completed = processed.fetch_add(1, Ordering::Relaxed) + 1;
-            // One line per track; the monotonic guard above keeps counters
-            // ordered despite concurrent dispatch. The final track always
-            // passes (a max can never already equal `total` here).
-            let prev = emitted_max.fetch_max(completed, Ordering::Relaxed);
-            if completed > prev {
-                let mode_summary = if use_smart_skip {
-                    "stream-copied"
-                } else if measurement.is_some() {
-                    "2-pass normalized"
-                } else if normalize {
-                    "1-pass normalized"
-                } else {
-                    "re-encoded"
-                };
-                event::emit(
-                    &app_clone,
-                    crate::models::job::PipelineEvent::Log {
-                        level: "info".into(),
-                        message: format!(
-                            "Audio pool: {}/{} tracks ready ({})",
-                            completed, total, mode_summary
-                        ),
-                    },
-                );
-            }
-
-            Ok(ProcessedAudio {
-                path: cache_path.to_string_lossy().to_string(),
-                duration,
-                original_name,
-            })
-        }
+        let processor = processor.clone();
+        async move { processor.process(song).await }
     }))
     .buffer_unordered(concurrent);
 
@@ -340,7 +330,7 @@ pub async fn build_master_audio_pool(
                     app,
                     crate::models::job::PipelineEvent::Log {
                         level: "error".into(),
-                        message: format!("Audio processing error: {}", e),
+                        message: format!("Audio processing error: {e}"),
                     },
                 );
             }
@@ -393,7 +383,7 @@ fn dedupe_paths(paths: &[String]) -> Vec<String> {
 ///   guarantee to mux cleanly. A missing/unparseable profile is treated as
 ///   not-LC and re-encoded rather than guessed.
 /// - sample rate exactly equals the user-requested target
-///   (avoids FFmpeg's auto-resample, which would defeat the "copy").
+///   (avoids `FFmpeg`'s auto-resample, which would defeat the "copy").
 /// - channels **exactly equals 2**: mono sources MUST go through the
 ///   re-encode path because `-c copy` preserves the channel layout and
 ///   would produce a mono cache file incompatible with the downstream
@@ -453,7 +443,7 @@ async fn get_or_compute_loudnorm_measurement(
     let signature_path = input.to_path_buf();
     let source_signature = tokio::task::spawn_blocking(move || fs::file_signature(&signature_path))
         .await
-        .map_err(|error| AppError::Pipeline(format!("Loudnorm signature task failed: {}", error)))?
+        .map_err(|error| AppError::Pipeline(format!("Loudnorm signature task failed: {error}")))?
         .map_err(AppError::Io)?;
     let key = format!(
         "loudnorm-cache-v2|{}|{}|{}",
@@ -462,8 +452,8 @@ async fn get_or_compute_loudnorm_measurement(
         target
     );
     let hash = fs::hash_path128(key.as_bytes());
-    let meas_path = cache_dir.join(format!("loudnorm_p1_{:032x}.json", hash));
-    let meas_tmp = cache_dir.join(format!("loudnorm_p1_{:032x}.json.tmp", hash));
+    let meas_path = cache_dir.join(format!("loudnorm_p1_{hash:032x}.json"));
+    let meas_tmp = cache_dir.join(format!("loudnorm_p1_{hash:032x}.json.tmp"));
 
     if let Ok(text) = tokio::fs::read_to_string(&meas_path).await
         && let Ok(m) = serde_json::from_str::<LoudnormMeasurement>(&text)
@@ -476,14 +466,14 @@ async fn get_or_compute_loudnorm_measurement(
     let json = serde_json::to_string(&m).map_err(|e| {
         AppError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("loudnorm measurement serialize: {}", e),
+            format!("loudnorm measurement serialize: {e}"),
         ))
     })?;
     if let Err(e) = tokio::fs::write(&meas_tmp, json.as_bytes()).await {
         cleanup_temp_file_sync(&meas_tmp);
         return Err(AppError::Io(e));
     }
-    if let Err(e) = fs::atomic_replace(&meas_tmp, &meas_path) {
+    if let Err(e) = fs::atomic_replace_async(&meas_tmp, &meas_path).await {
         cleanup_temp_file_sync(&meas_tmp);
         return Err(AppError::Io(e));
     }

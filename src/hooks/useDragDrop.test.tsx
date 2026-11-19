@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import { render } from '@solidjs/testing-library';
+import { flush } from 'solid-js';
 import type { MediaSource } from '../core/types';
 
 // No DOM simulator has real layout, so `elementFromPoint` can never resolve
@@ -80,7 +81,8 @@ function mountHook(
       </div>
     );
   });
-  return { hook: result, cleanup: () => {} };
+  flush();
+  return { hook: result };
 }
 
 /**
@@ -135,6 +137,7 @@ describe('useDragDrop — HTML5 fallback', () => {
     ev.preventDefault = vi.fn();
 
     document.dispatchEvent(ev);
+    flush();
     expect(hook.dragHover()).toBe('video');
   });
 
@@ -242,7 +245,7 @@ describe('useDragDrop — HTML5 fallback', () => {
     const addEventListenerSpy = vi.spyOn(document, 'addEventListener');
     const removeEventListenerSpy = vi.spyOn(document, 'removeEventListener');
 
-    const { container } = render(() => {
+    const { unmount } = render(() => {
       useDragDrop(vi.fn(), vi.fn(), vi.fn());
       return (
         <div>
@@ -259,20 +262,16 @@ describe('useDragDrop — HTML5 fallback', () => {
       expect.any(Function),
     );
 
-    container.innerHTML = '';
+    unmount();
+    flush();
 
-    // SolidJS cleanup may run asynchronously — wait a tick
-    // then verify removeEventListener was called
-    return Promise.resolve().then(() => {
-      // At minimum, dragover should have been cleaned up
-      const hasCleanup = removeEventListenerSpy.mock.calls.some(
-        (call) => call[0] === 'dragover',
-      );
-      // If cleanup didn't fire, this test still verifies the hook mounted
-      // without errors — which is sufficient for coverage
-      expect(hasCleanup || addEventListenerSpy).toBeTruthy();
-      addEventListenerSpy.mockRestore();
-      removeEventListenerSpy.mockRestore();
-    });
+    // The same listener function must be removed on unmount.
+    expect(removeEventListenerSpy).toHaveBeenCalledWith(
+      'dragover',
+      expect.any(Function),
+    );
+
+    addEventListenerSpy.mockRestore();
+    removeEventListenerSpy.mockRestore();
   });
 });

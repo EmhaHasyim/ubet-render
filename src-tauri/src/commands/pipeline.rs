@@ -17,26 +17,15 @@ use tauri::AppHandle;
 /// so we only run it once instead of on every `start_render` call.
 static SIDECAR_VERIFIED: OnceLock<()> = OnceLock::new();
 
-/// Clones the active `RenderControl`, if any, recovering from a poisoned
-/// mutex. Shared by the cancel/pause/resume commands.
-fn current_control(
-    state: &tauri::State<'_, crate::RenderState>,
-) -> Option<Arc<crate::RenderControl>> {
-    match state.control.lock() {
-        Ok(guard) => guard.clone(),
-        Err(poisoned) => {
-            crate::utils::logger::log_line(&format!("RenderState mutex poisoned: {}", poisoned));
-            poisoned.into_inner().clone()
-        }
-    }
-}
-
 /// Ensures `RenderState.control` is cleared when the guard is dropped,
 /// even if the spawned pipeline task panics. This prevents a stuck control
 /// handle from permanently blocking every future `start_render` call.
 struct ControlGuard {
     app: AppHandle,
     control: Arc<crate::RenderControl>,
+    /// Reveal root installed by this render, if any. Used to avoid clearing a
+    /// newer render's root during the shutdown window.
+    output_root: Option<std::path::PathBuf>,
 }
 
 impl Drop for ControlGuard {
@@ -46,27 +35,25 @@ impl Drop for ControlGuard {
         // the termination acknowledgement a stronger lifecycle boundary:
         // callers observing it cannot race a stale "already running" handle.
         let state = self.app.state::<crate::RenderState>();
-        let mut lock = match state.control.lock() {
-            Ok(lock) => lock,
-            Err(poisoned) => {
-                crate::utils::logger::log_line(&format!(
-                    "RenderState mutex poisoned during cleanup: {}",
-                    poisoned
-                ));
-                poisoned.into_inner()
+        let cleared_control = {
+            let mut lock = state.lock_control();
+            if lock
+                .as_ref()
+                .is_some_and(|active| Arc::ptr_eq(active, &self.control))
+            {
+                *lock = None;
+                true
+            } else {
+                false
             }
         };
-        if lock
-            .as_ref()
-            .is_some_and(|active| Arc::ptr_eq(active, &self.control))
-        {
-            *lock = None;
-        }
-        drop(lock);
-        // Only this render owned the reveal root, and `start_render` refuses to
-        // run a second one while the control slot is occupied.
-        if let Ok(mut output_dir) = state.output_dir.lock() {
-            *output_dir = None;
+        // Clear the reveal root only if this render still owns it. A new render
+        // may have installed its own root after the control slot was released.
+        if cleared_control && let Some(root) = &self.output_root {
+            let mut output_dir = state.lock_output_dir();
+            if output_dir.as_ref() == Some(root) {
+                *output_dir = None;
+            }
         }
         self.control.mark_terminated();
         self.control.mark_cleaned();
@@ -105,37 +92,27 @@ pub async fn start_render(
 
     let control = Arc::new(crate::RenderControl::new());
 
+    // Track the effective output root for this render so `reveal_in_explorer`
+    // can accept paths inside it before `save_config` has persisted them.
+    let output_root = crate::utils::fs::to_absolute(std::path::Path::new(
+        overrides
+            .as_ref()
+            .and_then(|ov| ov.output_path.as_deref())
+            .unwrap_or(&config.directories.output),
+    ));
+    let tracked_output =
+        (!crate::validation::is_system_protected_path(&output_root)).then(|| output_root.clone());
+
     {
         use tauri::Manager;
         let state = app.state::<crate::RenderState>();
-        let mut lock = match state.control.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                crate::utils::logger::log_line(&format!(
-                    "RenderState mutex poisoned: {}",
-                    poisoned
-                ));
-                poisoned.into_inner()
-            }
-        };
+        let mut lock = state.lock_control();
         if lock.is_some() {
             return Err("A render is already in progress".into());
         }
         *lock = Some(control.clone());
-
-        // Track the effective output root for this render so `reveal_in_explorer`
-        // can accept paths inside it before `save_config` has persisted them.
-        // `ControlGuard` clears it when the render ends.
-        let output_root = crate::utils::fs::to_absolute(std::path::Path::new(
-            overrides
-                .as_ref()
-                .and_then(|ov| ov.output_path.as_deref())
-                .unwrap_or(&config.directories.output),
-        ));
-        if !crate::validation::is_system_protected_path(&output_root)
-            && let Ok(mut slot) = state.output_dir.lock()
-        {
-            *slot = Some(output_root);
+        if let Some(root) = &tracked_output {
+            *state.lock_output_dir() = Some(root.clone());
         }
     }
 
@@ -159,6 +136,7 @@ pub async fn start_render(
         let _guard = ControlGuard {
             app: app_handle.clone(),
             control: control_clone.clone(),
+            output_root: tracked_output,
         };
 
         let result =
@@ -209,7 +187,7 @@ pub async fn start_render(
 
 #[tauri::command]
 pub async fn cancel_render(state: tauri::State<'_, crate::RenderState>) -> Result<bool, String> {
-    let Some(control) = current_control(&state) else {
+    let Some(control) = state.current_control() else {
         return Ok(false);
     };
     if control.is_terminated() {
@@ -231,7 +209,7 @@ pub async fn cancel_render(state: tauri::State<'_, crate::RenderState>) -> Resul
 
 #[tauri::command]
 pub fn pause_render(state: tauri::State<'_, crate::RenderState>) {
-    let Some(control) = current_control(&state) else {
+    let Some(control) = state.current_control() else {
         return;
     };
     // The pipeline emits `Paused` after durable state has been saved and
@@ -245,7 +223,7 @@ pub fn pause_render(state: tauri::State<'_, crate::RenderState>) {
 /// Returns an error when the config contains invalid values so the frontend
 /// can surface the issue immediately.
 #[tauri::command]
-pub fn save_config(config: AppConfig) -> Result<(), String> {
+pub async fn save_config(config: AppConfig) -> Result<(), String> {
     // Validate the full configuration before persisting. This prevents a
     // compromised or buggy frontend from writing dangerous paths or FFmpeg
     // parameters to the persisted config file.
@@ -260,7 +238,10 @@ pub fn save_config(config: AppConfig) -> Result<(), String> {
         );
     }
 
-    config.save().map_err(|e| e.to_string())?;
+    tokio::task::spawn_blocking(move || config.save())
+        .await
+        .map_err(|error| format!("Config save task failed: {error}"))?
+        .map_err(|error| error.to_string())?;
     logger::log_line("Configuration saved");
     Ok(())
 }
@@ -276,7 +257,7 @@ pub async fn resume_render(
     app: tauri::AppHandle,
     state: tauri::State<'_, crate::RenderState>,
 ) -> Result<bool, String> {
-    let Some(control) = current_control(&state) else {
+    let Some(control) = state.current_control() else {
         return Ok(false);
     };
     // The pipeline may still be in the process of tearing down after a

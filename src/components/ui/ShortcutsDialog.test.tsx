@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@solidjs/testing-library';
-import { createSignal } from 'solid-js';
+import { createSignal, flush } from 'solid-js';
 import { ShortcutsDialog } from './ShortcutsDialog';
 
 function ShortcutsDialogTestWrapper() {
@@ -128,6 +128,7 @@ describe('ShortcutsDialog', () => {
     });
     expect(container.querySelector('dialog')).toBeTruthy();
     fireEvent.click(screen.getByTestId('toggle'));
+    flush();
     expect(container.querySelector('dialog')).toBeNull();
   });
 });

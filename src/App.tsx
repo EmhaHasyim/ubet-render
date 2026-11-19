@@ -1,4 +1,5 @@
-import { createSignal, ErrorBoundary, onMount } from 'solid-js';
+import { createSignal, onSettled } from 'solid-js';
+import { Errored } from '@solidjs/web';
 import { Dashboard } from './components/layout/Dashboard';
 import { PipelineBridge } from './context/PipelineBridge';
 import { FatalScreen } from './components/ui/FatalScreen';
@@ -12,13 +13,13 @@ export default function App() {
   const { isShortcutsOpen, closeShortcuts } = useAppShortcuts(setActiveTab);
 
   // Check for a new release on startup (production builds only).
-  onMount(() => {
+  onSettled(() => {
     void checkForUpdates();
   });
 
   return (
-    <ErrorBoundary
-      fallback={(err, reset) => <FatalScreen error={err} reset={reset} />}
+    <Errored
+      fallback={(err, reset) => <FatalScreen error={err()} reset={reset} />}
     >
       <PipelineBridge>
         {(pipeline) => (
@@ -34,6 +35,6 @@ export default function App() {
       <ShortcutsDialog isOpen={isShortcutsOpen()} onClose={closeShortcuts} />
       {/* Global toast viewport — renders via portal so it overlays every tab. */}
       <ToastViewport />
-    </ErrorBoundary>
+    </Errored>
   );
 }

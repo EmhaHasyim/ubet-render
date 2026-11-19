@@ -16,6 +16,9 @@ export function useRenderLogs() {
   const [logs, setLogs] = createSignal<string[]>([]);
   let buffer: string[] = [];
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
+  // Whether any line has ever been published. Avoids reading the signal's
+  // stale pre-flush value to decide whether the first line is immediate.
+  let hasPublished = false;
 
   const flushLogs = () => {
     if (flushTimer !== null) {
@@ -25,15 +28,13 @@ export function useRenderLogs() {
     if (buffer.length === 0) return;
     const batch = buffer;
     buffer = [];
+    hasPublished = true;
     setLogs((prev) => [...prev, ...batch].slice(-MAX_LOGS));
   };
 
   const appendLog = (line: string) => {
     buffer.push(line);
-    if (
-      buffer.length >= FLUSH_EVERY ||
-      (logs().length === 0 && buffer.length === 1)
-    ) {
+    if (buffer.length >= FLUSH_EVERY || !hasPublished) {
       flushLogs();
     } else if (flushTimer === null) {
       flushTimer = setTimeout(flushLogs, FLUSH_DELAY_MS);
@@ -46,6 +47,7 @@ export function useRenderLogs() {
       flushTimer = null;
     }
     buffer = [];
+    hasPublished = false;
     setLogs([]);
   };
 

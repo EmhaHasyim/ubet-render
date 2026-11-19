@@ -1,12 +1,12 @@
-import { createContext, useContext, type Accessor, type JSX } from 'solid-js';
+import { createContext, useContext, type Accessor } from 'solid-js';
+import type { JSX } from '@solidjs/web';
 import type {
   HardwareInfo,
   JobProgress,
   MediaSource,
   PipelineStats,
 } from '../core/types';
-
-type DropZone = 'video' | 'audio' | 'output';
+import type { DropZone } from '../core/dropZones';
 
 /**
  * Stable frontend contract for the pipeline state and actions.
@@ -77,9 +77,7 @@ export function PipelineProvider(props: {
   children: JSX.Element;
 }) {
   return (
-    <PipelineContext.Provider value={props.value}>
-      {props.children}
-    </PipelineContext.Provider>
+    <PipelineContext value={props.value}>{props.children}</PipelineContext>
   );
 }
 

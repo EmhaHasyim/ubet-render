@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@solidjs/testing-library';
+import { flush } from 'solid-js';
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
   open: vi.fn(),
@@ -81,8 +82,10 @@ describe('SourceSelector', () => {
     ));
 
     screen.getByText('Clear').click();
+    flush();
     expect(screen.getByText('Clear Master video')).toBeTruthy();
     screen.getByTestId('confirm-dialog-confirm').click();
+    flush();
     expect(onChange).toHaveBeenCalledWith(null);
   });
 
@@ -98,7 +101,9 @@ describe('SourceSelector', () => {
     ));
 
     screen.getByText('Clear').click();
+    flush();
     screen.getByText('Cancel').click();
+    flush();
     expect(onChange).not.toHaveBeenCalled();
   });
 
@@ -168,6 +173,7 @@ describe('SourceSelector', () => {
     render(() => <SourceSelector {...defaultProps} value={['/v/test.mp4']} />);
 
     screen.getByText('Clear').click();
+    flush();
     expect(screen.getByTestId('confirm-dialog-confirm')).toBeTruthy();
   });
 
@@ -175,8 +181,10 @@ describe('SourceSelector', () => {
     render(() => <SourceSelector {...defaultProps} value={['/v/test.mp4']} />);
 
     screen.getByText('Clear').click();
+    flush();
     expect(screen.getByTestId('confirm-dialog-confirm')).toBeTruthy();
     screen.getByText('Cancel').click();
+    flush();
     // Dialog closes, confirm button is removed
     expect(screen.queryByTestId('confirm-dialog-confirm')).toBeNull();
   });

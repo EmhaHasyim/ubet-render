@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createRoot, createSignal } from 'solid-js';
+import { createRoot, createSignal, flush } from 'solid-js';
 import { invoke } from '@tauri-apps/api/core';
 import type { BackendConfigSnapshot } from '../core/buildAppConfig';
 import { usePipelinePersistence } from './usePipelinePersistence';
@@ -29,6 +29,7 @@ function mountPersistence(config: BackendConfigSnapshot = makeConfig()) {
     persistence = usePipelinePersistence(config, () => 'libsvtav1');
     return rootDispose;
   });
+  flush();
   return { persistence, dispose };
 }
 
@@ -81,6 +82,7 @@ describe('usePipelinePersistence', () => {
     // This edit schedules a second debounce while the first request is still
     // active. Its timer must not be lost when it observes saveInFlight.
     setCodec('h264');
+    flush();
     await Promise.resolve();
     await vi.advanceTimersByTimeAsync(500);
     expect(invoke).toHaveBeenCalledTimes(1);

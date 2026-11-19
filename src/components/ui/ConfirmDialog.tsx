@@ -18,17 +18,20 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
   // the dialog.
   let returnFocus: (() => void) | null = null;
 
-  createEffect(() => {
-    if (props.isOpen && dialogRef) {
-      returnFocus = rememberFocus();
-      dialogRef.showModal();
-    } else if (!props.isOpen && dialogRef?.open) {
-      // Parent flipped isOpen=false after a confirm/cancel callback.
-      // Guard with `open` so we don't re-fire the close event for parents
-      // that only update state on the confirm path.
-      dialogRef.close();
-    }
-  });
+  createEffect(
+    () => props.isOpen,
+    (isOpen) => {
+      if (isOpen && dialogRef) {
+        returnFocus = rememberFocus();
+        dialogRef.showModal();
+      } else if (!isOpen && dialogRef?.open) {
+        // Parent flipped isOpen=false after a confirm/cancel callback.
+        // Guard with `open` so we don't re-fire the close event for parents
+        // that only update state on the confirm path.
+        dialogRef.close();
+      }
+    },
+  );
 
   // Close event handler: only restores focus. We deliberately do NOT
   // call props.onCancel here — the buttons call it explicitly so the

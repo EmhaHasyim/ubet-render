@@ -4,6 +4,21 @@ All notable changes to Ubet Render are documented in this file.
 
 ---
 
+## [0.4.3] — 2026-11-19
+
+### Changed
+
+- Backend hardening: poison-safe render control helpers, ownership-checked
+  output cleanup, monotonic state throttling with logged save failures, unique
+  config temp files, and explicit pipeline event formatting.
+- Blocking filesystem work (config load/save, thumbnails, skip checks, atomic
+  replace, reveal in Explorer) now runs off the async runtime.
+- Windows process spawning shares one no-console/system-path helper.
+- Pipeline resume setup moved to `pipeline/prepare.rs`; long muxer, audio-pool,
+  job-processor, and source-scanner functions split into focused helpers.
+- The Rust and frontend toolchains now report zero warnings: clippy (including
+  pedantic), `tsc`, `oxlint`, `oxfmt --check`, and the Vite build.
+
 ## [0.4.2] — 2026-11-03
 
 ### Fixed

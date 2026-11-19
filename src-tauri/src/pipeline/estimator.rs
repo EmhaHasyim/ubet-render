@@ -1,13 +1,13 @@
 use std::path::Path;
 
-/// Supported video file extensions — shared with source_scanner and the
+/// Supported video file extensions — shared with `source_scanner` and the
 /// frontend config (`src/core/config.ts`) for consistent file filtering.
-/// IMPORTANT: keep in sync with the TypeScript VIDEO_EXTENSIONS.
+/// IMPORTANT: keep in sync with the TypeScript `VIDEO_EXTENSIONS`.
 pub const VIDEO_EXTENSIONS: &[&str] = &[".mp4", ".mkv", ".mov", ".webm", ".avi", ".flv", ".wmv"];
 
-/// Supported audio file extensions — shared with source_scanner and the
+/// Supported audio file extensions — shared with `source_scanner` and the
 /// frontend config (`src/core/config.ts`) for consistent file filtering.
-/// IMPORTANT: keep in sync with the TypeScript AUDIO_EXTENSIONS.
+/// IMPORTANT: keep in sync with the TypeScript `AUDIO_EXTENSIONS`.
 pub const AUDIO_EXTENSIONS: &[&str] = &[
     ".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac", ".wma", ".opus", ".aiff", ".aif",
 ];
@@ -17,6 +17,28 @@ pub const AUDIO_EXTENSIONS: &[&str] = &[
 /// This is deliberately a simple estimate (video bitrate is taken as the
 /// configured maxrate, audio as a typical 192 kbps AAC) used only for a
 /// non-fatal disk-space warning, not for hard limits.
+/// Render counts are validated far below `u32::MAX`; saturate defensively so
+/// this value stays infallible.
+fn count_to_f64(value: usize) -> f64 {
+    f64::from(u32::try_from(value).unwrap_or(u32::MAX))
+}
+
+/// Saturating float-to-`u64` conversion for the non-negative, advisory byte
+/// estimate. `f64 as u64` has no fallible std equivalent; the clamp makes the
+/// conversion well-defined (NaN/negative collapse to 0, overflow to `u64::MAX`).
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
+fn saturating_u64(value: f64) -> u64 {
+    if value.is_finite() && value >= 0.0 {
+        value.min(u64::MAX as f64) as u64
+    } else {
+        0
+    }
+}
+
 pub fn estimate_total_output_bytes(
     num_jobs: usize,
     maxrate_k: u32,
@@ -25,29 +47,34 @@ pub fn estimate_total_output_bytes(
     min_duration_sec: u64,
     loop_count: Option<usize>,
 ) -> u64 {
-    let single_loop_sec = avg_song_sec * songs_per_playlist as f64;
+    let single_loop_sec = avg_song_sec * count_to_f64(songs_per_playlist);
     let per_job_sec = if let Some(n) = loop_count {
-        single_loop_sec * n as f64
+        single_loop_sec * count_to_f64(n)
     } else {
-        single_loop_sec.max(min_duration_sec as f64)
+        let minimum = f64::from(u32::try_from(min_duration_sec).unwrap_or(u32::MAX));
+        single_loop_sec.max(minimum)
     };
-    let video_kbps = maxrate_k as f64;
+    let video_kbps = f64::from(maxrate_k);
     let audio_kbps = 192.0;
     // 1 kbps = 1000 bits/s = 125 bytes/s.
     let bytes_per_sec = (video_kbps + audio_kbps) * 125.0;
-    (bytes_per_sec * per_job_sec * num_jobs as f64) as u64
+    saturating_u64(bytes_per_sec * per_job_sec * count_to_f64(num_jobs))
 }
 
 /// Human-readable byte count (B / KB / MB / GB / TB).
 pub fn human_bytes(bytes: u64) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
-    let mut val = bytes as f64;
-    let mut i = 0;
-    while val >= 1024.0 && i < UNITS.len() - 1 {
-        val /= 1024.0;
-        i += 1;
+    // Integer arithmetic keeps one decimal without float casts or precision
+    // loss for any `u64` input.
+    let bytes = u128::from(bytes);
+    let mut divisor = 1u128;
+    let mut unit = 0;
+    while bytes >= divisor.saturating_mul(1024) && unit < UNITS.len() - 1 {
+        divisor *= 1024;
+        unit += 1;
     }
-    format!("{:.1} {}", val, UNITS[i])
+    let tenths = bytes * 10 / divisor;
+    format!("{}.{} {}", tenths / 10, tenths % 10, UNITS[unit])
 }
 
 pub fn parse_bitrate_to_kbps(value: &str) -> Option<u32> {
@@ -85,7 +112,7 @@ pub fn sanitize_filename_component(value: &str) -> String {
     if crate::validation::limits::WINDOWS_RESERVED_NAMES
         .contains(&stem.to_ascii_uppercase().as_str())
     {
-        format!("_{}", sanitized)
+        format!("_{sanitized}")
     } else {
         sanitized
     }
@@ -121,8 +148,8 @@ fn available_space_for_blocking(path: &std::path::Path) -> u64 {
             .trim_end_matches(['\\', '/'])
             .to_string();
         if canon_norm == mp_norm
-            || canon_norm.starts_with(&format!("{}\\", mp_norm))
-            || canon_norm.starts_with(&format!("{}/", mp_norm))
+            || canon_norm.starts_with(&format!("{mp_norm}\\"))
+            || canon_norm.starts_with(&format!("{mp_norm}/"))
         {
             let is_better = match &best {
                 Some((best_mp, _)) => mp_norm.len() > best_mp.len(),
@@ -258,8 +285,8 @@ mod ts_extension_mirror {
     /// Extract the single-quoted strings from `NAME = ['…', …]`.
     fn ts_string_list(source: &str, name: &str) -> Vec<String> {
         let start = source
-            .find(&format!("{} = [", name))
-            .unwrap_or_else(|| panic!("TS const `{}` not found", name));
+            .find(&format!("{name} = ["))
+            .unwrap_or_else(|| panic!("TS const `{name}` not found"));
         let open = start + source[start..].find('[').expect("opening bracket");
         let close_rel = source[open + 1..].find(']').expect("closing bracket");
         let body = &source[open + 1..open + 1 + close_rel];
@@ -286,14 +313,24 @@ mod ts_extension_mirror {
     #[test]
     fn video_extensions_match_ts() {
         let ts = sorted(ts_string_list(TS_CONFIG, "VIDEO_EXTENSIONS"));
-        let rust = sorted(VIDEO_EXTENSIONS.iter().map(|s| s.to_string()).collect());
+        let rust = sorted(
+            VIDEO_EXTENSIONS
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
+        );
         assert_eq!(ts, rust, "VIDEO_EXTENSIONS drifted from src/core/config.ts");
     }
 
     #[test]
     fn audio_extensions_match_ts() {
         let ts = sorted(ts_string_list(TS_CONFIG, "AUDIO_EXTENSIONS"));
-        let rust = sorted(AUDIO_EXTENSIONS.iter().map(|s| s.to_string()).collect());
+        let rust = sorted(
+            AUDIO_EXTENSIONS
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
+        );
         assert_eq!(ts, rust, "AUDIO_EXTENSIONS drifted from src/core/config.ts");
     }
 }

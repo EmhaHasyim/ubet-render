@@ -15,11 +15,10 @@ pub(crate) fn validate_bitrate(bitrate: &str) -> Result<u32, AppError> {
     let number = normalized.strip_suffix('k').unwrap_or(&normalized);
     let k = number
         .parse::<u32>()
-        .map_err(|_| AppError::Pipeline(format!("Invalid bitrate format: {}", bitrate)))?;
+        .map_err(|_| AppError::Pipeline(format!("Invalid bitrate format: {bitrate}")))?;
     if !(MIN_BITRATE_K..=MAX_BITRATE_K).contains(&k) {
         return Err(AppError::Pipeline(format!(
-            "Bitrate {}k out of range ({}-{}k)",
-            k, MIN_BITRATE_K, MAX_BITRATE_K
+            "Bitrate {k}k out of range ({MIN_BITRATE_K}-{MAX_BITRATE_K}k)"
         )));
     }
     Ok(k)
@@ -31,8 +30,7 @@ fn validate_media_source(source: &MediaSource, media_type: &str) -> Result<(), A
             sanitize_path(path)?;
             if !Path::new(path).is_dir() {
                 return Err(AppError::Pipeline(format!(
-                    "{} folder does not exist or is not a directory: {}",
-                    media_type, path
+                    "{media_type} folder does not exist or is not a directory: {path}"
                 )));
             }
         }
@@ -47,8 +45,7 @@ fn validate_media_source(source: &MediaSource, media_type: &str) -> Result<(), A
             }
             if paths.is_empty() {
                 return Err(AppError::Pipeline(format!(
-                    "{} files list is empty",
-                    media_type
+                    "{media_type} files list is empty"
                 )));
             }
             for path in paths {
@@ -73,40 +70,35 @@ pub fn validate_override_config(overrides: &OverrideConfig) -> Result<(), AppErr
         && !(MIN_SONGS_PER_PLAYLIST..=MAX_SONGS_PER_PLAYLIST).contains(&value)
     {
         return Err(AppError::Pipeline(format!(
-            "Songs per playlist {} out of range ({}-{})",
-            value, MIN_SONGS_PER_PLAYLIST, MAX_SONGS_PER_PLAYLIST
+            "Songs per playlist {value} out of range ({MIN_SONGS_PER_PLAYLIST}-{MAX_SONGS_PER_PLAYLIST})"
         )));
     }
     if let Some(value) = overrides.min_duration_hours
         && !(MIN_DURATION_HOURS..=MAX_DURATION_HOURS).contains(&value)
     {
         return Err(AppError::Pipeline(format!(
-            "Min duration {}h out of range ({}-{}h)",
-            value, MIN_DURATION_HOURS, MAX_DURATION_HOURS
+            "Min duration {value}h out of range ({MIN_DURATION_HOURS}-{MAX_DURATION_HOURS}h)"
         )));
     }
     if let Some(value) = overrides.loop_count
         && !(MIN_LOOP_COUNT..=MAX_LOOP_COUNT).contains(&value)
     {
         return Err(AppError::Pipeline(format!(
-            "Loop count {} out of range ({}-{})",
-            value, MIN_LOOP_COUNT, MAX_LOOP_COUNT
+            "Loop count {value} out of range ({MIN_LOOP_COUNT}-{MAX_LOOP_COUNT})"
         )));
     }
     if let Some(encoder) = &overrides.encoder
         && !is_valid_encoder(encoder)
     {
         return Err(AppError::Pipeline(format!(
-            "Invalid encoder: {}. Valid: {:?}",
-            encoder, VALID_ENCODERS
+            "Invalid encoder: {encoder}. Valid: {VALID_ENCODERS:?}"
         )));
     }
     if let Some(mode) = &overrides.audio_mode
         && !matches!(mode.as_str(), "original" | "normalize")
     {
         return Err(AppError::Pipeline(format!(
-            "Invalid audioMode: '{}'. Valid: 'original' or 'normalize'",
-            mode
+            "Invalid audioMode: '{mode}'. Valid: 'original' or 'normalize'"
         )));
     }
     if let Some(prefix) = &overrides.output_prefix {
@@ -119,8 +111,7 @@ pub fn validate_override_config(overrides: &OverrideConfig) -> Result<(), AppErr
         && !matches!(format.as_str(), "mp4" | "mkv")
     {
         return Err(AppError::Pipeline(format!(
-            "Invalid outputFormat: '{}'. Valid: 'mp4' or 'mkv'",
-            format
+            "Invalid outputFormat: '{format}'. Valid: 'mp4' or 'mkv'"
         )));
     }
     Ok(())
@@ -136,8 +127,7 @@ pub fn validate_app_config(config: &AppConfig) -> Result<(), AppError> {
         validate_directory_path(path, name)?;
         if is_system_protected_path(Path::new(path)) {
             return Err(AppError::Pipeline(format!(
-                "{} directory resolves inside a system-protected location and cannot be used: {}",
-                name, path
+                "{name} directory resolves inside a system-protected location and cannot be used: {path}"
             )));
         }
     }
@@ -146,8 +136,7 @@ pub fn validate_app_config(config: &AppConfig) -> Result<(), AppError> {
     let maximum = validate_bitrate(&config.video.bitrate_max)?;
     if target > maximum {
         return Err(AppError::Pipeline(format!(
-            "Target bitrate {}k cannot exceed maximum bitrate {}k",
-            target, maximum
+            "Target bitrate {target}k cannot exceed maximum bitrate {maximum}k"
         )));
     }
     if !is_valid_encoder(&config.video.encoder) {
@@ -205,21 +194,18 @@ pub fn validate_loudnorm_params(params: &str) -> Result<(), AppError> {
     let parts: Vec<&str> = params.split(':').collect();
     if parts.len() != 3 {
         return Err(AppError::Pipeline(format!(
-            "Invalid loudnorm_params format: '{}'. Expected I=<dB>:LRA=<dB>:TP=<dB>",
-            params
+            "Invalid loudnorm_params format: '{params}'. Expected I=<dB>:LRA=<dB>:TP=<dB>"
         )));
     }
     for (part, prefix) in parts.iter().zip(["I=", "LRA=", "TP="].iter()) {
         let value = part.strip_prefix(prefix).ok_or_else(|| {
             AppError::Pipeline(format!(
-                "Invalid loudnorm_params format: '{}'. Expected prefix '{}' in part '{}'",
-                params, prefix, part
+                "Invalid loudnorm_params format: '{params}'. Expected prefix '{prefix}' in part '{part}'"
             ))
         })?;
         if value.is_empty() {
             return Err(AppError::Pipeline(format!(
-                "Invalid loudnorm_params format: '{}'. Value for '{}' is empty",
-                params, prefix
+                "Invalid loudnorm_params format: '{params}'. Value for '{prefix}' is empty"
             )));
         }
         let numeric = value.strip_prefix(['-', '+']).unwrap_or(value);
@@ -228,14 +214,12 @@ pub fn validate_loudnorm_params(params: &str) -> Result<(), AppError> {
             || numeric.chars().any(|c| !c.is_ascii_digit() && c != '.')
         {
             return Err(AppError::Pipeline(format!(
-                "Invalid loudnorm_params format: '{}'. Value for '{}' is not a number",
-                params, prefix
+                "Invalid loudnorm_params format: '{params}'. Value for '{prefix}' is not a number"
             )));
         }
         let parsed: f64 = value.parse().map_err(|_| {
             AppError::Pipeline(format!(
-                "Invalid loudnorm_params value for '{}': '{}'",
-                prefix, value
+                "Invalid loudnorm_params value for '{prefix}': '{value}'"
             ))
         })?;
         let (lo, hi) = match *prefix {
@@ -245,8 +229,7 @@ pub fn validate_loudnorm_params(params: &str) -> Result<(), AppError> {
         };
         if !(lo..=hi).contains(&parsed) {
             return Err(AppError::Pipeline(format!(
-                "loudnorm_params value for '{}' out of range ({}..{}): '{}'",
-                prefix, lo, hi, value
+                "loudnorm_params value for '{prefix}' out of range ({lo}..{hi}): '{value}'"
             )));
         }
     }
@@ -275,8 +258,7 @@ fn validate_directory_path(path: &str, name: &str) -> Result<(), AppError> {
     sanitize_path(path)?;
     if path.trim().is_empty() {
         return Err(AppError::Pipeline(format!(
-            "{} directory path is empty",
-            name
+            "{name} directory path is empty"
         )));
     }
     Ok(())
@@ -302,14 +284,13 @@ pub(crate) fn validate_resumed_jobs(
     let total = jobs.iter().map(|job| job.timestamps.len()).sum::<usize>();
     if total > MAX_RESUMED_TIMESTAMPS {
         return Err(AppError::Pipeline(format!(
-            "Resume state contains too many timestamps: {} > {}",
-            total, MAX_RESUMED_TIMESTAMPS
+            "Resume state contains too many timestamps: {total} > {MAX_RESUMED_TIMESTAMPS}"
         )));
     }
     for (index, job) in jobs.iter().enumerate() {
         let input = resolve_and_validate_path(&sanitize_path(&job.video.input_path)?, input_roots)
             .map_err(|e| {
-                AppError::Pipeline(format!("Resume job {} input path rejected: {}", index, e))
+                AppError::Pipeline(format!("Resume job {index} input path rejected: {e}"))
             })?;
         if !input.is_file() {
             return Err(AppError::Pipeline(format!(
@@ -322,9 +303,7 @@ pub(crate) fn validate_resumed_jobs(
             &sanitize_path(&job.video.output_path)?,
             &[output_root.to_path_buf()],
         )
-        .map_err(|e| {
-            AppError::Pipeline(format!("Resume job {} output path rejected: {}", index, e))
-        })?;
+        .map_err(|e| AppError::Pipeline(format!("Resume job {index} output path rejected: {e}")))?;
         if output.exists() && output.is_dir() {
             return Err(AppError::Pipeline(format!(
                 "Resume job {} output is a directory: {}",
@@ -334,29 +313,25 @@ pub(crate) fn validate_resumed_jobs(
         }
         if job.video.name.is_empty()
             || job.video.name.chars().count() > MAX_PATH_LEN
-            || job.video.name.chars().any(|c| c.is_control())
+            || job.video.name.chars().any(char::is_control)
             || job.current_step.chars().count() > MAX_PATH_LEN
-            || job.current_step.chars().any(|c| c.is_control())
+            || job.current_step.chars().any(char::is_control)
             || job.error.as_deref().is_some_and(|e| {
-                e.chars().count() > MAX_PATH_LEN || e.chars().any(|c| c.is_control())
+                e.chars().count() > MAX_PATH_LEN || e.chars().any(char::is_control)
             })
             || job
                 .timestamps
                 .iter()
-                .any(|t| t.chars().count() > MAX_PATH_LEN || t.chars().any(|c| c.is_control()))
+                .any(|t| t.chars().count() > MAX_PATH_LEN || t.chars().any(char::is_control))
         {
             return Err(AppError::Pipeline(format!(
-                "Resume job {} contains an invalid video name",
-                index
+                "Resume job {index} contains an invalid video name"
             )));
         }
         if let Some(thumbnail) = &job.video.thumbnail_path {
             resolve_and_validate_path(&sanitize_path(thumbnail)?, &[thumbnail_root.to_path_buf()])
                 .map_err(|e| {
-                    AppError::Pipeline(format!(
-                        "Resume job {} thumbnail path rejected: {}",
-                        index, e
-                    ))
+                    AppError::Pipeline(format!("Resume job {index} thumbnail path rejected: {e}"))
                 })?;
         }
     }

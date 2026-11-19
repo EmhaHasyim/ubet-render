@@ -9,7 +9,7 @@ import { STORAGE_KEY, STORAGE_VERSION } from '../core/persisted';
 
 // We must import SolidJS's createRoot so we can mount the hook
 // inside a reactive root outside of a component context.
-import { createRoot } from 'solid-js';
+import { createRoot, flush } from 'solid-js';
 import { usePersistedConfig } from './usePersistedConfig';
 
 /** Mount a hook inside a SolidJS reactive root and return its value. */
@@ -97,6 +97,7 @@ describe('usePersistedConfig', () => {
     c.setCodec('h264');
     c.setMaxrate('2000k');
     c.setOutputPath('/custom/out');
+    flush();
 
     expect(c.codec()).toBe('h264');
     expect(c.maxrate()).toBe('2000k');
@@ -106,20 +107,26 @@ describe('usePersistedConfig', () => {
   it('clamps songsPerPlaylist to valid range (1-100)', () => {
     const c = mountHook(() => usePersistedConfig());
     c.setSongsPerPlaylist(-5);
+    flush();
     expect(c.songsPerPlaylist()).toBe(1);
     c.setSongsPerPlaylist(0);
+    flush();
     expect(c.songsPerPlaylist()).toBe(1);
     c.setSongsPerPlaylist(200);
+    flush();
     expect(c.songsPerPlaylist()).toBe(100);
   });
 
   it('clamps minDurationHours to the 0.1-24h range', () => {
     const c = mountHook(() => usePersistedConfig());
     c.setMinDurationHours(-5);
+    flush();
     expect(c.minDurationHours()).toBe(0.1);
     c.setMinDurationHours(0);
+    flush();
     expect(c.minDurationHours()).toBe(0.1);
     c.setMinDurationHours(100);
+    flush();
     expect(c.minDurationHours()).toBe(24);
   });
 
@@ -148,6 +155,7 @@ describe('usePersistedConfig', () => {
 
       c.setOutputPath('/flushed-on-unmount');
       // Let SolidJS run the persist effect (schedules the 300ms debounce).
+      flush();
       await Promise.resolve();
       await Promise.resolve();
 

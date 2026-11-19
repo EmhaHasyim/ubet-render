@@ -60,7 +60,7 @@ pub(crate) fn sanitize_path(path: &str) -> Result<PathBuf, AppError> {
             ));
         }
     }
-    if path.chars().any(|c| c.is_control()) {
+    if path.chars().any(char::is_control) {
         return Err(AppError::Pipeline(
             "Path contains control characters".into(),
         ));
@@ -107,8 +107,7 @@ pub(crate) fn sanitize_path(path: &str) -> Result<PathBuf, AppError> {
             WINDOWS_RESERVED_NAMES.contains(&stem.as_str())
         } {
             return Err(AppError::Pipeline(format!(
-                "Windows reserved filename: {}",
-                name
+                "Windows reserved filename: {name}"
             )));
         }
     }
@@ -125,7 +124,7 @@ pub fn resolve_and_validate_path(
             let parent = path.parent().unwrap_or(path);
             let canonical_parent = parent
                 .canonicalize()
-                .map_err(|e| AppError::Pipeline(format!("Failed to resolve path: {}", e)))?;
+                .map_err(|e| AppError::Pipeline(format!("Failed to resolve path: {e}")))?;
             canonical_parent.join(path.file_name().unwrap_or(path.as_os_str()))
         }
     };

@@ -3,22 +3,21 @@ use crate::ffmpeg;
 use std::path::Path;
 
 /// Build a same-container temporary output path. The final destination is
-/// never handed to FFmpeg directly: a cancelled or failed encode must not
+/// never handed to `FFmpeg` directly: a cancelled or failed encode must not
 /// expose a truncated file or destroy a previously completed output.
 fn render_temp_path(output: &Path) -> std::path::PathBuf {
     let parent = output.parent().unwrap_or_else(|| Path::new("."));
-    let stem = output
-        .file_stem()
-        .map(|value| value.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "output".into());
-    let extension = output
-        .extension()
-        .map(|value| value.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "mp4".into());
+    let stem = output.file_stem().map_or_else(
+        || "output".into(),
+        |value| value.to_string_lossy().into_owned(),
+    );
+    let extension = output.extension().map_or_else(
+        || "mp4".into(),
+        |value| value.to_string_lossy().into_owned(),
+    );
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
+        .map_or(0, |duration| duration.as_nanos());
     parent.join(format!(
         ".{}.rendering-{}-{}.{}",
         stem,
@@ -84,93 +83,97 @@ pub async fn mux_final_video(
         crate::utils::fs::cleanup_temp_file(&temp_output).await;
         return Err(error);
     }
-    if let Err(error) = tokio::task::spawn_blocking({
-        let temp_output = temp_output.clone();
-        let output = output.to_string();
-        move || crate::utils::fs::atomic_replace(&temp_output, Path::new(&output))
-    })
-    .await
-    .map_err(|join_error| {
-        AppError::Pipeline(format!("Output replacement task failed: {}", join_error))
-    })
-    .and_then(|result| result.map_err(AppError::Io))
-    {
+    if let Err(error) = crate::utils::fs::atomic_replace_async(&temp_output, output_path).await {
         crate::utils::fs::cleanup_temp_file(&temp_output).await;
-        return Err(error);
+        return Err(AppError::Io(error));
     }
 
     if embed_chapters && !chapters.is_empty() {
-        // Only MP4 / M4V / MKV store chapters cleanly from an ffmetadata file.
-        let lower = output.to_ascii_lowercase();
-        let supports =
-            lower.ends_with(".mp4") || lower.ends_with(".m4v") || lower.ends_with(".mkv");
-        if supports {
-            let chapter_path = cache_dir.join(format!(
-                "chapters_{:x}.ffmeta",
-                crate::utils::fs::hash_path(output.as_bytes())
-            ));
-            tokio::fs::write(&chapter_path, chapters)
-                .await
-                .map_err(AppError::Io)?;
-            let chapter_path_str = chapter_path.to_string_lossy().into_owned();
-
-            // Write chapters into a same-container temp, then swap it over the output.
-            // Reuses the canonical temp-path helper so both stages share one naming scheme.
-            let tmp_out = render_temp_path(output_path);
-            let tmp_out_str = tmp_out.to_string_lossy().into_owned();
-
-            let chapter_args: Vec<&str> = vec![
-                "-y",
-                "-i",
-                output,
-                "-i",
-                &chapter_path_str,
-                "-map_metadata",
-                "1",
-                "-map",
-                "0",
-                "-c",
-                "copy",
-                &tmp_out_str,
-            ];
-            if let Err(e) =
-                ffmpeg::run(app, &chapter_args, None, cancel_control.clone(), None).await
-            {
-                // Chapter insertion is best-effort: the output file is already usable
-                // without chapters, so a warning is sufficient.
-                crate::utils::fs::cleanup_temp_file(&chapter_path).await;
-                crate::utils::fs::cleanup_temp_file(&tmp_out).await;
-                crate::utils::event::emit(
-                    app,
-                    crate::models::job::PipelineEvent::Log {
-                        level: "warn".into(),
-                        message: format!(
-                            "Failed to embed chapters ({}). Output file is usable without chapters.",
-                            e
-                        ),
-                    },
-                );
-            } else {
-                if let Err(e) = tokio::task::spawn_blocking({
-                    let tmp_out = tmp_out.clone();
-                    let output = output.to_string();
-                    move || crate::utils::fs::atomic_replace(&tmp_out, Path::new(&output))
-                })
-                .await
-                .map_err(|join_error| {
-                    AppError::Pipeline(format!("Output replacement task failed: {}", join_error))
-                })
-                .and_then(|result| result.map_err(AppError::Io))
-                {
-                    crate::utils::fs::cleanup_temp_file(&tmp_out).await;
-                    crate::utils::fs::cleanup_temp_file(&chapter_path).await;
-                    return Err(e);
-                }
-                crate::utils::fs::cleanup_temp_file(&chapter_path).await;
-            }
-        }
+        embed_chapters_into_output(
+            app,
+            output,
+            output_path,
+            cache_dir,
+            chapters,
+            cancel_control,
+        )
+        .await?;
     }
 
+    Ok(())
+}
+
+/// Embed an ffmetadata chapter track into a same-container temp and swap it
+/// over the output. Chapter insertion is best-effort; only the final atomic
+/// replacement is fatal, because the original output remains usable.
+async fn embed_chapters_into_output(
+    app: &tauri::AppHandle,
+    output: &str,
+    output_path: &Path,
+    cache_dir: &Path,
+    chapters: &str,
+    cancel_control: Option<std::sync::Arc<crate::RenderControl>>,
+) -> Result<(), AppError> {
+    // Only MP4 / M4V / MKV store chapters cleanly from an ffmetadata file.
+    let extension = output_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("");
+    if !["mp4", "m4v", "mkv"]
+        .iter()
+        .any(|ext| extension.eq_ignore_ascii_case(ext))
+    {
+        return Ok(());
+    }
+
+    let chapter_path = cache_dir.join(format!(
+        "chapters_{:x}.ffmeta",
+        crate::utils::fs::hash_path(output.as_bytes())
+    ));
+    tokio::fs::write(&chapter_path, chapters)
+        .await
+        .map_err(AppError::Io)?;
+    let chapter_path_str = chapter_path.to_string_lossy().into_owned();
+
+    // Write chapters into a same-container temp, then swap it over the output.
+    let tmp_out = render_temp_path(output_path);
+    let tmp_out_str = tmp_out.to_string_lossy().into_owned();
+    let chapter_args: Vec<&str> = vec![
+        "-y",
+        "-i",
+        output,
+        "-i",
+        &chapter_path_str,
+        "-map_metadata",
+        "1",
+        "-map",
+        "0",
+        "-c",
+        "copy",
+        &tmp_out_str,
+    ];
+
+    if let Err(e) = ffmpeg::run(app, &chapter_args, None, cancel_control, None).await {
+        crate::utils::fs::cleanup_temp_file(&chapter_path).await;
+        crate::utils::fs::cleanup_temp_file(&tmp_out).await;
+        crate::utils::event::emit(
+            app,
+            crate::models::job::PipelineEvent::Log {
+                level: "warn".into(),
+                message: format!(
+                    "Failed to embed chapters ({e}). Output file is usable without chapters."
+                ),
+            },
+        );
+        return Ok(());
+    }
+
+    if let Err(e) = crate::utils::fs::atomic_replace_async(&tmp_out, output_path).await {
+        crate::utils::fs::cleanup_temp_file(&tmp_out).await;
+        crate::utils::fs::cleanup_temp_file(&chapter_path).await;
+        return Err(AppError::Io(e));
+    }
+    crate::utils::fs::cleanup_temp_file(&chapter_path).await;
     Ok(())
 }
 

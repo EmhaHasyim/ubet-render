@@ -35,7 +35,6 @@ pub struct RenderControl {
     /// must report "no live pipeline" so the frontend restarts from the
     /// saved state file instead of believing a dead pipeline resumed.
     terminated: AtomicBool,
-    terminated_notify: Notify,
     cleaned: AtomicBool,
     cleanup_notify: Notify,
 }
@@ -47,6 +46,7 @@ impl Default for RenderControl {
 }
 
 impl RenderControl {
+    #[must_use]
     pub fn new() -> Self {
         let (cancel_tx, cancel_rx) = watch::channel(false);
         let (pause_tx, pause_rx) = watch::channel(false);
@@ -56,7 +56,6 @@ impl RenderControl {
             pause_tx,
             pause_rx,
             terminated: AtomicBool::new(false),
-            terminated_notify: Notify::new(),
             cleaned: AtomicBool::new(false),
             cleanup_notify: Notify::new(),
         }
@@ -67,7 +66,6 @@ impl RenderControl {
     /// control guard drops.
     pub fn mark_terminated(&self) {
         self.terminated.store(true, Ordering::SeqCst);
-        self.terminated_notify.notify_waiters();
     }
 
     /// Marks the control as fully cleaned up after `RenderState.control` has
@@ -88,6 +86,13 @@ impl RenderControl {
     pub async fn wait_for_cleanup(&self) {
         loop {
             let notified = self.cleanup_notify.notified();
+            tokio::pin!(notified);
+            // Register the waiter *before* re-checking the flag. `notified()`
+            // only registers when first polled, and `mark_cleaned` uses
+            // `notify_waiters()` (which stores no permit), so without this a
+            // cleanup landing between the check and the await would be lost
+            // and the caller would block until its timeout.
+            notified.as_mut().enable();
             if self.is_cleaned() {
                 return;
             }
@@ -147,7 +152,7 @@ impl RenderControl {
 
     /// Shared cancel/pause preflight. Cancel takes precedence over pause,
     /// matching the pipeline's terminate-on-pause design. Replaces ~10
-    /// duplicated `is_cancelled/is_paused` blocks across ffmpeg, audio_pool
+    /// duplicated `is_cancelled/is_paused` blocks across ffmpeg, `audio_pool`
     /// and pipeline.
     pub fn ensure_running(&self) -> Result<(), crate::error::AppError> {
         if self.is_cancelled() {
@@ -170,6 +175,37 @@ pub struct RenderState {
     /// it so a path can be revealed before the render's settings have been
     /// persisted to disk. Cleared together with the control guard.
     pub output_dir: Mutex<Option<std::path::PathBuf>>,
+}
+
+impl RenderState {
+    /// Locks the active-render slot, recovering from a poisoned mutex so one
+    /// panicking render cannot permanently disable cancel/pause/resume.
+    pub fn lock_control(&self) -> std::sync::MutexGuard<'_, Option<Arc<RenderControl>>> {
+        match self.control.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                utils::logger::log_line(&format!("RenderState control mutex poisoned: {poisoned}"));
+                poisoned.into_inner()
+            }
+        }
+    }
+
+    pub fn current_control(&self) -> Option<Arc<RenderControl>> {
+        self.lock_control().clone()
+    }
+
+    /// Same recovery policy for the reveal root.
+    pub fn lock_output_dir(&self) -> std::sync::MutexGuard<'_, Option<std::path::PathBuf>> {
+        match self.output_dir.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                utils::logger::log_line(&format!(
+                    "RenderState output-dir mutex poisoned: {poisoned}"
+                ));
+                poisoned.into_inner()
+            }
+        }
+    }
 }
 
 fn main() {
@@ -204,9 +240,9 @@ fn main() {
                         // state and remove its temp output, then exit.
                         let app_handle = app.clone();
                         tauri::async_runtime::spawn(async move {
-                            let control = app_handle.try_state::<RenderState>().and_then(|state| {
-                                state.control.lock().ok().and_then(|slot| slot.clone())
-                            });
+                            let control = app_handle
+                                .try_state::<RenderState>()
+                                .and_then(|state| state.current_control());
                             if let Some(control) = control {
                                 control.cancel();
                                 let _ = tokio::time::timeout(
@@ -257,8 +293,7 @@ fn main() {
             ] {
                 if let Err(error) = std::fs::create_dir_all(path) {
                     utils::logger::log_line(&format!(
-                        "Failed to create {} directory '{}': {}",
-                        name, path, error
+                        "Failed to create {name} directory '{path}': {error}"
                     ));
                 }
             }
